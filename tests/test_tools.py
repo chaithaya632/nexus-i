@@ -33,7 +33,7 @@ def test_read_local_file():
         test_file.write_text("Hello from Arjuna test suite!", encoding="utf-8")
 
         store = MemoryStore(Path(tmpdir) / "test.db")
-        tools = ToolRegistry(store)
+        tools = ToolRegistry(store, allowed_root=tmpdir)
 
         content = tools.read_local_file(str(test_file))
         assert "Hello from Arjuna test suite!" in content
