@@ -147,11 +147,20 @@ class TestEngagementStore:
         eng = Engagement(name="test", target="example.com")
         eng_id = store.create_engagement(eng)
         store.add_finding(Finding(engagement_id=eng_id, title="test finding"))
+        store.add_credential(Credential(
+            engagement_id=eng_id, host="example.com", port=22,
+            service="ssh", username="svc_user", password="super_secret_pw_val",
+            hash_value="ntlm_secret_hash_val", source="audit", confirmed=True,
+        ))
 
         data = store.export_engagement_json(eng_id)
         assert "engagement" in data
         assert "findings" in data
         assert len(data["findings"]) == 1
+        assert data["credentials"][0]["password"] == "***REDACTED***"
+        assert data["credentials"][0]["hash_value"] == "***REDACTED***"
+        assert "super_secret_pw_val" not in str(data)
+        assert "ntlm_secret_hash_val" not in str(data)
 
     def test_nonexistent_engagement(self, store):
         assert store.get_engagement("nonexistent") is None

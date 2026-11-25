@@ -174,6 +174,14 @@ async def audit_host_packages(
         if not _SAFE_USER_RE.match(ssh_user.strip()):
             log.warning("Invalid SSH username format rejected for host audit: %r", ssh_user)
             return []
+        try:
+            port_num = int(ssh_port)
+        except (TypeError, ValueError):
+            log.warning("Invalid SSH port rejected for host audit: %r", ssh_port)
+            return []
+        if not (1 <= port_num <= 65535):
+            log.warning("Out-of-range SSH port %d rejected for host audit", port_num)
+            return []
         key = Path(ssh_key_path)
         if not key.is_file() or not ToolRunner.is_available("ssh"):
             log.warning("SSH key %s or 'ssh' client unavailable; skipping credentialed host audit", key)
@@ -184,7 +192,7 @@ async def audit_host_packages(
         )
         args = [
             "-i", str(key),
-            "-p", str(int(ssh_port)),
+            "-p", str(port_num),
             "-o", "BatchMode=yes",
             "-o", "StrictHostKeyChecking=accept-new",
             "-o", "ConnectTimeout=10",

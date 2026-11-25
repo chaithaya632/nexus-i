@@ -359,12 +359,21 @@ class EngagementStore:
             for p in self.get_ports(t.id):
                 all_ports.append(p.model_dump(mode="json"))
 
+        redacted_creds = []
+        for c in self.get_credentials(eng_id):
+            d = c.model_dump(mode="json")
+            if d.get("password"):
+                d["password"] = "***REDACTED***"
+            if d.get("hash_value"):
+                d["hash_value"] = "***REDACTED***"
+            redacted_creds.append(d)
+
         return {
             "engagement": eng.model_dump(mode="json"),
             "targets": [t.model_dump(mode="json") for t in targets],
             "ports": all_ports,
             "findings": [f.model_dump(mode="json") for f in self.get_findings(eng_id)],
-            "credentials": [c.model_dump(mode="json") for c in self.get_credentials(eng_id)],
+            "credentials": redacted_creds,
             "chains": [c.model_dump(mode="json") for c in self.get_chains(eng_id)],
             "severity_counts": self.count_findings_by_severity(eng_id),
         }

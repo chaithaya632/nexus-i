@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import asyncio
+import json
 import types
 from pathlib import Path
 from unittest.mock import AsyncMock, patch
@@ -12,7 +14,7 @@ from nexus.brain.knowledge_graph import KnowledgeGraph
 from nexus.core.config import NexusConfig, ScanProfile
 from nexus.core.engine import NexusEngine
 from nexus.recon.runner import ToolOutput
-from nexus.scanner.crawler import _browser_crawl, crawl_web
+from nexus.scanner.crawler import _browser_crawl, _cdp_browser_crawl, crawl_web
 from nexus.scanner.host_audit import (
     audit_host_packages,
     correlate_installed_packages,
@@ -83,6 +85,18 @@ class TestHostPackageAuditor:
         assert "BatchMode=yes" in cli_args
         assert "2222" in cli_args
         assert "auditor@10.0.0.9" in cli_args
+
+        # Reject out-of-range / invalid ssh_port before invoking subprocess
+        mock_run.reset_mock()
+        with (
+            patch("nexus.scanner.host_audit.ToolRunner.is_available", return_value=True),
+            patch("nexus.scanner.host_audit.ToolRunner.run", mock_run),
+        ):
+            for bad_port in (0, -1, 65536, "bad"):
+                assert await audit_host_packages(
+                    "10.0.0.9", knowledge=kg, ssh_user="auditor", ssh_key_path=key_file, ssh_port=bad_port  # type: ignore[arg-type]
+                ) == []
+        mock_run.assert_not_awaited()
 
     @pytest.mark.asyncio
     async def test_engine_run_scan_dispatches_host_audit(self, tmp_path: Path) -> None:
@@ -222,3 +236,263 @@ class TestPlaywrightBrowserCrawler:
             urls, findings = await crawl_web("http://127.0.0.1:1/", use_browser=True)
         assert urls == ["http://127.0.0.1:1/"]
         assert findings == []
+
+    @pytest.mark.asyncio
+    async def test_playwright_route_guard_aborts_302_cross_origin_redirect(self, monkeypatch) -> None:
+        aborted_urls: list[str] = []
+
+        class _FakeResp:
+            status = 302
+            headers = {"Location": "https://evil.external.com/steal"}
+
+        class _FakeReq:
+            def __init__(self, url: str, resource_type: str = "document"):
+                self.url = url
+                self.resource_type = resource_type
+                self.headers = {"authorization": "Bearer pw_tok"}
+
+        class _FakeRoute:
+            def __init__(self, req):
+                self.request = req
+
+            async def fetch(self, max_redirects=None):
+                assert max_redirects == 0
+                return _FakeResp()
+
+            async def abort(self):
+                aborted_urls.append(self.request.url)
+
+            async def fulfill(self, response=None):
+                raise AssertionError("Cross-origin 302 should be aborted before fulfill")
+
+            async def continue_(self, headers=None):
+                pass
+
+        class _FakePage:
+            def __init__(self, context):
+                self._ctx = context
+
+            def on(self, _e, _fn):
+                pass
+
+            async def goto(self, _url, **_kw):
+                await self._ctx._route_handler(_FakeRoute(_FakeReq("https://spa.local/redir")))
+
+            async def wait_for_timeout(self, _ms):
+                pass
+
+            async def content(self):
+                return "<html><body></body></html>"
+
+            async def evaluate(self, _expr):
+                return []
+
+        class _FakeContext:
+            def __init__(self):
+                self._route_handler = None
+
+            async def route(self, _pat, fn):
+                self._route_handler = fn
+
+            async def new_page(self):
+                return _FakePage(self)
+
+        class _FakeBrowser:
+            async def new_context(self, **_kw):
+                return _FakeContext()
+
+            async def close(self):
+                pass
+
+        class _FakePW:
+            def __init__(self):
+                self.chromium = types.SimpleNamespace(launch=AsyncMock(return_value=_FakeBrowser()))
+
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, *a):
+                pass
+
+        fake_mod = types.ModuleType("playwright.async_api")
+        fake_mod.async_playwright = lambda: _FakePW()
+        monkeypatch.setitem(__import__("sys").modules, "playwright", types.ModuleType("playwright"))
+        monkeypatch.setitem(__import__("sys").modules, "playwright.async_api", fake_mod)
+
+        with patch("nexus.scanner.crawler.importlib.util.find_spec", return_value=object()):
+            await _browser_crawl("https://spa.local/", max_pages=1, headers={"Authorization": "Bearer pw_tok"})
+
+        assert aborted_urls == ["https://spa.local/redir"]
+
+    @pytest.mark.asyncio
+    async def test_browser_crawl_falls_back_to_cdp_crawler(self) -> None:
+        mock_cdp = AsyncMock(return_value=(["https://spa.local/", "https://spa.local/app"], []))
+        with (
+            patch("nexus.scanner.crawler._playwright_browser_crawl", AsyncMock(return_value=([], []))),
+            patch("nexus.scanner.crawler._cdp_browser_crawl", mock_cdp),
+        ):
+            urls, findings = await _browser_crawl(
+                "https://spa.local/", max_pages=3, headers={"Authorization": "Bearer cdp_tok"}
+            )
+        mock_cdp.assert_awaited_once_with(
+            "https://spa.local/", max_pages=3, headers={"Authorization": "Bearer cdp_tok"}, timeout=25
+        )
+        assert urls == ["https://spa.local/", "https://spa.local/app"]
+        assert findings == []
+
+    @pytest.mark.asyncio
+    async def test_cdp_fetch_isolation_and_katana_off_host_js_filtering(self, tmp_path: Path) -> None:
+        sent_cmds: list[dict] = []
+
+        class _DummyWriter:
+            def close(self): pass
+            async def wait_closed(self): pass
+
+        class _FakeProc:
+            returncode = None
+            def terminate(self): self.returncode = 0
+            def kill(self): self.returncode = -9
+            async def wait(self): return 0
+
+        class _FakeWS:
+            def __init__(self, port_dir_hint: list[str]):
+                self._incoming: asyncio.Queue[str | None] = asyncio.Queue()
+                self._hints = port_dir_hint
+
+            async def __aenter__(self): return self
+            async def __aexit__(self, *a): pass
+
+            async def send(self, raw: str):
+                msg = json.loads(raw)
+                sent_cmds.append(msg)
+                mid = msg.get("id")
+                method = msg.get("method")
+                if method == "Page.navigate":
+                    # Inject Fetch.requestPaused scenarios across Request & Response stages
+                    paused = [
+                        # 1. Scheme downgrade script on same host -> strip Authorization
+                        {
+                            "method": "Fetch.requestPaused",
+                            "params": {
+                                "requestId": "r-downgrade",
+                                "resourceType": "Script",
+                                "request": {
+                                    "url": "http://spa.local/downgrade.js",
+                                    "headers": {"authorization": "Bearer top", "accept": "*/*"},
+                                },
+                            },
+                        },
+                        # 2. Cross-origin 302 -> file:///etc/passwd redirect at Response stage -> Aborted
+                        {
+                            "method": "Fetch.requestPaused",
+                            "params": {
+                                "requestId": "r-redir-file",
+                                "resourceType": "Document",
+                                "responseStatusCode": 302,
+                                "responseHeaders": [{"name": "Location", "value": "file:///etc/passwd"}],
+                                "request": {"url": "https://spa.local/redir"},
+                            },
+                        },
+                        # 3. Network error responseErrorReason at Response stage -> failRequest(NameNotResolved)
+                        {
+                            "method": "Fetch.requestPaused",
+                            "params": {
+                                "requestId": "r-neterr",
+                                "resourceType": "Fetch",
+                                "responseErrorReason": "NameNotResolved",
+                                "request": {"url": "https://dead.invalid/x.js"},
+                            },
+                        },
+                    ]
+                    for ev in paused:
+                        await self._incoming.put(json.dumps(ev))
+                    await self._incoming.put(json.dumps({"id": mid, "result": {"frameId": "f1"}}))
+                    await self._incoming.put(json.dumps({"method": "Page.loadEventFired", "params": {}}))
+                elif method == "Runtime.evaluate":
+                    await self._incoming.put(json.dumps({
+                        "id": mid,
+                        "result": {"result": {"value": {
+                            "href": "https://spa.local/",
+                            "html": "<html><body><a href='/ok'>OK</a></body></html>",
+                            "links": ["/ok", "http://spa.local/other-scheme", "http://spa.local:99999/badport"],
+                        }}},
+                    }))
+                elif method == "Browser.close":
+                    await self._incoming.put(json.dumps({"id": mid, "result": {}}))
+                    await self._incoming.put(None)  # Clean EOF
+                elif mid is not None:
+                    await self._incoming.put(json.dumps({"id": mid, "result": {}}))
+
+            def __aiter__(self): return self
+
+            async def __anext__(self):
+                item = await self._incoming.get()
+                if item is None:
+                    raise StopAsyncIteration
+                return item
+
+        async def _fake_exec(*cmd, **_kw):
+            for arg in cmd:
+                if str(arg).startswith("--user-data-dir="):
+                    pdir = Path(str(arg).split("=", 1)[1])
+                    (pdir / "DevToolsActivePort").write_text("9222\n/devtools/browser/1\n", encoding="utf-8")
+            return _FakeProc()
+
+        fake_ws_mod = types.ModuleType("websockets")
+        fake_ws_mod.connect = lambda *_a, **_kw: _FakeWS([])
+
+        class _FakeResp:
+            status_code = 200
+            def json(self):
+                return [{"type": "page", "webSocketDebuggerUrl": "ws://127.0.0.1:9222/devtools/page/1"}]
+
+        class _FakeClient:
+            def __init__(self, **_kw): pass
+            async def __aenter__(self): return self
+            async def __aexit__(self, *a): pass
+            async def get(self, _u): return _FakeResp()
+
+        with (
+            patch("nexus.scanner.crawler._find_chromium_binary", return_value="chromium"),
+            patch("nexus.scanner.crawler.asyncio.open_connection", AsyncMock(return_value=(None, _DummyWriter()))),
+            patch("nexus.scanner.crawler.asyncio.create_subprocess_exec", side_effect=_fake_exec),
+            patch("nexus.scanner.crawler.httpx.AsyncClient", _FakeClient),
+            patch.dict(__import__("sys").modules, {"websockets": fake_ws_mod}),
+        ):
+            urls, _ = await _cdp_browser_crawl(
+                "https://spa.local/", max_pages=1, headers={"Authorization": "Bearer top"}, timeout=5
+            )
+
+        assert "https://spa.local/ok" in urls
+        assert all("other-scheme" not in u and "badport" not in u for u in urls)
+
+        by_req = {
+            c["params"].get("requestId"): (c["method"], c["params"])
+            for c in sent_cmds
+            if isinstance(c.get("params"), dict) and "requestId" in c["params"]
+        }
+        assert by_req["r-downgrade"][0] == "Fetch.continueRequest"
+        assert all(h["name"].lower() != "authorization" for h in by_req["r-downgrade"][1]["headers"])
+        assert by_req["r-redir-file"] == ("Fetch.failRequest", {"requestId": "r-redir-file", "errorReason": "Aborted"})
+        assert by_req["r-neterr"] == ("Fetch.failRequest", {"requestId": "r-neterr", "errorReason": "NameNotResolved"})
+
+        # Also verify katana returning an off-host .js URL never reaches httpx client
+        fetched_urls: list[str] = []
+
+        class _TrackingHttpClient:
+            async def __aenter__(self): return self
+            async def __aexit__(self, *a): pass
+            async def get(self, u, **_kw):
+                fetched_urls.append(u)
+                return types.SimpleNamespace(is_redirect=False, headers={"content-type": "application/javascript"}, text="")
+
+        with (
+            patch("nexus.scanner.crawler._browser_crawl", AsyncMock(return_value=([], []))),
+            patch("nexus.scanner.crawler.ToolRunner.is_available", return_value=True),
+            patch("nexus.scanner.crawler._katana_crawl", AsyncMock(return_value=["https://evil.cdn.com/bad.js", "https://spa.local/app.js"])),
+            patch("nexus.scanner.crawler.make_http_client", return_value=_TrackingHttpClient()),
+        ):
+            k_urls, _ = await crawl_web("https://spa.local/", headers={"Authorization": "Bearer top"})
+
+        assert fetched_urls == ["https://spa.local/app.js"]
+        assert all("evil.cdn.com" not in u for u in k_urls)

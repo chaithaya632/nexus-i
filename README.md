@@ -41,7 +41,7 @@ pip install -e ".[full]"
 pip install -e ".[dashboard]"    # FastAPI web dashboard
 pip install -e ".[report]"       # PDF + DOCX report generation
 pip install -e ".[ai]"           # Ollama AI boost
-pip install -e ".[browser]"      # Optional Playwright headless SPA crawler
+pip install -e ".[browser]"      # Optional Playwright SPA crawler (native Chromium/Chrome/Edge CDP works out of the box)
 pip install -e ".[dev]"          # pytest, ruff, coverage
 ```
 
