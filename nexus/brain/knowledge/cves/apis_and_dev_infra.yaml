@@ -1,0 +1,47 @@
+# APIs, Dev Infrastructure & Web Server CVEs (Version-Bounded) — NEXUS Knowledge Base
+
+cves:
+  CVE-2024-23897:
+    description: "Jenkins CLI arbitrary file read via args4j command parser"
+    severity: critical
+    cvss: 9.8
+    products: ["jenkins-1.0-2.441"]
+    cwe: "CWE-22"
+    exploit_tools: ["nuclei", "custom"]
+    fingerprints: ["Jenkins"]
+
+  CVE-2021-43798:
+    description: "Grafana 8.x plugin path traversal arbitrary file read"
+    severity: high
+    cvss: 7.5
+    products: ["grafana-8.0.0-8.3.0"]
+    cwe: "CWE-22"
+    exploit_tools: ["curl", "nuclei"]
+    fingerprints: ["Grafana"]
+
+  CVE-2022-22965:
+    description: "Spring Framework Spring4Shell RCE via classLoader data binding"
+    severity: critical
+    cvss: 9.8
+    products: ["spring-5.3.0-5.3.17", "spring-5.2.0-5.2.19"]
+    cwe: "CWE-94"
+    exploit_tools: ["nuclei", "custom"]
+    fingerprints: ["Spring", "SpringBoot"]
+
+  CVE-2021-22205:
+    description: "GitLab CE/EE ExifTool unauthenticated RCE via image upload"
+    severity: critical
+    cvss: 10.0
+    products: ["gitlab-11.9.0-13.10.2"]
+    cwe: "CWE-78"
+    exploit_tools: ["nuclei", "msfconsole"]
+    fingerprints: ["GitLab"]
+
+  CVE-2017-7529:
+    description: "NGINX integer overflow in range filter module (memory disclosure)"
+    severity: high
+    cvss: 7.5
+    products: ["nginx-0.5.6-1.13.2"]
+    cwe: "CWE-190"
+    exploit_tools: ["nuclei", "custom"]
+    fingerprints: ["nginx"]

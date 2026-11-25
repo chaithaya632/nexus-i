@@ -187,3 +187,53 @@ def test_cli_wave2_auth_and_openapi_flags(cli_env, tmp_path: Path, monkeypatch):
     assert captured_cfg["profile"] == ScanProfile.API
     assert captured_cfg["headers"] == {"X-Org": "lab", "Cookie": "sess=abc", "Authorization": "Bearer jwt_tok"}
     assert captured_cfg["openapi"] == str(spec)
+
+
+def test_cli_wave3_sarif_diff_and_ignore(cli_env, tmp_path: Path):
+    import json
+    from nexus.core.config import NexusConfig
+    from nexus.core.engine import NexusEngine
+    from nexus.db.models import Finding, Severity
+
+    cfg = NexusConfig(data_dir=cli_env, db_path=cli_env / "nexus.db")
+    eng = NexusEngine(cfg)
+    eng.boot()
+    e1 = eng.create_engagement("ci.local", name="baseline")
+    eng.db.add_finding(Finding(
+        engagement_id=e1.id, host="ci.local", port=443, protocol="https",
+        title="Missing HSTS", cwe_id="CWE-523", severity=Severity.LOW,
+    ))
+    e2 = eng.create_engagement("ci.local", name="pr-build")
+    eng.db.add_finding(Finding(
+        engagement_id=e2.id, host="ci.local", port=443, protocol="https",
+        title="Missing HSTS", cwe_id="CWE-523", severity=Severity.LOW,
+    ))
+    eng.db.add_finding(Finding(
+        engagement_id=e2.id, host="ci.local", port=443, protocol="https",
+        title="Spring4Shell RCE", cve_ids=["CVE-2022-22965"], cwe_id="CWE-94", severity=Severity.CRITICAL,
+    ))
+    eng.shutdown()
+
+    runner = CliRunner()
+    assert "diff" in runner.invoke(cli, ["--help"]).output
+    assert "--ignore" in runner.invoke(cli, ["engage", "--help"]).output
+
+    sarif_out = tmp_path / "results.sarif"
+    res_sarif = runner.invoke(cli, ["report", "-e", e2.id, "-f", "sarif", "-o", str(sarif_out)])
+    assert res_sarif.exit_code == 0
+    assert sarif_out.is_file()
+    sarif_doc = json.loads(sarif_out.read_text(encoding="utf-8"))
+    assert sarif_doc["version"] == "2.1.0"
+    assert len(sarif_doc["runs"][0]["results"]) == 2
+
+    res_diff = runner.invoke(cli, ["diff", e1.id, e2.id, "-f", "json"])
+    assert res_diff.exit_code == 0
+    diff_data = json.loads(res_diff.output)
+    assert diff_data["counts"]["new"] == 1
+    assert diff_data["counts"]["persistent"] == 1
+
+    # Fail-on-new gate triggers exit code 2 for critical regression, 0 when gating only info
+    res_fail = runner.invoke(cli, ["diff", e1.id, e2.id, "--fail-on-new", "critical,high"])
+    assert res_fail.exit_code == 2
+    res_pass = runner.invoke(cli, ["diff", e1.id, e2.id, "--fail-on-new", "info"])
+    assert res_pass.exit_code == 0

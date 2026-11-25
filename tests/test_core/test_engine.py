@@ -454,3 +454,31 @@ paths:
         assert "secret_cookie_val" not in audit_text
         assert "***REDACTED***" in audit_text
         assert len(findings) >= 3  # OpenAPI, crawler secret, http_headers
+
+    @pytest.mark.asyncio
+    async def test_run_correlate_applies_nexusignore_baseline(self, engine: NexusEngine, tmp_path: Path) -> None:
+        from nexus.db.models import Finding, Severity
+
+        ign = tmp_path / ".nexusignore"
+        ign.write_text("CWE-693\n", encoding="utf-8")
+        engine.config.ignore_file = ign
+
+        eng = engine.create_engagement("ci.local")
+        engine.db.add_finding(Finding(
+            engagement_id=eng.id, host="ci.local", port=443, protocol="https",
+            title="Missing CSP", cwe_id="CWE-693", severity=Severity.LOW, tool_source="http_headers",
+        ))
+        engine.db.add_finding(Finding(
+            engagement_id=eng.id, host="ci.local", port=443, protocol="https",
+            title="SQL Injection", cwe_id="CWE-89", severity=Severity.CRITICAL, tool_source="nuclei",
+        ))
+
+        await engine.run_correlate(eng.id)
+        counts = engine.db.count_findings_by_severity(eng.id)
+        assert counts.get("critical") == 1
+        assert counts.get("low", 0) == 0
+
+        persisted = {f.cwe_id: f for f in engine.db.get_findings(eng.id)}
+        assert persisted["CWE-693"].false_positive is True
+        assert persisted["CWE-89"].false_positive is False
+        assert engine.brain_stats().get("remediations", 0) >= 15

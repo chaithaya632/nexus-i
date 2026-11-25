@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import logging
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -25,6 +25,7 @@ class ReportData:
     severity_counts: dict[str, int]
     executive_summary: str
     methodology: str
+    suppressed_findings: list[dict[str, Any]] = field(default_factory=list)
 
 
 def build_report_data(
@@ -40,7 +41,15 @@ def build_report_data(
     if not eng:
         raise ValueError(f"Engagement not found: {eng_id}")
 
-    findings = db.get_findings(eng_id)
+    all_raw = db.get_findings(eng_id)
+    findings = [
+        f for f in all_raw
+        if not (f.get("false_positive", False) if isinstance(f, dict) else getattr(f, "false_positive", False))
+    ]
+    suppressed = [
+        f for f in all_raw
+        if (f.get("false_positive", False) if isinstance(f, dict) else getattr(f, "false_positive", False))
+    ]
     targets = db.get_targets(eng_id)
     chains = db.get_chains(eng_id)
     creds = db.get_credentials(eng_id)
@@ -94,6 +103,7 @@ def build_report_data(
         severity_counts=severity_counts,
         executive_summary=executive_summary,
         methodology=methodology,
+        suppressed_findings=[_to_dict(f) for f in suppressed],
     )
 
 
@@ -155,6 +165,24 @@ def generate_report(
                 from nexus.reporter.docx import render_docx
                 path = out_dir / f"nexus_report_{eng_id}.docx"
                 render_docx(data, str(path))
+                generated.append(str(path))
+
+            elif fmt == "sarif":
+                from nexus.reporter.sarif import render_sarif
+                sarif_data = ReportData(
+                    meta=data.meta,
+                    engagement=data.engagement,
+                    targets=data.targets,
+                    findings=data.findings + data.suppressed_findings,
+                    chains=data.chains,
+                    credentials=data.credentials,
+                    severity_counts=data.severity_counts,
+                    executive_summary=data.executive_summary,
+                    methodology=data.methodology,
+                    suppressed_findings=data.suppressed_findings,
+                )
+                path = out_dir / f"nexus_report_{eng_id}.sarif"
+                path.write_text(render_sarif(sarif_data), encoding="utf-8")
                 generated.append(str(path))
 
             else:

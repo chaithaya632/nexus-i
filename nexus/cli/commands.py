@@ -87,9 +87,10 @@ def _run_async(coro):
 @click.option("--cookie", default="", help="Session Cookie header value for authenticated web scans.")
 @click.option("--auth-bearer", default="", help="Bearer token for Authorization header.")
 @click.option("--openapi", type=click.Path(exists=True), default=None, help="Path to OpenAPI/Swagger JSON or YAML spec.")
+@click.option("--ignore", type=click.Path(exists=True), default=None, help="Path to .nexusignore baseline suppression file.")
 @click.option("--no-exploit", is_flag=True, help="Skip exploitation phase.")
 @click.pass_context
-def engage(ctx, target, name, scope, stealth, tier, profile, resume, headers, cookie, auth_bearer, openapi, no_exploit):
+def engage(ctx, target, name, scope, stealth, tier, profile, resume, headers, cookie, auth_bearer, openapi, ignore, no_exploit):
     """Start or resume a penetration test engagement against TARGET."""
     if not target and not resume:
         raise click.UsageError("Provide TARGET or pass --resume <engagement_id>.")
@@ -107,6 +108,8 @@ def engage(ctx, target, name, scope, stealth, tier, profile, resume, headers, co
         engine.config.auth_headers = auth_hdrs
     if openapi:
         engine.config.openapi_spec = Path(openapi)
+    if ignore:
+        engine.config.ignore_file = Path(ignore)
 
     display_target = target or f"resume:{resume}"
     auth_summary = ", ".join(redact_headers(auth_hdrs).keys()) or "none"
@@ -217,7 +220,7 @@ def exploit(ctx, engagement):
 
 @click.command()
 @click.option("--engagement", "-e", required=True, help="Engagement ID.")
-@click.option("--format", "-f", "fmt", type=click.Choice(["pdf", "html", "md", "docx", "json"]), default="md")
+@click.option("--format", "-f", "fmt", type=click.Choice(["pdf", "html", "md", "docx", "json", "sarif"]), default="md")
 @click.option("--output", "-o", type=click.Path(), default=None)
 @click.pass_context
 def report(ctx, engagement, fmt, output):
@@ -236,6 +239,29 @@ def report(ctx, engagement, fmt, output):
         Path(out_path).parent.mkdir(parents=True, exist_ok=True)
         Path(out_path).write_text(json.dumps(data, indent=2, default=str), encoding="utf-8")
         console.print(f"[green]✓[/] JSON report saved to [cyan]{out_path}[/]")
+    elif fmt == "sarif":
+        from nexus.reporter.generator import ReportData, build_report_data
+        from nexus.reporter.sarif import render_sarif
+
+        data = build_report_data(engine.db, engagement)
+        sarif_data = ReportData(
+            meta=data.meta,
+            engagement=data.engagement,
+            targets=data.targets,
+            findings=data.findings + data.suppressed_findings,
+            chains=data.chains,
+            credentials=data.credentials,
+            severity_counts=data.severity_counts,
+            executive_summary=data.executive_summary,
+            methodology=data.methodology,
+            suppressed_findings=data.suppressed_findings,
+        )
+        out_path = Path(output) if output else (engine.config.output_dir / engagement / f"nexus_report_{engagement}.sarif")
+        if output and out_path.suffix.lower() not in (".sarif", ".json"):
+            out_path = out_path / f"nexus_report_{engagement}.sarif"
+        out_path.parent.mkdir(parents=True, exist_ok=True)
+        out_path.write_text(render_sarif(sarif_data), encoding="utf-8")
+        console.print(f"[green]✓[/] SARIF report saved to [cyan]{out_path}[/]")
     else:
         from nexus.reporter.generator import generate_report
         out_dir = Path(output) if output else engine.config.output_dir / engagement
@@ -531,6 +557,56 @@ def version():
     console.print(f"  Tier: {tier.value} | RAM: {hw.ram_total_mb}MB | CPUs: {hw.cpu_cores} | GPU: {hw.gpu_name}")
 
 
+@click.command()
+@click.argument("old_id")
+@click.argument("new_id")
+@click.option("--format", "-f", "fmt", type=click.Choice(["table", "json"]), default="table", show_default=True)
+@click.option("--fail-on-new", default="", help="Exit code 2 if new findings match comma-separated severities (e.g. critical,high or any).")
+@click.pass_context
+def diff(ctx, old_id, new_id, fmt, fail_on_new):
+    """Compare two engagements and report new, resolved, and persistent findings."""
+    from nexus.correlator.diff import diff_engagements
+
+    engine = _get_engine(ctx)
+    assert engine.db is not None
+    try:
+        result = diff_engagements(engine.db, old_id, new_id)
+    except ValueError as exc:
+        console.print(f"[red]{exc}[/]")
+        raise SystemExit(1)
+
+    if fmt == "json":
+        click.echo(json.dumps(result, indent=2, default=str))
+    else:
+        c = result["counts"]
+        console.print(Panel(
+            f"Baseline:   [cyan]{old_id}[/] ({result['old_target']})\n"
+            f"Current:    [cyan]{new_id}[/] ({result['new_target']})\n"
+            f"New:        [red]{c['new']}[/]\n"
+            f"Resolved:   [green]{c['resolved']}[/]\n"
+            f"Persistent: [yellow]{c['persistent']}[/]\n"
+            f"Suppressed: [dim]{c['suppressed']}[/]",
+            title="🔀 Engagement Diff",
+        ))
+        if result["new"]:
+            tbl = Table(title="New Findings (Regressions)", show_lines=True)
+            tbl.add_column("Severity")
+            tbl.add_column("Host:Port")
+            tbl.add_column("Title")
+            for f in result["new"]:
+                loc = f"{f['host']}:{f['port']}" if f.get("port") else f["host"]
+                tbl.add_row(str(f["severity"]).upper(), loc, f["title"])
+            console.print(tbl)
+
+    if fail_on_new:
+        thresholds = {s.strip().lower() for s in fail_on_new.split(",") if s.strip()}
+        if "any" in thresholds and result["new"]:
+            raise SystemExit(2)
+        for f in result["new"]:
+            if str(f.get("severity", "")).lower() in thresholds:
+                raise SystemExit(2)
+
+
 # ── Collect all commands ──────────────────────────────────────────
 
 ALL_COMMANDS = [
@@ -539,6 +615,7 @@ ALL_COMMANDS = [
     scan,
     exploit,
     report,
+    diff,
     engagements,
     kb,
     ai,

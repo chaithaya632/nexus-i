@@ -68,11 +68,18 @@ def _version_in_range(ver_str: str, range_spec: str) -> bool:
     if len(parts) >= 2:
         low = tuple(int(x) for x in parts[-2].split("."))
         high = tuple(int(x) for x in parts[-1].split("."))
+        # Do not match an ambiguous minor-only banner (e.g. 'Apache/2.4') against patch bounds ('2.4.0-2.4.55')
+        if len(ver) < len(high) and ver == high[:len(ver)]:
+            return False
+        if len(ver) < len(low) and ver == low[:len(ver)]:
+            return False
         return _cmp_versions(ver, low) >= 0 and _cmp_versions(ver, high) <= 0
     if len(parts) == 1:
         target = tuple(int(x) for x in parts[0].split("."))
         # Exact match when full X.Y.Z specified; major.minor prefix if only X.Y
         if len(target) >= 3:
+            if len(ver) < len(target) and ver == target[:len(ver)]:
+                return False
             return _cmp_versions(ver, target) == 0
         return ver[:len(target)] == target
     return False

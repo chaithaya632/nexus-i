@@ -48,6 +48,7 @@ from nexus.scanner._http import parse_url_target, redact_headers
 from nexus.scanner.crawler import crawl_web
 from nexus.scanner.headers import audit_http_security
 from nexus.scanner.openapi import audit_openapi_spec
+from nexus.correlator.baseline import apply_baseline_suppressions, load_ignore_rules, resolve_ignore_path
 from nexus.correlator.engine import correlate as correlate_findings
 from nexus.exploit.executor import ExploitExecutor, ExploitResult
 from nexus.exploit.sqli import sqlmap_scan
@@ -1006,6 +1007,20 @@ class NexusEngine:
             except Exception as exc:
                 log.debug("[CORRELATE] AI enhancement skipped: %s", exc)
 
+        # Apply `.nexusignore` baseline suppressions (marks false_positive=True + logs audit count)
+        ignore_path = resolve_ignore_path(self.config.ignore_file)
+        suppressed_count = 0
+        if ignore_path:
+            rules = load_ignore_rules(ignore_path)
+            if rules:
+                enriched, suppressed_count = apply_baseline_suppressions(enriched, rules)
+                if suppressed_count:
+                    self.audit.log_action(
+                        "baseline_suppressed",
+                        extra={"id": eng_id, "ignore_file": str(ignore_path), "suppressed": suppressed_count},
+                    )
+                    log.info("[CORRELATE] Suppressed %d finding(s) via %s", suppressed_count, ignore_path)
+
         # Persist deduplicated & enriched findings back to SQLite so reports reflect enrichment
         self.db.replace_findings(eng_id, enriched)
 
@@ -1164,6 +1179,7 @@ class NexusEngine:
         resume_id: str | None = None,
         auth_headers: dict[str, str] | None = None,
         openapi_spec: str | Path | None = None,
+        ignore_file: str | Path | None = None,
     ) -> str:
         """Run the complete engagement pipeline: Recon → Scan → Correlate → Exploit → Report.
 
@@ -1180,6 +1196,8 @@ class NexusEngine:
             self.config.auth_headers = dict(auth_headers)
         if openapi_spec:
             self.config.openapi_spec = Path(openapi_spec)
+        if ignore_file:
+            self.config.ignore_file = Path(ignore_file)
 
         if resume_id:
             eng = self.resume_engagement(resume_id)
@@ -1250,7 +1268,7 @@ class NexusEngine:
                 report_dir = self.config.data_dir / "reports" / eng_id
                 generated = generate_report(
                     self.db, eng_id, report_dir,
-                    formats=["md", "html"],
+                    formats=["md", "html", "sarif"],
                     ai_summary=ai_summary,
                 )
                 log.info("[REPORT] Generated %d reports: %s", len(generated), generated)

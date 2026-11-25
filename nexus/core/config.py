@@ -85,6 +85,7 @@ class NexusConfig(BaseModel):
     profile: ScanProfile = ScanProfile.FULL
     auth_headers: dict[str, str] = Field(default_factory=dict, exclude=True)
     openapi_spec: Path | None = None
+    ignore_file: Path | None = None
     ollama_host: str = "http://127.0.0.1:11434"
     model_name: str = "dolphin-mistral"
     max_threads: int = 5
@@ -104,7 +105,7 @@ class NexusConfig(BaseModel):
         dest.parent.mkdir(parents=True, exist_ok=True)
         data = self.model_dump(mode="json")
         # Convert Path objects to strings for YAML
-        for key in ("data_dir", "db_path", "scope_file", "openapi_spec", "output_dir", "knowledge_dir"):
+        for key in ("data_dir", "db_path", "scope_file", "openapi_spec", "ignore_file", "output_dir", "knowledge_dir"):
             if data.get(key) is not None:
                 data[key] = str(data[key])
         dest.write_text(yaml.dump(data, default_flow_style=False, sort_keys=False), encoding="utf-8")

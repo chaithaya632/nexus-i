@@ -33,9 +33,10 @@ cves:
     description: "Apache HTTP Server 2.4.17-2.4.38 local privilege escalation"
     severity: high
     cvss: 7.8
-    products: ["apache-httpd-2.4"]
+    products: ["apache-httpd-2.4.17-2.4.38"]
     cwe: "CWE-416"
     exploit_tools: ["custom"]
+    fingerprints: ["Apache/2.4"]
 
   CVE-2020-5902:
     description: "F5 BIG-IP TMUI RCE via directory traversal"
@@ -66,7 +67,7 @@ cves:
     description: "Apache Tomcat AJP Ghostcat file read/inclusion"
     severity: critical
     cvss: 9.8
-    products: ["apache-tomcat"]
+    products: ["apache-tomcat-9.0.0-9.0.30", "apache-tomcat-8.5.0-8.5.50", "apache-tomcat-7.0.0-7.0.99"]
     cwe: "CWE-22"
     exploit_tools: ["nmap", "msfconsole"]
     fingerprints: ["Tomcat"]
@@ -93,17 +94,19 @@ cves:
     description: "HTTP/2 Rapid Reset DDoS vulnerability"
     severity: high
     cvss: 7.5
-    products: ["nginx", "apache-httpd", "envoy"]
+    products: ["nginx-1.9.5-1.25.2"]
     cwe: "CWE-400"
     exploit_tools: ["custom"]
+    fingerprints: ["nginx"]
 
   CVE-2023-25690:
     description: "Apache HTTP Server 2.4.0-2.4.55 mod_proxy HTTP request smuggling"
     severity: critical
     cvss: 9.8
-    products: ["apache-httpd-2.4"]
+    products: ["apache-httpd-2.4.0-2.4.55"]
     cwe: "CWE-444"
     exploit_tools: ["nuclei", "custom"]
+    fingerprints: ["Apache/2.4"]
 
   CVE-2019-11043:
     description: "PHP-FPM + Nginx RCE via path_info misconfiguration"
