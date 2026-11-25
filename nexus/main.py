@@ -12,7 +12,7 @@ from nexus.cli.commands import ALL_COMMANDS
 def cli(ctx: click.Context) -> None:
     """NEXUS — Network EXploration & Unified Security.
 
-    AI-optional autonomous penetration testing framework for Linux.
+    AI-optional autonomous penetration testing framework.
     """
     ctx.ensure_object(dict)
     if ctx.invoked_subcommand is None:

@@ -1,6 +1,6 @@
 # NEXUS — Network EXploration & Unified Security
 
-> AI-Optional Autonomous Penetration Testing Framework for Linux
+> AI-Optional Autonomous Penetration Testing Framework (Linux, macOS, Windows)
 
 ```
  ███╗   ██╗███████╗██╗  ██╗██╗   ██╗███████╗
@@ -149,12 +149,13 @@ notes: "Authorized pentest — contract #12345"
 - **Target Shuffling** — Randomized scan order in ghost mode
 - **Semaphore Concurrency** — Stealth-aware parallel execution limits
 
-### 📊 Reporting (Phase 4)
+### 📊 Reporting (Phase 5)
 - **Markdown** — Full report with TOC, severity badges, evidence blocks
-- **HTML** — Self-contained dark-themed report with CSS, risk grid, finding cards
+- **HTML** — Self-contained dark-themed report with CSS, risk grid, finding cards, print stylesheet
 - **PDF** — via WeasyPrint (optional dependency)
 - **DOCX** — via python-docx (optional dependency)
-- **JSON** — Raw data export
+- **SARIF 2.1.0** — GitHub Code Scanning / CI/CD integration (`nexus report -f sarif` & `/api/engagements/{id}/sarif`)
+- **JSON** — Raw data export with redacted credential secrets
 
 ### 🤖 AI Boost Layer (Phase 5) — 100% Optional
 - **Finding Enhancement** — AI analysis of critical/high findings
@@ -172,12 +173,12 @@ notes: "Authorized pentest — contract #12345"
 
 ## Resource Tiers
 
-| Tier | RAM | AI | Use Case |
-|------|-----|----|----------|
-| **Minimal** | 2 GB | None | Expert System only — full functionality |
-| **Light** | 4 GB | qwen2.5:0.5b | Small AI boost for report writing |
-| **Standard** | 6 GB | dolphin-mistral 7B | Full AI analysis, uncensored |
-| **Full** | 12 GB+ | dolphin-llama3 | Maximum AI — best reasoning quality |
+| Tier | Free RAM Threshold | AI | Use Case |
+|------|--------------------|----|----------|
+| **Minimal** | < 2,500 MB (< 2.5 GB) | None | Expert System only (~550MB) — full functionality |
+| **Light** | >= 2,500 MB (>= 2.5 GB) | Qwen 2.5 0.5B | Small AI boost (~950MB) |
+| **Standard** | >= 6,000 MB (>= 6 GB) | dolphin-mistral 7B | Full AI analysis (~5GB), uncensored |
+| **Full** | >= 12,000 MB (>= 12 GB) | WhiteRabbitNeo 13B | Maximum AI (~8.5GB) — best reasoning quality |
 
 ## Architecture
 
@@ -185,59 +186,75 @@ notes: "Authorized pentest — contract #12345"
 nexus/
 ├── core/           # Config, hardware detection, scope enforcement, audit, scheduler
 │   ├── config.py       — YAML + env var config with Pydantic
-│   ├── hardware.py     — Linux hardware detection, auto tier selection
-│   ├── scope.py        — Non-bypassable scope enforcement
+│   ├── hardware.py     — Cross-platform RAM/CPU/GPU detection, auto tier selection
+│   ├── scope.py        — Non-bypassable scope enforcement (fail-closed)
 │   ├── audit.py        — Hash-chained immutable audit trail
 │   ├── scheduler.py    — Async parallel task execution
 │   └── engine.py       — Central orchestrator (all phases wired)
-├── brain/          # 500MB Expert System (zero AI)
+├── brain/          # Expert System (zero AI)
 │   ├── expert.py       — Forward-chaining production rule engine
 │   ├── knowledge_graph.py — CVE→Exploit YAML mappings
 │   ├── chain_builder.py   — Dijkstra attack chain pathfinding
 │   ├── vector_search.py   — TF-IDF fuzzy vulnerability matching
 │   ├── router.py       — Service-to-tool routing rules
-│   ├── credentials.py  — Default credential database (42+ services)
+│   ├── credentials.py  — Default credential database
 │   ├── waf_bypass.py   — WAF detection and bypass techniques
 │   ├── taxonomy.py     — OWASP/CWE mapping
 │   ├── payloads.py     — PoC payload templates with encoders
 │   ├── remediation.py  — Per-CWE/CVE fix guidance
+│   ├── cve_sync.py     — Offline/online CISA KEV & NVD v2 CVE sync
 │   └── knowledge/      — YAML knowledge base files
 ├── ai/             # Optional AI boost
-│   ├── ollama_client.py — Ollama REST client
+│   ├── ollama_client.py — Persistent Ollama REST client
 │   ├── boost.py        — AI enhancement layer with silent fallback
-│   ├── prompts.py      — Security analysis prompt templates
+│   ├── prompts.py      — Prompt templates with untrusted-data XML fencing
 │   ├── guard.py        — Hallucination detection + CVE validation
 │   └── models.yaml     — Recommended model configs per tier
 ├── recon/          # Reconnaissance tool wrappers
-│   ├── subdomains.py   — subfinder + amass
-│   ├── ports.py        — nmap XML parser
+│   ├── runner.py       — Safe subprocess runner, validation, secret redaction
+│   ├── subdomains.py   — subfinder + amass with dedup merge
+│   ├── ports.py        — nmap XML parser (defusedxml)
 │   ├── tech.py         — httpx + whatweb
-│   ├── dns.py          — dnsx + dig zone transfer
+│   ├── dns.py          — dnsx + dig zone transfer + stdlib fallback
 │   ├── waf.py          — wafw00f WAF detection
 │   └── osint.py        — theHarvester
 ├── scanner/        # Vulnerability scanners
+│   ├── _http.py        — Shared stealth-aware HTTP client & redaction helpers
+│   ├── crawler.py      — Katana, CDP/Playwright SPA crawler & JS secret extraction
 │   ├── nuclei.py       — Nuclei JSONL parser
 │   ├── web.py          — ffuf directory brute-force
 │   ├── nikto.py        — Nikto CSV parser
+│   ├── headers.py      — HTTP security headers, cookies, CORS & CSP audit
+│   ├── tls.py          — TLS/certificate audit
+│   ├── ssh_audit.py    — SSH configuration & crypto audit
+│   ├── exposure.py     — Exposed artifact probes (/.git, /.env, actuator)
+│   ├── cms_scan.py     — WPScan passive audit
+│   ├── openapi.py      — OpenAPI/Swagger spec parser & endpoint audit
+│   ├── passive_dast.py — GraphQL introspection & API auth-diff checks
+│   ├── network_services.py — SMB, FTP, Redis, DB, Docker, Memcached probes
+│   ├── host_audit.py   — Credentialed SSH / local OS package patch audit
 │   └── importer.py     — Nessus/Burp/CSV importers
 ├── correlator/     # Finding correlation engine
 │   ├── dedup.py        — Cross-tool deduplication
 │   ├── enrichment.py   — CVSS/CWE/OWASP enrichment
 │   ├── graph.py        — Attack chain graph builder
+│   ├── baseline.py     — `.nexusignore` baseline suppression rules
+│   ├── diff.py         — Engagement regression diffing
 │   └── engine.py       — Full correlation pipeline
 ├── exploit/        # Exploitation modules
-│   ├── executor.py     — Scope-enforced exploit runner
+│   ├── executor.py     — Scope-enforced, confirmation-gated exploit runner
 │   ├── sqli.py         — sqlmap wrapper
 │   ├── credential.py   — hydra + default cred testing
 │   └── msf_bridge.py   — Metasploit msfconsole bridge
 ├── stealth/        # Evasion controller
-│   └── controller.py   — Rate limiting, UA rotation, target shuffling
+│   └── controller.py   — Atomic rate limiting, UA rotation, target shuffling
 ├── reporter/       # Multi-format report generation
-│   ├── generator.py    — Report orchestrator
+│   ├── generator.py    — Report orchestrator (secret redaction)
 │   ├── markdown.py     — Markdown renderer
 │   ├── html.py         — Self-contained HTML renderer
 │   ├── pdf.py          — WeasyPrint PDF (optional)
-│   └── docx.py         — python-docx DOCX (optional)
+│   ├── docx.py         — python-docx DOCX (optional)
+│   └── sarif.py        — SARIF 2.1.0 renderer
 ├── dashboard/      # Optional FastAPI web dashboard
 │   ├── app.py          — REST API + WebSocket + SPA
 │   └── static/         — Frontend HTML/JS/CSS
@@ -246,8 +263,8 @@ nexus/
 │   └── tui.py          — Rich terminal UI
 ├── db/             # SQLite persistence
 │   ├── models.py       — Pydantic data models
-│   └── store.py        — CRUD operations
-└── plugins/        # Plugin system
+│   └── store.py        — CRUD operations & encrypted credential storage
+└── plugins/        # Plugin system (__init__.py + community/)
 ```
 
 ## Wrapped Tools
@@ -287,13 +304,21 @@ The AI boost layer enhances (never replaces) the expert system:
 | Variable | Description | Default |
 |----------|-------------|---------|
 | `NEXUS_DATA_DIR` | Data directory | `~/.nexus` |
-| `NEXUS_DB_PATH` | Database path | `~/.nexus/nexus.db` |
-| `NEXUS_STEALTH` | Stealth level (off/low/medium/high/paranoid) | `medium` |
-| `NEXUS_TIER` | Resource tier (minimal/light/standard/full) | auto-detected |
+| `NEXUS_DB_PATH` | Database path | `<NEXUS_DATA_DIR>/nexus.db` |
+| `NEXUS_SCOPE_FILE` | Default scope YAML path | none |
+| `NEXUS_STEALTH` | Stealth level (`off`/`low`/`medium`/`high`/`paranoid`) | `medium` |
+| `NEXUS_TIER` | Resource tier (`minimal`/`light`/`standard`/`full`) | auto-detected |
+| `NEXUS_PROFILE` | Scan profile (`quick`/`web`/`network`/`api`/`full`) | `full` |
+| `NEXUS_KNOWLEDGE_DIR` | Custom knowledge YAML directory | bundled |
+| `NEXUS_IGNORE_FILE` | `.nexusignore` baseline suppression path | none |
+| `NEXUS_LOCAL_PKG_AUDIT` | Enable read-only local OS package audit | `false` |
+| `NEXUS_AUTO_CONFIRM_EXPLOITS` | Skip interactive exploit confirmation prompt | `false` |
 | `NEXUS_OLLAMA_HOST` | Ollama API endpoint | `http://127.0.0.1:11434` |
 | `NEXUS_MODEL` | AI model name | `dolphin-mistral` |
-| `NEXUS_MAX_THREADS` | Max concurrent tasks | `5` |
+| `NEXUS_MAX_THREADS` | Max concurrent tasks (`>= 1`) | `5` |
 | `NEXUS_OUTPUT_DIR` | Report output directory | `./nexus_output` |
+| `NEXUS_WPSCAN_API_TOKEN` | WPScan API token (also checks `WPSCAN_API_TOKEN`) | none |
+| `NEXUS_DASHBOARD_TOKEN` | Dashboard Bearer / `X-Nexus-Token` secret | none |
 
 ## Development
 

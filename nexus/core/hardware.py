@@ -2,12 +2,31 @@
 
 from __future__ import annotations
 
+import ctypes
+import logging
 import os
 import shutil
 import subprocess
+import sys
 from dataclasses import dataclass
 
 from nexus.core.config import Tier
+
+log = logging.getLogger("nexus.core.hardware")
+
+
+class _MEMORYSTATUSEX(ctypes.Structure):
+    _fields_ = [
+        ("dwLength", ctypes.c_ulong),
+        ("dwMemoryLoad", ctypes.c_ulong),
+        ("ullTotalPhys", ctypes.c_ulonglong),
+        ("ullAvailPhys", ctypes.c_ulonglong),
+        ("ullTotalPageFile", ctypes.c_ulonglong),
+        ("ullAvailPageFile", ctypes.c_ulonglong),
+        ("ullTotalVirtual", ctypes.c_ulonglong),
+        ("ullAvailVirtual", ctypes.c_ulonglong),
+        ("ullAvailExtendedVirtual", ctypes.c_ulonglong),
+    ]
 
 
 @dataclass(frozen=True)
@@ -19,38 +38,77 @@ class HardwareInfo:
     gpu_name: str
 
 
+def _read_windows_memory() -> tuple[int, int] | None:
+    """Read total and available RAM in MB on Windows via GlobalMemoryStatusEx."""
+    if sys.platform != "win32":
+        return None
+    try:
+        kernel32 = getattr(getattr(ctypes, "windll", None), "kernel32", None)
+        if kernel32 is None:
+            return None
+        status = _MEMORYSTATUSEX()
+        status.dwLength = ctypes.sizeof(_MEMORYSTATUSEX)
+        if kernel32.GlobalMemoryStatusEx(ctypes.byref(status)) and status.ullTotalPhys > 0:
+            return (
+                int(status.ullTotalPhys // (1024 * 1024)),
+                int(status.ullAvailPhys // (1024 * 1024)),
+            )
+    except Exception as exc:
+        log.debug("GlobalMemoryStatusEx failed: %s", exc)
+    return None
+
+
 def _read_meminfo() -> tuple[int, int]:
-    """Read total and free RAM from /proc/meminfo (Linux only)."""
+    """Read total and available RAM in MB across Linux, Windows, and macOS/BSD."""
     total_kb = 0
     free_kb = 0
     try:
-        with open("/proc/meminfo", "r") as f:
+        with open("/proc/meminfo", "r", encoding="utf-8") as f:
+            mem_free_fallback = 0
             for line in f:
                 if line.startswith("MemTotal:"):
                     total_kb = int(line.split()[1])
                 elif line.startswith("MemAvailable:"):
                     free_kb = int(line.split()[1])
+                elif line.startswith("MemFree:"):
+                    mem_free_fallback = int(line.split()[1])
+            if total_kb > 0 and free_kb == 0:
+                free_kb = mem_free_fallback
     except (FileNotFoundError, PermissionError, ValueError):
-        # Fallback 1: os.sysconf (Linux without /proc)
-        if hasattr(os, "sysconf"):
-            try:
-                page_size = os.sysconf("SC_PAGE_SIZE")
-                total_kb = (os.sysconf("SC_PHYS_PAGES") * page_size) // 1024
-                free_kb = (os.sysconf("SC_AVPHYS_PAGES") * page_size) // 1024
-            except (ValueError, OSError):
-                pass
-        # Fallback 2: psutil or Windows WMI (dev/testing on non-Linux)
-        if total_kb == 0:
-            try:
-                import psutil
-                mem = psutil.virtual_memory()
-                total_kb = mem.total // 1024
-                free_kb = mem.available // 1024
-            except ImportError:
-                # Last resort: assume 4GB (safe default for VM detection)
-                total_kb = 4 * 1024 * 1024
-                free_kb = 2 * 1024 * 1024
-    return total_kb // 1024, free_kb // 1024
+        total_kb = 0
+        free_kb = 0
+
+    if total_kb > 0:
+        return total_kb // 1024, free_kb // 1024
+
+    # Windows native Win32 API
+    win_mem = _read_windows_memory()
+    if win_mem is not None:
+        return win_mem
+
+    # POSIX sysconf — only accept if BOTH SC_PHYS_PAGES and SC_AVPHYS_PAGES succeed
+    if hasattr(os, "sysconf"):
+        try:
+            page_size = int(os.sysconf("SC_PAGE_SIZE"))
+            phys_pages = int(os.sysconf("SC_PHYS_PAGES"))
+            avail_pages = int(os.sysconf("SC_AVPHYS_PAGES"))
+            if page_size > 0 and phys_pages > 0 and avail_pages >= 0:
+                return (phys_pages * page_size) // (1024 * 1024), (avail_pages * page_size) // (1024 * 1024)
+        except (ValueError, OSError):
+            pass
+
+    # Cross-platform fallback via psutil (macOS/BSD/containers)
+    try:
+        import psutil
+
+        mem = psutil.virtual_memory()
+        if mem.total > 0:
+            return int(mem.total // (1024 * 1024)), int(mem.available // (1024 * 1024))
+    except ImportError:
+        pass
+
+    log.warning("Could not detect host RAM; assuming 4096MB total / 2048MB free.")
+    return 4096, 2048
 
 
 def _count_cpus() -> int:

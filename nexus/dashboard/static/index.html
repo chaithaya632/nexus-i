@@ -60,16 +60,19 @@ tr:hover{background:#141828}
       <input id="dash-token-input" type="password" placeholder="Enter NEXUS Dashboard Token" class="btn" style="min-width:260px;background:#0a0e17;color:#fff">
       <button id="dash-token-btn" class="btn">Unlock</button>
     </div>
+    <div id="auth-error" style="color:#ff1744;font-size:12px;margin-top:6px;display:none">Invalid or missing token. Please check and try again.</div>
   </div>
   <!-- Status Cards -->
   <div class="cards" id="stats-cards"></div>
 
   <!-- Tabs -->
   <div class="tabs">
-    <div class="tab active" onclick="showTab('engagements', this)">Engagements</div>
-    <div class="tab" onclick="showTab('findings', this)">Findings</div>
-    <div class="tab" onclick="showTab('diff', this)">Diff</div>
-    <div class="tab" onclick="showTab('brain', this)">Brain Stats</div>
+    <div class="tab active" data-tab="engagements" onclick="showTab('engagements', this)">Engagements</div>
+    <div class="tab" data-tab="findings" onclick="showTab('findings', this)">Findings</div>
+    <div class="tab" data-tab="chains" onclick="showTab('chains', this)">Chains</div>
+    <div class="tab" data-tab="targets" onclick="showTab('targets', this)">Targets</div>
+    <div class="tab" data-tab="diff" onclick="showTab('diff', this)">Diff</div>
+    <div class="tab" data-tab="brain" onclick="showTab('brain', this)">Brain Stats</div>
   </div>
 
   <!-- Engagements Tab -->
@@ -80,6 +83,16 @@ tr:hover{background:#141828}
   <!-- Findings Tab -->
   <div class="tab-content" id="tab-findings">
     <div id="findings-view"><div class="empty">Select an engagement to view findings.</div></div>
+  </div>
+
+  <!-- Chains Tab -->
+  <div class="tab-content" id="tab-chains">
+    <div id="chains-view"><div class="empty">Select an engagement to view attack chains.</div></div>
+  </div>
+
+  <!-- Targets Tab -->
+  <div class="tab-content" id="tab-targets">
+    <div id="targets-view"><div class="empty">Select an engagement to view discovered targets.</div></div>
   </div>
 
   <!-- Diff Tab -->
@@ -121,10 +134,13 @@ async function apiFetch(url, opts) {
   options.headers = hdrs;
   const resp = await fetch(url, options);
   const banner = document.getElementById('auth-banner');
+  const authErr = document.getElementById('auth-error');
   if (resp.status === 401 && banner) {
     banner.style.display = 'block';
+    if (authErr) authErr.style.display = tok ? 'block' : 'none';
   } else if (resp.ok && banner) {
     banner.style.display = 'none';
+    if (authErr) authErr.style.display = 'none';
   }
   return resp;
 }
@@ -140,12 +156,17 @@ function showTab(name, tabEl) {
   document.querySelectorAll('.tab-content').forEach(t => t.classList.remove('active'));
   if (tabEl) {
     tabEl.classList.add('active');
+  } else {
+    const matched = document.querySelector('.tab[data-tab="' + name + '"]');
+    if (matched) matched.classList.add('active');
   }
-  document.getElementById('tab-' + name).classList.add('active');
+  const panel = document.getElementById('tab-' + name);
+  if (panel) panel.classList.add('active');
 }
 
 function sevBadge(sev) {
-  const s = esc(sev);
+  const raw = sev && typeof sev === 'object' ? (sev.value || 'info') : (sev || 'info');
+  const s = esc(String(raw).toLowerCase());
   return '<span class="badge sev-' + s + '">' + s + '</span>';
 }
 
@@ -366,22 +387,97 @@ function renderFindingsTable() {
   });
 }
 
+async function loadChains(engId) {
+  const out = document.getElementById('chains-view');
+  if (!out || !engId) return;
+  try {
+    const r = await apiFetch('/api/engagements/' + encodeURIComponent(engId) + '/chains');
+    if (!r.ok) {
+      out.innerHTML = '<div class="empty">Failed to load attack chains (' + esc(r.status) + ').</div>';
+      return;
+    }
+    const chains = await r.json();
+    if (!Array.isArray(chains) || !chains.length) {
+      out.innerHTML = '<div class="empty">No attack chains built for this engagement yet.</div>';
+      return;
+    }
+    let html = '<table><tr><th>Name</th><th>Impact</th><th>Confidence</th><th>Confirmed</th><th>Steps</th></tr>';
+    chains.forEach(c => {
+      const conf = typeof c.confidence === 'number' ? Math.round(c.confidence * 100) + '%' : esc(c.confidence || '');
+      const steps = Array.isArray(c.steps) ? c.steps.map((s, i) => (i + 1) + '. ' + (s.action || s.description || '') + (s.tool ? ' (' + s.tool + ')' : '')).join(' -> ') : '';
+      html += '<tr>' +
+        '<td>' + esc(c.name || '') + '</td>' +
+        '<td>' + sevBadge(c.impact || 'medium') + '</td>' +
+        '<td>' + esc(conf) + '</td>' +
+        '<td>' + (c.confirmed ? '<span class="badge" style="background:#00e676;color:#000">confirmed</span>' : '<span style="color:#888">inferred</span>') + '</td>' +
+        '<td>' + esc(steps || '-') + '</td>' +
+        '</tr>';
+    });
+    html += '</table>';
+    out.innerHTML = html;
+  } catch (e) {
+    out.innerHTML = '<div class="empty">Failed to load attack chains.</div>';
+  }
+}
+
+async function loadTargets(engId) {
+  const out = document.getElementById('targets-view');
+  if (!out || !engId) return;
+  try {
+    const r = await apiFetch('/api/engagements/' + encodeURIComponent(engId) + '/targets');
+    if (!r.ok) {
+      out.innerHTML = '<div class="empty">Failed to load targets (' + esc(r.status) + ').</div>';
+      return;
+    }
+    const targets = await r.json();
+    if (!Array.isArray(targets) || !targets.length) {
+      out.innerHTML = '<div class="empty">No targets discovered for this engagement yet.</div>';
+      return;
+    }
+    let html = '<table><tr><th>Host</th><th>IP</th><th>Live</th><th>OS Guess</th><th>Tech Stack</th><th>WAF</th></tr>';
+    targets.forEach(t => {
+      html += '<tr>' +
+        '<td>' + esc(t.host || '') + '</td>' +
+        '<td>' + esc(t.ip || '-') + '</td>' +
+        '<td>' + (t.is_live ? '<span class="badge" style="background:#00e676;color:#000">live</span>' : '<span style="color:#888">unknown</span>') + '</td>' +
+        '<td>' + esc(t.os_guess || '-') + '</td>' +
+        '<td>' + esc(Array.isArray(t.tech_stack) && t.tech_stack.length ? t.tech_stack.join(', ') : '-') + '</td>' +
+        '<td>' + esc(t.waf_detected || '-') + '</td>' +
+        '</tr>';
+    });
+    html += '</table>';
+    out.innerHTML = html;
+  } catch (e) {
+    out.innerHTML = '<div class="empty">Failed to load targets.</div>';
+  }
+}
+
 async function loadFindings(engId) {
+  if (currentEngId !== engId) {
+    searchQuery = '';
+    severityFilter = '';
+  }
   currentEngId = engId;
   // Switch to findings tab
-  document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
-  document.querySelectorAll('.tab-content').forEach(t => t.classList.remove('active'));
-  document.querySelectorAll('.tab')[1].classList.add('active');
-  document.getElementById('tab-findings').classList.add('active');
+  showTab('findings');
 
   try {
     const [fr, sr] = await Promise.all([
       apiFetch('/api/engagements/' + encodeURIComponent(engId) + '/findings?include_suppressed=' + String(includeSuppressed)),
       apiFetch('/api/engagements/' + encodeURIComponent(engId)),
     ]);
+    if (!fr.ok || !sr.ok) {
+      document.getElementById('findings-view').innerHTML =
+        '<div class="empty">Failed to load findings (' + esc(!fr.ok ? fr.status : sr.status) + ').</div>';
+      return;
+    }
     const findings = await fr.json();
     const summary = await sr.json();
     cachedFindings = Array.isArray(findings) ? findings : [];
+
+    // Populate Chains & Targets views for the selected engagement
+    loadChains(engId);
+    loadTargets(engId);
 
     const sarifHref = '/api/engagements/' + encodeURIComponent(engId) + '/sarif';
     let html = '<div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:10px">' +
@@ -425,28 +521,63 @@ async function loadFindings(engId) {
 }
 
 let activeWs = null;
+let wsRetryMs = 2000;
+let wsReconnectTimer = null;
 function connectWs() {
   try {
+    if (wsReconnectTimer) { clearTimeout(wsReconnectTimer); wsReconnectTimer = null; }
     if (activeWs) { try { activeWs.close(); } catch (x) {} }
     const tok = getDashToken();
     const wsProto = location.protocol === 'https:' ? 'wss:' : 'ws:';
-    const wsUrl = wsProto + '//' + location.host + '/ws' + (tok ? '?token=' + encodeURIComponent(tok) : '');
+    const wsUrl = wsProto + '//' + location.host + '/ws';
     activeWs = new WebSocket(wsUrl);
-    activeWs.onmessage = function(e) {
-      try { const m = JSON.parse(e.data); if (m.event) { loadStatus(); loadEngagements(); } } catch(x) {}
+    activeWs.onopen = function() {
+      wsRetryMs = 2000;
+      if (tok) {
+        activeWs.send(JSON.stringify({type: 'auth', token: tok}));
+      }
     };
-    activeWs.onclose = function(ev) { if (ev.code !== 1008) setTimeout(() => location.reload(), 10000); };
+    activeWs.onmessage = function(e) {
+      try {
+        const m = JSON.parse(e.data);
+        if (m.event && m.event !== 'auth') {
+          loadStatus();
+          loadEngagements();
+          if (currentEngId) loadFindings(currentEngId);
+        }
+      } catch(x) {}
+    };
+    activeWs.onclose = function(ev) {
+      if (ev.code !== 1008) {
+        wsReconnectTimer = setTimeout(connectWs, wsRetryMs);
+        wsRetryMs = Math.min(wsRetryMs * 2, 30000);
+      }
+    };
   } catch(e) {}
+}
+
+function submitDashToken() {
+  const input = document.getElementById('dash-token-input');
+  if (!input) return;
+  const val = input.value.trim();
+  try { sessionStorage.setItem('nexus_dash_token', val); } catch (e) {}
+  loadStatus();
+  loadEngagements();
+  if (currentEngId) loadFindings(currentEngId);
+  connectWs();
 }
 
 const unlockBtn = document.getElementById('dash-token-btn');
 if (unlockBtn) {
-  unlockBtn.addEventListener('click', () => {
-    const val = document.getElementById('dash-token-input').value.trim();
-    try { sessionStorage.setItem('nexus_dash_token', val); } catch (e) {}
-    loadStatus();
-    loadEngagements();
-    connectWs();
+  unlockBtn.addEventListener('click', submitDashToken);
+}
+const tokenInput = document.getElementById('dash-token-input');
+if (tokenInput) {
+  tokenInput.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') {
+      e.preventDefault();
+      submitDashToken();
+    }
   });
 }
 

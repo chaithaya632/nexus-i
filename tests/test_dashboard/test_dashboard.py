@@ -185,6 +185,15 @@ class TestDashboardApp:
         assert "findings-search" in r.text
         assert "findings-sev" in r.text
         assert "dash-token-input" in r.text
+        assert "tab-chains" in r.text
+        assert "tab-targets" in r.text
+        assert "?token=" not in r.text
+        assert "location.reload()" not in r.text
+
+    def test_nonexistent_engagement_subresources_return_404(self, client):
+        assert client.get("/api/engagements/missing/findings").status_code == 404
+        assert client.get("/api/engagements/missing/chains").status_code == 404
+        assert client.get("/api/engagements/missing/targets").status_code == 404
 
     def test_dashboard_token_auth_and_remediation_enrichment(self, engine, tmp_path):
         from nexus.db.models import Finding, Severity
@@ -215,16 +224,47 @@ class TestDashboardApp:
         rows = fr.json()
         assert len(rows) == 1 and "Log4j2" in rows[0]["remediation"]
 
-        # WebSocket rejects missing and non-ASCII tokens (code 1008) and accepts valid ?token=
+        # WebSocket rejects query-string ?token=, invalid header, and bad initial auth frame (code 1008)
         with pytest.raises(WebSocketDisconnect):
-            with auth_client.websocket_connect("/ws"):
-                pass
+            with auth_client.websocket_connect("/ws?token=dash_secret_tok_99") as ws:
+                ws.send_text("ping")
+                ws.receive_text()
+
         with pytest.raises(WebSocketDisconnect):
-            with auth_client.websocket_connect("/ws?token=é_invalid"):
-                pass
-        with auth_client.websocket_connect("/ws?token=dash_secret_tok_99") as ws:
+            with auth_client.websocket_connect("/ws", headers={"Authorization": "Bearer wrong"}) as ws:
+                ws.receive_text()
+
+        with pytest.raises(WebSocketDisconnect):
+            with auth_client.websocket_connect("/ws") as ws:
+                ws.send_text(json.dumps({"type": "auth", "token": "é_invalid"}))
+                ws.receive_text()
+
+        # Accepts initial auth frame {"type": "auth", "token": ...}
+        with auth_client.websocket_connect("/ws") as ws:
+            ws.send_text(json.dumps({"type": "auth", "token": "dash_secret_tok_99"}))
+            auth_ack = json.loads(ws.receive_text())
+            assert auth_ack["status"] == "ok"
             ws.send_text("ping")
             assert ws.receive_text() == "pong"
+
+        # Accepts Authorization: Bearer header on WS handshake
+        with auth_client.websocket_connect(
+            "/ws", headers={"Authorization": "Bearer dash_secret_tok_99"}
+        ) as ws:
+            ws.send_text("ping")
+            assert ws.receive_text() == "pong"
+
+    @pytest.mark.asyncio
+    async def test_broadcast_and_ws_cleanup(self, engine):
+        dash = DashboardApp(engine)
+        assert engine.on_progress == dash.broadcast
+        client = TestClient(dash.app)
+        with client.websocket_connect("/ws") as ws:
+            await dash.broadcast("scan_complete", {"findings": 3})
+            msg = json.loads(ws.receive_text())
+            assert msg["event"] == "scan_complete"
+            assert msg["data"]["findings"] == 3
+        assert dash._ws_clients == []
 
     def test_non_loopback_run_dashboard_generates_ephemeral_token(self, engine, capsys):
         from unittest.mock import patch

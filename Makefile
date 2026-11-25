@@ -20,6 +20,4 @@ format:
 	ruff format nexus/ tests/
 
 clean:
-	find . -type d -name __pycache__ -exec rm -rf {} + 2>/dev/null || true
-	find . -type f -name "*.pyc" -delete 2>/dev/null || true
-	rm -rf build/ dist/ *.egg-info .pytest_cache .ruff_cache
+	python -c "import pathlib, shutil; [shutil.rmtree(p, ignore_errors=True) for p in list(pathlib.Path('.').rglob('__pycache__')) + list(pathlib.Path('.').glob('*.egg-info')) + [pathlib.Path(d) for d in ('build', 'dist', '.pytest_cache', '.ruff_cache')] if p.exists()]; [p.unlink(missing_ok=True) for p in pathlib.Path('.').rglob('*.pyc')]"

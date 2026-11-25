@@ -8,11 +8,11 @@ before sending requests.
 from __future__ import annotations
 
 import asyncio
+from collections import deque
 import logging
 import random
 import time
-from dataclasses import dataclass, field
-from enum import Enum
+from dataclasses import dataclass
 from typing import Any
 
 log = logging.getLogger("nexus.stealth.controller")
@@ -103,10 +103,19 @@ class StealthController:
     """Central stealth manager — throttles, jitters, and randomizes tool activity."""
 
     def __init__(self, level: str = "normal") -> None:
-        self._profile = PROFILES.get(level, PROFILES["normal"])
-        self._semaphore = asyncio.Semaphore(self._profile.max_concurrent)
+        self._profile = self._resolve_profile(level)
+        self._throttle_lock = asyncio.Lock()
+        self._active_concurrent: int = 0
+        self._waiters: deque[asyncio.Future[None]] = deque()
         self._last_request_time: float = 0.0
         self._request_count: int = 0
+
+    @staticmethod
+    def _resolve_profile(level: str) -> StealthProfile:
+        if level not in PROFILES:
+            log.warning("Unknown stealth level %r; falling back to 'normal'", level)
+            return PROFILES["normal"]
+        return PROFILES[level]
 
     @property
     def profile(self) -> StealthProfile:
@@ -121,10 +130,10 @@ class StealthController:
         return self._request_count
 
     def set_level(self, level: str) -> None:
-        """Change stealth level at runtime."""
-        self._profile = PROFILES.get(level, PROFILES["normal"])
-        self._semaphore = asyncio.Semaphore(self._profile.max_concurrent)
-        log.info("Stealth level changed to: %s", level)
+        """Change stealth level at runtime without breaking in-flight permits."""
+        self._profile = self._resolve_profile(level)
+        self._wake_waiters()
+        log.info("Stealth level changed to: %s", self._profile.name)
 
     def get_user_agent(self) -> str:
         """Return a user-agent string — rotated if the profile says so."""
@@ -150,29 +159,62 @@ class StealthController:
 
     async def throttle(self) -> None:
         """Wait for rate-limit compliance before sending a request."""
-        if self._profile.requests_per_second <= 0:
+        rps = self._profile.requests_per_second
+        if rps <= 0:
             return
 
-        min_interval = 1.0 / self._profile.requests_per_second
-        now = time.monotonic()
-        elapsed = now - self._last_request_time
+        min_interval = 1.0 / rps
+        jitter_enabled = self._profile.jitter
+        async with self._throttle_lock:
+            now = time.monotonic()
+            next_slot = self._last_request_time + min_interval
+            if now < next_slot:
+                wait = next_slot - now
+                if jitter_enabled:
+                    wait += random.uniform(0, min_interval * 0.3)
+                reserved = now + wait
+            else:
+                wait = 0.0
+                reserved = now
+            self._last_request_time = reserved
+            self._request_count += 1
 
-        if elapsed < min_interval:
-            wait = min_interval - elapsed
-            if self._profile.jitter:
-                wait += random.uniform(0, wait * 0.3)
+        if wait > 0:
             await asyncio.sleep(wait)
 
-        self._last_request_time = time.monotonic()
-        self._request_count += 1
+    def _wake_waiters(self) -> None:
+        """Wake the next queued waiter if concurrency capacity is available."""
+        if self._active_concurrent >= self._profile.max_concurrent:
+            return
+        while self._waiters:
+            fut = self._waiters.popleft()
+            if not fut.done():
+                fut.set_result(None)
+                break
 
     async def acquire(self) -> None:
-        """Acquire the concurrency semaphore."""
-        await self._semaphore.acquire()
+        """Acquire a concurrency slot, safe across runtime level changes."""
+        while self._active_concurrent >= self._profile.max_concurrent:
+            fut = asyncio.get_running_loop().create_future()
+            self._waiters.append(fut)
+            try:
+                await fut
+            except BaseException:
+                try:
+                    self._waiters.remove(fut)
+                except ValueError:
+                    pass
+                if fut.done() and not fut.cancelled():
+                    self._wake_waiters()
+                raise
+        self._active_concurrent += 1
+        self._wake_waiters()
 
     def release(self) -> None:
-        """Release the concurrency semaphore."""
-        self._semaphore.release()
+        """Release a concurrency slot."""
+        if self._active_concurrent > 0:
+            self._active_concurrent -= 1
+        self._wake_waiters()
 
     def tool_args(self, tool: str) -> dict[str, Any]:
         """Return stealth-aware arguments for a specific tool.
@@ -196,3 +238,17 @@ class StealthController:
             "max_concurrent": self._profile.max_concurrent,
             "rps_limit": self._profile.requests_per_second,
         }
+
+
+_active_stealth: StealthController | None = None
+
+
+def get_active_stealth() -> StealthController | None:
+    """Return the active process-wide StealthController, if registered."""
+    return _active_stealth
+
+
+def set_active_stealth(ctrl: StealthController | None) -> None:
+    """Register or clear the active StealthController."""
+    global _active_stealth
+    _active_stealth = ctrl

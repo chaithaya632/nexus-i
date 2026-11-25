@@ -3,7 +3,12 @@
 import asyncio
 import pytest
 
-from nexus.stealth.controller import StealthController, PROFILES
+from nexus.stealth.controller import (
+    PROFILES,
+    StealthController,
+    get_active_stealth,
+    set_active_stealth,
+)
 
 
 def test_default_profile():
@@ -88,3 +93,51 @@ async def test_throttle():
 def test_all_profiles_exist():
     for level in ("loud", "normal", "quiet", "ghost"):
         assert level in PROFILES
+
+
+def test_unknown_level_warns_and_falls_back(caplog):
+    import logging
+
+    with caplog.at_level(logging.WARNING, logger="nexus.stealth.controller"):
+        sc = StealthController("nonexistent")
+    assert sc.level == "normal"
+    assert any("Unknown stealth level" in r.message for r in caplog.records)
+
+
+def test_active_stealth_registry():
+    prev = get_active_stealth()
+    try:
+        sc = StealthController("quiet")
+        set_active_stealth(sc)
+        assert get_active_stealth() is sc
+        set_active_stealth(None)
+        assert get_active_stealth() is None
+    finally:
+        set_active_stealth(prev)
+
+
+@pytest.mark.asyncio
+async def test_concurrent_throttle_reserves_slots_atomically():
+    sc = StealthController("ghost")  # 2 rps -> 0.5s interval, test fast with custom profile
+    sc._profile.requests_per_second = 100.0
+    sc._profile.jitter = False
+
+    await asyncio.gather(*(sc.throttle() for _ in range(5)))
+    assert sc.request_count == 5
+
+
+@pytest.mark.asyncio
+async def test_set_level_preserves_inflight_permits():
+    sc = StealthController("ghost")  # max_concurrent = 3
+    await sc.acquire()
+    await sc.acquire()
+    assert sc._active_concurrent == 2
+
+    # Changing level mid-flight must not lose/corrupt in-flight permits
+    sc.set_level("loud")  # max_concurrent = 50
+    await sc.acquire()
+    assert sc._active_concurrent == 3
+    sc.release()
+    sc.release()
+    sc.release()
+    assert sc._active_concurrent == 0

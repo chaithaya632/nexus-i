@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import tempfile
 from pathlib import Path
 
 import pytest
@@ -632,3 +631,155 @@ paths:
 
         assert net_mock.await_count == 2
         assert {f.tool_source for f in net_findings} == {"postgres_probe", "mongodb_probe"}
+
+    def test_fail_closed_scope_and_explicit_minimal_tier(self, tmp_path: Path) -> None:
+        from unittest.mock import patch
+        from nexus.core.hardware import HardwareInfo
+
+        eng_unbooted = NexusEngine(NexusConfig(data_dir=tmp_path / "u"))
+        assert eng_unbooted._is_in_scope("example.com") is False
+
+        # Explicit Tier.MINIMAL must NOT be overridden even on high-RAM hosts
+        cfg_explicit = NexusConfig(data_dir=tmp_path / "m", tier=Tier.MINIMAL)
+        eng_explicit = NexusEngine(cfg_explicit)
+        with patch("nexus.core.engine.detect_hardware", return_value=HardwareInfo(32768, 24000, 16, False, "None")):
+            eng_explicit.boot(connect_ai=False)
+        assert eng_explicit.config.tier == Tier.MINIMAL
+        eng_explicit.shutdown()
+
+        # Default (unset tier) auto-selects from hardware
+        cfg_default = NexusConfig(data_dir=tmp_path / "a")
+        eng_default = NexusEngine(cfg_default)
+        with patch("nexus.core.engine.detect_hardware", return_value=HardwareInfo(32768, 24000, 16, False, "None")):
+            eng_default.boot(connect_ai=False)
+        assert eng_default.config.tier == Tier.FULL
+        eng_default.shutdown()
+
+    def test_create_engagement_without_scope_file_uses_target_scope(self, engine: NexusEngine) -> None:
+        eng = engine.create_engagement("scoped.example.com")
+        assert eng.id
+        assert engine.scope is not None
+        assert engine.scope.is_in_scope("scoped.example.com") is True
+        assert engine.scope.is_in_scope("api.scoped.example.com") is True
+        assert engine.scope.is_in_scope("evil.com") is False
+        assert engine.msf is not None
+        assert engine.msf._scope is engine.scope
+        assert engine.msf._audit is engine.audit
+
+    @pytest.mark.asyncio
+    async def test_run_recon_scope_checks_portless_osint_and_plugins(
+        self, engine: NexusEngine, tmp_path: Path,
+    ) -> None:
+        from unittest.mock import patch, AsyncMock
+        from nexus.db.models import Finding, Port, Severity, Target
+
+        scope_file = tmp_path / "scope.yaml"
+        scope_file.write_text(
+            "allowed_domains:\n  - '*.app.local'\nexcluded_targets:\n  - 10.0.0.99\n",
+            encoding="utf-8",
+        )
+        eng = engine.create_engagement("app.local", scope_file=str(scope_file))
+
+        async def _fake_plugin_recon(target: str, **_):
+            return [
+                {"host": "sub.app.local", "title": "In-Scope Dict Finding", "severity": "low"},
+                {"host": "outside.evil.com", "title": "Out-of-Scope Dict Finding", "severity": "high"},
+            ]
+
+        engine.plugins.registry.add_recon("test-recon", _fake_plugin_recon)
+
+        fake_nmap = {
+            "targets": [Target(host="sub.app.local", ip="10.0.0.2", is_live=True)],
+            "ports": [Port(port=443, protocol="tcp", state="open", service="https")],
+            "findings": [
+                Finding(host="outside.evil.com", port=None, title="Portless OOS", severity=Severity.HIGH, tool_source="nmap"),
+                Finding(host="sub.app.local", port=None, title="Portless InScope", severity=Severity.INFO, tool_source="nmap"),
+            ],
+            "raw_xml": "",
+        }
+        with (
+            patch("nexus.core.engine.enumerate_subdomains", AsyncMock(return_value=[
+                Target(host="sub.app.local"),
+                Target(host="excluded.app.local", ip="10.0.0.99"),
+            ])),
+            patch("nexus.core.engine.enumerate_dns", AsyncMock(side_effect=lambda ts: (ts, []))),
+            patch("nexus.core.engine.nmap_scan", AsyncMock(return_value=fake_nmap)),
+            patch("nexus.core.engine.detect_tech_stack", AsyncMock(side_effect=lambda ts: ts)),
+            patch("nexus.core.engine.detect_waf", AsyncMock(side_effect=lambda ts: (ts, []))),
+            patch("nexus.core.engine.gather_osint", AsyncMock(return_value=(
+                [],
+                [Finding(host="evil.org", title="OOS OSINT", severity=Severity.LOW, tool_source="theharvester")],
+            ))),
+        ):
+            findings = await engine.run_recon(eng.id, "app.local")
+
+        titles = {f.title for f in findings}
+        assert "Portless InScope" in titles
+        assert "In-Scope Dict Finding" in titles
+        assert "Portless OOS" not in titles
+        assert "Out-of-Scope Dict Finding" not in titles
+        assert "OOS OSINT" not in titles
+
+    @pytest.mark.asyncio
+    async def test_run_exploit_requires_confirmation_and_uses_executor(
+        self, engine: NexusEngine, tmp_path: Path,
+    ) -> None:
+        from unittest.mock import patch, AsyncMock
+        from nexus.db.models import Finding, Severity, Target
+        from nexus.recon.runner import ToolRunner
+
+        eng = engine.create_engagement("exp.local")
+        engine.db.add_target(Target(engagement_id=eng.id, host="exp.local"))
+        engine.db.add_finding(Finding(
+            engagement_id=eng.id, host="exp.local", port=443,
+            title="Param Finding", evidence="GET https://[2001:db8::1]:8443/search?q=1",
+            severity=Severity.MEDIUM,
+        ))
+
+        # Default confirm=False skips active exploitation
+        skipped = await engine.run_exploit(eng.id)
+        assert skipped == []
+
+        # confirm=True invokes ExploitExecutor with IPv6-safe URL parsing
+        sqlmap_mock = AsyncMock(return_value=[])
+        scope_file = tmp_path / "s6.yaml"
+        scope_file.write_text("allowed_ips:\n  - 2001:db8::1\nallowed_ports:\n  - 8443\n", encoding="utf-8")
+        from nexus.core.scope import ScopeEnforcer
+        engine._set_scope(ScopeEnforcer.from_file(scope_file))
+
+        with (
+            patch.object(ToolRunner, "is_available", side_effect=lambda t: t == "sqlmap"),
+            patch("nexus.core.engine.sqlmap_scan", sqlmap_mock),
+        ):
+            await engine.run_exploit(eng.id, confirm=True)
+
+        sqlmap_mock.assert_awaited_once()
+        assert len(engine.exploit_executor.attempts) == 1
+        assert engine.exploit_executor.attempts[0].target == "2001:db8::1"
+        assert engine.exploit_executor.attempts[0].port == 8443
+
+    @pytest.mark.asyncio
+    async def test_engage_does_not_mutate_config_and_honors_output_dir(
+        self, engine: NexusEngine, tmp_path: Path,
+    ) -> None:
+        from unittest.mock import patch, AsyncMock
+        from nexus.core.config import get_config
+
+        custom_out = tmp_path / "custom_reports"
+        engine.config.output_dir = custom_out
+        orig_profile = engine.config.profile
+        progress_events: list[str] = []
+        engine.on_progress = lambda ev, data: progress_events.append(ev)
+
+        with (
+            patch.object(engine, "run_recon", AsyncMock(return_value=[])),
+            patch.object(engine, "run_scan", AsyncMock(return_value=[])),
+            patch.object(engine, "run_correlate", AsyncMock(return_value=[])),
+            patch("nexus.core.engine.generate_report", return_value=[]) as mock_rep,
+        ):
+            eng_id = await engine.engage("imm.local", skip_exploit=True, profile="api")
+
+        assert engine.config.profile == orig_profile
+        assert get_config().profile == orig_profile
+        assert mock_rep.call_args.args[2] == custom_out / eng_id
+        assert "engage_complete" in progress_events
