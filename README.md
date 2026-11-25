@@ -41,6 +41,7 @@ pip install -e ".[full]"
 pip install -e ".[dashboard]"    # FastAPI web dashboard
 pip install -e ".[report]"       # PDF + DOCX report generation
 pip install -e ".[ai]"           # Ollama AI boost
+pip install -e ".[browser]"      # Optional Playwright headless SPA crawler
 pip install -e ".[dev]"          # pytest, ruff, coverage
 ```
 
@@ -60,8 +61,9 @@ nexus engage --resume <engagement_id>
 # Recon only
 nexus recon example.com
 
-# Scan an existing engagement (custom headers, cookies, profile)
+# Scan an existing engagement (custom headers, cookies, profile, optional SSH package audit)
 nexus scan example.com -e <engagement_id> --profile web -H "X-Env: staging" --cookie "session=..."
+nexus scan 10.0.0.5 -e <engagement_id> --profile network --ssh-user audit --ssh-key ~/.ssh/audit_ed25519
 
 # Exploit
 nexus exploit -e <engagement_id>
@@ -73,11 +75,11 @@ nexus report -e <engagement_id> -f sarif -o results.sarif
 # Diff two runs as a CI/CD regression gate
 nexus diff <baseline_eng_id> <current_eng_id> --fail-on-new critical,high
 
-# Check brain stats
+# Check brain stats & sync CISA KEV / NVD CVE feeds offline
 nexus kb stats
-
-# Search knowledge base
 nexus kb search "log4j"
+nexus kb sync
+nexus kb import-kev kev.json
 
 # List past engagements
 nexus engagements list
@@ -85,8 +87,8 @@ nexus engagements list
 # Show engagement details
 nexus engagements show <engagement_id>
 
-# Launch web dashboard
-nexus dashboard
+# Launch web dashboard (supports --token or auto-generates one on non-loopback binds)
+nexus dashboard --token "$DASH_TOKEN"
 
 # AI status (optional)
 nexus ai status

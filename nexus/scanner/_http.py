@@ -47,6 +47,7 @@ def make_http_client(
     *,
     headers: dict[str, str] | None = None,
     timeout: float = 10.0,
+    follow_redirects: bool = False,
 ) -> httpx.AsyncClient:
     """Create a configured AsyncClient for non-destructive security probes."""
     merged = {"User-Agent": "NEXUS-Security-Scanner/1.0"}
@@ -55,6 +56,6 @@ def make_http_client(
     return httpx.AsyncClient(
         headers=merged,
         timeout=timeout,
-        follow_redirects=True,
+        follow_redirects=follow_redirects,
         verify=False,  # Assessment targets frequently use self-signed/internal certs
     )

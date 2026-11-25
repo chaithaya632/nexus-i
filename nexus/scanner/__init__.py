@@ -12,6 +12,8 @@ from nexus.scanner.headers import audit_http_security
 from nexus.scanner.network_services import audit_network_service
 from nexus.scanner.cms_scan import wpscan_audit
 from nexus.scanner.openapi import audit_openapi_spec, parse_openapi_spec
+from nexus.scanner.passive_dast import analyze_html_passive, audit_auth_enforcement, audit_graphql_introspection
+from nexus.scanner.host_audit import audit_host_packages
 
 __all__ = [
     "nuclei_scan",
@@ -27,4 +29,8 @@ __all__ = [
     "wpscan_audit",
     "audit_openapi_spec",
     "parse_openapi_spec",
+    "analyze_html_passive",
+    "audit_graphql_introspection",
+    "audit_auth_enforcement",
+    "audit_host_packages",
 ]

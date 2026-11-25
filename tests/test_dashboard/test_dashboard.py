@@ -182,3 +182,57 @@ class TestDashboardApp:
         assert "data-eng-id=" in r.text
         assert "loadFindings('" not in r.text
         assert "&quot;" in r.text
+        assert "findings-search" in r.text
+        assert "findings-sev" in r.text
+        assert "dash-token-input" in r.text
+
+    def test_dashboard_token_auth_and_remediation_enrichment(self, engine, tmp_path):
+        from nexus.db.models import Finding, Severity
+        from starlette.websockets import WebSocketDisconnect
+
+        eng = engine.create_engagement("sec.local", name="Auth Test")
+        engine.db.add_finding(Finding(
+            engagement_id=eng.id, host="sec.local", port=443,
+            title="Log4Shell Match", cwe_id="CWE-917", cve_ids=["CVE-2021-44228"],
+            severity=Severity.CRITICAL,
+        ))
+
+        auth_app = create_app(engine, api_token="dash_secret_tok_99")
+        auth_client = TestClient(auth_app)
+
+        # Unauthenticated / invalid tokens rejected safely with 401 (never 500 TypeError)
+        assert auth_client.get("/api/status").status_code == 401
+        assert auth_client.get("/api/engagements").status_code == 401
+        assert auth_client.get("/").status_code == 200
+
+        # Valid X-Nexus-Token and Authorization: Bearer allowed, remediation enriched
+        assert auth_client.get("/api/status", headers={"X-Nexus-Token": "dash_secret_tok_99"}).status_code == 200
+        fr = auth_client.get(
+            f"/api/engagements/{eng.id}/findings",
+            headers={"Authorization": "Bearer dash_secret_tok_99"},
+        )
+        assert fr.status_code == 200
+        rows = fr.json()
+        assert len(rows) == 1 and "Log4j2" in rows[0]["remediation"]
+
+        # WebSocket rejects missing and non-ASCII tokens (code 1008) and accepts valid ?token=
+        with pytest.raises(WebSocketDisconnect):
+            with auth_client.websocket_connect("/ws"):
+                pass
+        with pytest.raises(WebSocketDisconnect):
+            with auth_client.websocket_connect("/ws?token=é_invalid"):
+                pass
+        with auth_client.websocket_connect("/ws?token=dash_secret_tok_99") as ws:
+            ws.send_text("ping")
+            assert ws.receive_text() == "pong"
+
+    def test_non_loopback_run_dashboard_generates_ephemeral_token(self, engine, capsys):
+        from unittest.mock import patch
+        from nexus.dashboard.app import run_dashboard
+
+        with patch("uvicorn.run") as mock_uv:
+            run_dashboard(host="0.0.0.0", port=8477, engine=engine)
+
+        mock_uv.assert_called_once()
+        err = capsys.readouterr().err
+        assert "auto-generated dashboard token" in err

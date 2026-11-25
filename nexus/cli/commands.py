@@ -88,9 +88,12 @@ def _run_async(coro):
 @click.option("--auth-bearer", default="", help="Bearer token for Authorization header.")
 @click.option("--openapi", type=click.Path(exists=True), default=None, help="Path to OpenAPI/Swagger JSON or YAML spec.")
 @click.option("--ignore", type=click.Path(exists=True), default=None, help="Path to .nexusignore baseline suppression file.")
+@click.option("--ssh-user", default="", help="Optional authorized SSH username for OS package/patch audit.")
+@click.option("--ssh-key", type=click.Path(exists=True), default=None, help="SSH private key path for package audit.")
+@click.option("--local-audit", is_flag=True, help="Run read-only local dpkg/rpm package vulnerability audit.")
 @click.option("--no-exploit", is_flag=True, help="Skip exploitation phase.")
 @click.pass_context
-def engage(ctx, target, name, scope, stealth, tier, profile, resume, headers, cookie, auth_bearer, openapi, ignore, no_exploit):
+def engage(ctx, target, name, scope, stealth, tier, profile, resume, headers, cookie, auth_bearer, openapi, ignore, ssh_user, ssh_key, local_audit, no_exploit):
     """Start or resume a penetration test engagement against TARGET."""
     if not target and not resume:
         raise click.UsageError("Provide TARGET or pass --resume <engagement_id>.")
@@ -110,6 +113,12 @@ def engage(ctx, target, name, scope, stealth, tier, profile, resume, headers, co
         engine.config.openapi_spec = Path(openapi)
     if ignore:
         engine.config.ignore_file = Path(ignore)
+    if ssh_user:
+        engine.config.ssh_user = ssh_user
+    if ssh_key:
+        engine.config.ssh_key_path = Path(ssh_key)
+    if local_audit:
+        engine.config.local_pkg_audit = True
 
     display_target = target or f"resume:{resume}"
     auth_summary = ", ".join(redact_headers(auth_hdrs).keys()) or "none"
@@ -174,8 +183,11 @@ def recon(ctx, target, scope, engagement):
 @click.option("--cookie", default="", help="Session Cookie header value for authenticated web scans.")
 @click.option("--auth-bearer", default="", help="Bearer token for Authorization header.")
 @click.option("--openapi", type=click.Path(exists=True), default=None, help="Path to OpenAPI/Swagger JSON or YAML spec.")
+@click.option("--ssh-user", default="", help="Optional authorized SSH username for OS package/patch audit.")
+@click.option("--ssh-key", type=click.Path(exists=True), default=None, help="SSH private key path for package audit.")
+@click.option("--local-audit", is_flag=True, help="Run read-only local dpkg/rpm package vulnerability audit.")
 @click.pass_context
-def scan(ctx, target, engagement, profile, headers, cookie, auth_bearer, openapi):
+def scan(ctx, target, engagement, profile, headers, cookie, auth_bearer, openapi, ssh_user, ssh_key, local_audit):
     """Run vulnerability scanning against TARGET within an engagement."""
     auth_hdrs = _build_auth_headers(headers, cookie, auth_bearer)
     engine = _get_engine(ctx)
@@ -190,6 +202,12 @@ def scan(ctx, target, engagement, profile, headers, cookie, auth_bearer, openapi
         engine.config.auth_headers = auth_hdrs
     if openapi:
         engine.config.openapi_spec = Path(openapi)
+    if ssh_user:
+        engine.config.ssh_user = ssh_user
+    if ssh_key:
+        engine.config.ssh_key_path = Path(ssh_key)
+    if local_audit:
+        engine.config.local_pkg_audit = True
 
     console.print(f"[bold yellow]🔎 Scanning[/] → {target}")
     _run_async(engine.run_scan(eng.id, target))
@@ -418,6 +436,43 @@ def kb_search(ctx, query):
                 )
 
 
+@kb.command("import-kev")
+@click.argument("kev_file", type=click.Path(exists=True, dir_okay=False, path_type=Path))
+@click.pass_context
+def kb_import_kev(ctx, kev_file):
+    """Import an offline CISA KEV JSON file into NEXUS's CVE knowledge graph."""
+    from nexus.brain.cve_sync import import_cisa_kev_file
+
+    cfg = _get_engine(ctx).config
+    count, dest = import_cisa_kev_file(kev_file, cfg.data_dir)
+    console.print(f"[green]✓[/] Imported [bold]{count}[/] KEV CVEs → [cyan]{dest}[/]")
+
+
+@kb.command("import-nvd")
+@click.argument("nvd_file", type=click.Path(exists=True, dir_okay=False, path_type=Path))
+@click.pass_context
+def kb_import_nvd(ctx, nvd_file):
+    """Import an offline NVD v2 JSON file into NEXUS's CVE knowledge graph."""
+    from nexus.brain.cve_sync import import_nvd_json_file
+
+    cfg = _get_engine(ctx).config
+    count, dest = import_nvd_json_file(nvd_file, cfg.data_dir)
+    console.print(f"[green]✓[/] Imported [bold]{count}[/] NVD CVEs → [cyan]{dest}[/]")
+
+
+@kb.command("sync")
+@click.option("--url", default="", help="Override CISA KEV JSON feed URL.")
+@click.pass_context
+def kb_sync(ctx, url):
+    """Fetch the CISA Known Exploited Vulnerabilities (KEV) feed for offline correlation."""
+    from nexus.brain.cve_sync import CISA_KEV_URL, sync_cisa_kev
+
+    cfg = _get_engine(ctx).config
+    target_url = url.strip() or CISA_KEV_URL
+    count, dest = _run_async(sync_cisa_kev(cfg.data_dir, url=target_url))
+    console.print(f"[green]✓[/] Synced [bold]{count}[/] CISA KEV entries → [cyan]{dest}[/]")
+
+
 # ── ai ────────────────────────────────────────────────────────────
 
 
@@ -479,8 +534,9 @@ def ai_setup(ctx, model):
 @click.command()
 @click.option("--host", default="127.0.0.1", help="Bind address.")
 @click.option("--port", "-p", default=8477, type=int, help="Port number.")
+@click.option("--token", default="", help="Require Bearer/X-Nexus-Token authentication.")
 @click.pass_context
-def dashboard(ctx, host, port):
+def dashboard(ctx, host, port, token):
     """Launch the NEXUS web dashboard."""
     try:
         from nexus.dashboard.app import run_dashboard
@@ -491,7 +547,7 @@ def dashboard(ctx, host, port):
 
     engine = _get_engine(ctx)
     console.print(f"[bold cyan]⚡ NEXUS Dashboard[/] → http://{host}:{port}")
-    run_dashboard(host=host, port=port, engine=engine)
+    run_dashboard(host=host, port=port, engine=engine, api_token=token or None)
 
 
 # ── init ──────────────────────────────────────────────────────────

@@ -433,6 +433,8 @@ paths:
             patch("nexus.core.engine.crawl_web", crawl_mock),
             patch("nexus.core.engine.audit_http_security", hdr_mock),
             patch("nexus.core.engine.audit_exposed_artifacts", AsyncMock(return_value=[])),
+            patch("nexus.core.engine.audit_graphql_introspection", AsyncMock(return_value=[])),
+            patch("nexus.core.engine.audit_auth_enforcement", AsyncMock(return_value=[])),
             patch("nexus.core.engine.nuclei_scan", nuclei_mock),
             patch("nexus.core.engine.ffuf_scan", ffuf_mock),
             patch("nexus.core.engine.audit_tls", tls_mock),
@@ -535,6 +537,7 @@ paths:
             patch("nexus.core.engine.audit_http_security", AsyncMock(return_value=[])),
             patch("nexus.core.engine.audit_tls", AsyncMock(return_value=[])),
             patch("nexus.core.engine.audit_exposed_artifacts", exp_mock),
+            patch("nexus.core.engine.audit_graphql_introspection", AsyncMock(return_value=[])),
             patch("nexus.core.engine.wpscan_audit", wp_mock),
         ):
             findings = await engine.run_scan(eng.id, "wp.local")
@@ -566,9 +569,66 @@ paths:
             patch("nexus.core.engine.audit_http_security", AsyncMock(return_value=[])),
             patch("nexus.core.engine.audit_tls", AsyncMock(return_value=[])),
             patch("nexus.core.engine.audit_exposed_artifacts", AsyncMock(return_value=[])),
+            patch("nexus.core.engine.audit_graphql_introspection", AsyncMock(return_value=[])),
             patch("nexus.core.engine.wpscan_audit", wp_mock),
         ):
             await engine.run_scan(eng.id, "wp-tok.local")
 
         wp_mock.assert_awaited_once()
         assert wp_mock.call_args.kwargs.get("api_token") == "env_wp_tok_456"
+
+    @pytest.mark.asyncio
+    async def test_run_scan_wave6_graphql_auth_diff_and_db_probes(self, engine: NexusEngine) -> None:
+        from unittest.mock import patch, AsyncMock
+        from nexus.core.config import ScanProfile
+        from nexus.db.models import Finding, Port, Severity, Target
+
+        engine.config.profile = ScanProfile.API
+        engine.config.auth_headers = {"Authorization": "Bearer wave6_tok"}
+        eng = engine.create_engagement("api6.local")
+        t = Target(engagement_id=eng.id, host="api6.local", ip="10.0.0.70", is_live=True)
+        engine.db.add_target(t)
+        engine.db.add_port(Port(target_id=t.id, port=443, protocol="tcp", state="open", service="https"))
+
+        gql_mock = AsyncMock(return_value=[
+            Finding(host="api6.local", port=443, protocol="https", title="GraphQL Schema Introspection Enabled", severity=Severity.LOW, tool_source="graphql_probe")
+        ])
+        auth_mock = AsyncMock(return_value=[
+            Finding(host="api6.local", port=443, protocol="https", title="API Endpoint Accessible Without Authentication", severity=Severity.HIGH, tool_source="auth_diff")
+        ])
+        with (
+            patch("nexus.core.engine.ToolRunner.is_available", return_value=False),
+            patch("nexus.core.engine.crawl_web", AsyncMock(return_value=(["https://api6.local/api/users"], []))),
+            patch("nexus.core.engine.audit_http_security", AsyncMock(return_value=[])),
+            patch("nexus.core.engine.audit_tls", AsyncMock(return_value=[])),
+            patch("nexus.core.engine.audit_exposed_artifacts", AsyncMock(return_value=[])),
+            patch("nexus.core.engine.audit_graphql_introspection", gql_mock),
+            patch("nexus.core.engine.audit_auth_enforcement", auth_mock),
+        ):
+            api_findings = await engine.run_scan(eng.id, "api6.local")
+
+        gql_mock.assert_awaited_once()
+        auth_mock.assert_awaited_once()
+        assert {f.tool_source for f in api_findings} == {"graphql_probe", "auth_diff"}
+
+        # Network profile dispatches DB ports (5432, 27017, 2379)
+        engine.config.profile = ScanProfile.NETWORK
+        eng_net = engine.create_engagement("db.local")
+        t_net = Target(engagement_id=eng_net.id, host="db.local", ip="10.0.0.71", is_live=True)
+        engine.db.add_target(t_net)
+        engine.db.add_port(Port(target_id=t_net.id, port=5432, protocol="tcp", state="open", service="postgresql"))
+        engine.db.add_port(Port(target_id=t_net.id, port=27017, protocol="tcp", state="open", service="mongodb"))
+
+        net_mock = AsyncMock(side_effect=[
+            [Finding(host="db.local", port=5432, protocol="postgresql", title="PostgreSQL Trust Auth", severity=Severity.CRITICAL, tool_source="postgres_probe")],
+            [Finding(host="db.local", port=27017, protocol="mongodb", title="MongoDB Open", severity=Severity.HIGH, tool_source="mongodb_probe")],
+        ])
+        with (
+            patch("nexus.core.engine.audit_tls", AsyncMock(return_value=[])),
+            patch("nexus.core.engine.audit_ssh", AsyncMock(return_value=[])),
+            patch("nexus.core.engine.audit_network_service", net_mock),
+        ):
+            net_findings = await engine.run_scan(eng_net.id, "db.local")
+
+        assert net_mock.await_count == 2
+        assert {f.tool_source for f in net_findings} == {"postgres_probe", "mongodb_probe"}

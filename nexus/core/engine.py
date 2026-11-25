@@ -52,6 +52,8 @@ from nexus.scanner.headers import audit_http_security
 from nexus.scanner.network_services import audit_network_service
 from nexus.scanner.cms_scan import wpscan_audit
 from nexus.scanner.openapi import audit_openapi_spec
+from nexus.scanner.passive_dast import audit_auth_enforcement, audit_graphql_introspection
+from nexus.scanner.host_audit import audit_host_packages
 from nexus.correlator.baseline import apply_baseline_suppressions, load_ignore_rules, resolve_ignore_path
 from nexus.correlator.engine import correlate as correlate_findings
 from nexus.exploit.executor import ExploitExecutor, ExploitResult
@@ -227,11 +229,13 @@ class NexusEngine:
         for rule in build_service_rules():
             self.expert.add_rule(rule)
 
-        # Brain — Knowledge Graph
+        # Brain — Knowledge Graph (bundled + user-synced KEV/NVD catalogs)
         self.knowledge = KnowledgeGraph()
         kb_dir = self.config.knowledge_dir
         if kb_dir and kb_dir.is_dir():
             self.knowledge.load_from_directory(kb_dir)
+        if (self.config.data_dir / "cves").is_dir() and self.config.data_dir != kb_dir:
+            self.knowledge.load_from_directory(self.config.data_dir)
 
         # Brain — Chain Builder
         self.chains = ChainBuilder()
@@ -746,9 +750,13 @@ class NexusEngine:
                                 self.expert.add_fact(f"service_{alias}", True, source="db")
                             discovered_services.add(alias)
 
-                    if p.port in (6379, 21, 445, 139, 9200, 2375, 11211) or any(
+                    if p.port in (6379, 21, 445, 139, 9200, 2375, 11211, 27017, 5432, 3306, 25, 587, 2379, 8500, 10250, 10255) or any(
                         tok in svc
-                        for tok in ("redis", "ftp", "smb", "microsoft-ds", "netbios-ssn", "elastic", "docker", "memcache")
+                        for tok in (
+                            "redis", "ftp", "smb", "microsoft-ds", "netbios-ssn",
+                            "elastic", "docker", "memcache", "mongo", "postgres",
+                            "mysql", "mariadb", "smtp", "etcd", "consul", "kubelet",
+                        )
                     ):
                         if (host, p.port) not in seen_net:
                             seen_net.add((host, p.port))
@@ -1016,7 +1024,27 @@ class NexusEngine:
                 except Exception as exc:
                     log.warning("[SCAN] wpscan_audit failed: %s", exc)
 
-        # 7. Network & datastore configuration audits (SMB, FTP, Redis, Elasticsearch, Docker, Memcached)
+        # 6d. GraphQL introspection & API Auth-Diff verification
+        scoped_urls = [u for u in urls if self._is_in_scope(*parse_url_target(u)[:2])]
+        if profile_cfg.get("run_graphql", False) and scoped_urls:
+            try:
+                gql_findings = await audit_graphql_introspection(scoped_urls, headers=auth_headers or None)
+                for gf in gql_findings:
+                    gf.engagement_id = eng_id
+                all_findings.extend(gql_findings)
+            except Exception as exc:
+                log.warning("[SCAN] audit_graphql_introspection failed: %s", exc)
+
+        if profile_cfg.get("run_auth_diff", False) and auth_headers and scoped_urls:
+            try:
+                auth_findings = await audit_auth_enforcement(scoped_urls, auth_headers)
+                for af in auth_findings:
+                    af.engagement_id = eng_id
+                all_findings.extend(auth_findings)
+            except Exception as exc:
+                log.warning("[SCAN] audit_auth_enforcement failed: %s", exc)
+
+        # 7. Network & datastore configuration audits (SMB, FTP, Redis, Elasticsearch, Docker, Memcached, DBs, SMTP, Cloud)
         if profile_cfg.get("run_network_audits", True) and net_endpoints:
             log.info("[SCAN] Auditing %d network/datastore service endpoint(s)", len(net_endpoints))
             net_tasks = [
@@ -1032,6 +1060,25 @@ class NexusEngine:
                 for nf in tr.result:
                     nf.engagement_id = eng_id
                     all_findings.append(nf)
+
+        # 7b. Authorized credentialed SSH / local OS package patch audit
+        ssh_key = getattr(self.config, "ssh_key_path", None)
+        ssh_user = getattr(self.config, "ssh_user", None)
+        local_audit = bool(getattr(self.config, "local_pkg_audit", False))
+        if (local_audit or (ssh_user and ssh_key)) and self._is_in_scope(target):
+            try:
+                host_findings = await audit_host_packages(
+                    target,
+                    knowledge=self.knowledge,
+                    ssh_user=ssh_user,
+                    ssh_key_path=ssh_key,
+                    local=local_audit,
+                )
+                for hf in host_findings:
+                    hf.engagement_id = eng_id
+                all_findings.extend(host_findings)
+            except Exception as exc:
+                log.warning("[SCAN] audit_host_packages failed: %s", exc)
 
         # 8. Plugin scanners
         if self.plugins and self.plugins.registry.scanners:

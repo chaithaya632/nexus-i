@@ -3,16 +3,19 @@
 from __future__ import annotations
 
 import asyncio
+import importlib.util
 import json
 import logging
 import re
 from collections import deque
 from html.parser import HTMLParser
+from pathlib import Path
 from urllib.parse import urljoin, urlparse
 
 from nexus.db.models import Finding, Severity
 from nexus.recon.runner import ToolRunner
 from nexus.scanner._http import make_http_client, parse_url_target
+from nexus.scanner.passive_dast import analyze_html_passive
 
 log = logging.getLogger("nexus.scanner.crawler")
 
@@ -153,6 +156,7 @@ async def _katana_crawl(
         "-rl", str(rate),
     ]
     if headers:
+        args.extend(["-fs", "fqdn"])
         for k, v in headers.items():
             args.extend(["-H", f"{k}: {v}"])
 
@@ -173,6 +177,122 @@ async def _katana_crawl(
     return urls
 
 
+def _playwright_driver_ready() -> bool:
+    """Return True unless Playwright's bundled/distro JS driver path is visibly missing."""
+    try:
+        from playwright._impl._driver import compute_driver_executable
+    except Exception:
+        return True  # Mocked or custom playwright package without _impl._driver
+    try:
+        node_bin, cli_js = compute_driver_executable()
+        return Path(str(node_bin)).exists() and Path(str(cli_js)).exists()
+    except Exception:
+        return False
+
+
+async def _browser_crawl(
+    target_url: str,
+    *,
+    max_pages: int = 8,
+    headers: dict[str, str] | None = None,
+    timeout: int = 25,
+) -> tuple[list[str], list[Finding]]:
+    """Optional headless Playwright Chromium SPA crawl with strict same-host auth isolation."""
+    if importlib.util.find_spec("playwright") is None or not _playwright_driver_ready():
+        return [], []
+
+    try:
+        from playwright.async_api import async_playwright
+    except Exception:
+        return [], []
+
+    base_host, _, _ = parse_url_target(target_url)
+    discovered: list[str] = []
+    seen: set[str] = set()
+    findings: list[Finding] = []
+    protected_hdr_names = {k.lower() for k in (headers or {})} | {
+        "authorization", "proxy-authorization", "cookie", "x-api-key", "x-auth-token", "x-access-token", "api-key"
+    }
+
+    def _keep(u: str) -> bool:
+        p = urlparse(u)
+        if p.scheme not in ("http", "https") or (p.hostname or "").lower() != base_host:
+            return False
+        norm = u.split("#", 1)[0]
+        if norm not in seen:
+            seen.add(norm)
+            discovered.append(norm)
+            return True
+        return False
+
+    _keep(target_url)
+    try:
+        async with async_playwright() as pw:
+            browser = await pw.chromium.launch(headless=True)
+            try:
+                ctx_kwargs: dict[str, object] = {"ignore_https_errors": True}
+                if headers:
+                    ctx_kwargs["extra_http_headers"] = dict(headers)
+                context = await browser.new_context(**ctx_kwargs)
+
+                async def _route_guard(route) -> None:
+                    req = route.request
+                    rhost = (urlparse(req.url).hostname or "").lower()
+                    if rhost and rhost != base_host:
+                        if req.resource_type == "document":
+                            await route.abort()
+                            return
+                        safe_hdrs = {k: v for k, v in req.headers.items() if k.lower() not in protected_hdr_names}
+                        await route.continue_(headers=safe_hdrs)
+                        return
+                    await route.continue_()
+
+                await context.route("**/*", _route_guard)
+                page = await context.new_page()
+                page.on("request", lambda req: _keep(req.url))
+
+                queue: deque[str] = deque([target_url])
+                visited: set[str] = set()
+                limit = min(max_pages, 8)
+                while queue and len(visited) < limit:
+                    cur = queue.popleft()
+                    if cur in visited:
+                        continue
+                    visited.add(cur)
+                    try:
+                        await page.goto(cur, wait_until="domcontentloaded", timeout=timeout * 1000)
+                        await page.wait_for_timeout(350)
+                        html = await page.content()
+                    except Exception:
+                        continue
+
+                    js_eps, sec_f = extract_js_endpoints_and_secrets(html, cur, allowed_host=base_host)
+                    findings.extend(sec_f)
+                    findings.extend(analyze_html_passive(cur, html, content_type="text/html"))
+                    for ep in js_eps:
+                        if _keep(ep) and ep not in visited:
+                            queue.append(ep)
+
+                    try:
+                        dom_links = await page.evaluate(
+                            "() => Array.from(document.querySelectorAll('a[href],form[action]')).map(el => el.getAttribute('href') || el.getAttribute('action') || '')"
+                        )
+                    except Exception:
+                        dom_links = []
+                    for rel in dom_links or []:
+                        if rel:
+                            resolved = urljoin(cur, str(rel))
+                            if _keep(resolved) and resolved not in visited:
+                                queue.append(resolved)
+            finally:
+                await browser.close()
+    except Exception as exc:
+        log.debug("Playwright browser crawl skipped/fallback on %s: %s", target_url, exc)
+        return [], []
+
+    return discovered, findings
+
+
 async def crawl_web(
     target_url: str,
     *,
@@ -180,11 +300,12 @@ async def crawl_web(
     max_pages: int = 35,
     stealth: str = "normal",
     headers: dict[str, str] | None = None,
+    use_browser: bool = True,
     timeout: int = 120,
 ) -> tuple[list[str], list[Finding]]:
-    """Crawl a web/SPA target via `katana` (if available) + Python HTML/JS asset inspection.
+    """Crawl a web/SPA target via optional Playwright headless browser, `katana`, and Python HTML/JS inspection.
 
-    Returns (discovered_urls, secret_exposure_findings).
+    Returns (discovered_urls, passive_dast_and_secret_findings).
     """
     base_host, _, _ = parse_url_target(target_url)
     discovered: list[str] = []
@@ -204,6 +325,14 @@ async def crawl_web(
         return False
 
     _add_url(target_url)
+
+    if use_browser:
+        bw_urls, bw_findings = await _browser_crawl(
+            target_url, max_pages=min(max_pages, 8), headers=headers, timeout=min(timeout, 30)
+        )
+        for bu in bw_urls:
+            _add_url(bu)
+        findings.extend(bw_findings)
 
     js_to_scan: list[str] = []
     if ToolRunner.is_available("katana"):
@@ -234,9 +363,17 @@ async def crawl_web(
                     await asyncio.sleep(delay_s)
 
                 try:
-                    resp = await client.get(cur_url)
+                    resp = await client.get(cur_url, follow_redirects=False)
                 except Exception as exc:
                     log.debug("Crawler request failed for %s: %s", cur_url, exc)
+                    continue
+
+                if resp.is_redirect:
+                    loc = resp.headers.get("location", "").strip()
+                    if loc:
+                        redir_url = urljoin(cur_url, loc)
+                        if _add_url(redir_url) and depth + 1 <= max_depth and redir_url not in visited:
+                            queue.append((redir_url, depth + 1))
                     continue
 
                 ctype = (resp.headers.get("content-type") or "").lower()
@@ -249,6 +386,7 @@ async def crawl_web(
                         text, cur_url, allowed_host=base_host
                     )
                     findings.extend(sec_findings)
+                    findings.extend(analyze_html_passive(cur_url, text, content_type=ctype))
                     for ep in js_eps:
                         _add_url(ep)
 

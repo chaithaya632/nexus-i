@@ -76,6 +76,20 @@ def _verify_metrics(body: str, ct: str) -> str | None:
     return None
 
 
+def _verify_apache_status(body: str, _ct: str) -> str | None:
+    low = body.lower()
+    if "apache server status" in low and "server version:" in low and "requests currently being processed" in low:
+        return "\n".join(line.strip() for line in body.splitlines() if "server version:" in line.lower())[:200] or "Apache server-status confirmed"
+    return None
+
+
+def _verify_phpinfo(body: str, _ct: str) -> str | None:
+    low = body.lower()
+    if "php version" in low and ("php license" in low or "configuration file (php.ini) path" in low):
+        return "PHPInfo configuration disclosure confirmed"
+    return None
+
+
 # (path, title, severity, cwe_id, verifier_fn)
 _EXPOSURE_PROBES: list[tuple[str, str, Severity, str, Callable[[str, str], str | None]]] = [
     ("/.git/HEAD", "Exposed Git Repository (/.git/HEAD)", Severity.HIGH, "CWE-538", _verify_git_head),
@@ -83,6 +97,8 @@ _EXPOSURE_PROBES: list[tuple[str, str, Severity, str, Callable[[str, str], str |
     ("/actuator/env", "Spring Boot Actuator Environment Exposed", Severity.HIGH, "CWE-200", _verify_actuator_env),
     ("/actuator/health", "Spring Boot Actuator Health Endpoint Exposed", Severity.LOW, "CWE-200", _verify_actuator_health),
     ("/metrics", "Prometheus Metrics Endpoint Exposed", Severity.LOW, "CWE-200", _verify_metrics),
+    ("/server-status", "Apache mod_status Diagnostics Exposed", Severity.LOW, "CWE-200", _verify_apache_status),
+    ("/phpinfo.php", "Exposed PHPInfo Diagnostic Page", Severity.MEDIUM, "CWE-200", _verify_phpinfo),
 ]
 
 

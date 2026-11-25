@@ -165,14 +165,14 @@ async def audit_http_security(
     async with make_http_client(headers=headers, timeout=timeout) as client:
         for url in urls[:8]:
             try:
-                resp = await client.get(url)
+                resp = await client.get(url, follow_redirects=False)
             except Exception as exc:
                 log.debug("HTTP security probe failed for %s: %s", url, exc)
                 continue
 
             cors_hdrs: Mapping[str, str] | None = None
             try:
-                cors_resp = await client.get(url, headers={"Origin": _TEST_CORS_ORIGIN})
+                cors_resp = await client.get(url, headers={"Origin": _TEST_CORS_ORIGIN}, follow_redirects=False)
                 cors_hdrs = cors_resp.headers
             except Exception:
                 pass

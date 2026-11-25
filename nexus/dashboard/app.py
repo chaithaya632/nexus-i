@@ -17,13 +17,17 @@ Serves:
 from __future__ import annotations
 
 import asyncio
+import hmac
 import json
 import logging
+import os
+import secrets
+import sys
 from pathlib import Path
 from typing import Any
 
 try:
-    from fastapi import FastAPI, WebSocket, WebSocketDisconnect
+    from fastapi import FastAPI, Request, WebSocket, WebSocketDisconnect
     from fastapi.responses import HTMLResponse, FileResponse, JSONResponse, Response
     from fastapi.staticfiles import StaticFiles
     from fastapi.middleware.cors import CORSMiddleware
@@ -53,13 +57,23 @@ def _check_fastapi() -> None:
 class DashboardApp:
     """Wraps the FastAPI app and engine reference."""
 
-    def __init__(self, engine: NexusEngine | None = None) -> None:
+    def __init__(self, engine: NexusEngine | None = None, api_token: str | None = None) -> None:
         _check_fastapi()
         self.engine = engine or NexusEngine()
         if not self.engine._booted:
             self.engine.boot()
 
+        tok = (
+            api_token
+            or getattr(self.engine.config, "dashboard_token", None)
+            or os.environ.get("NEXUS_DASHBOARD_TOKEN")
+            or ""
+        ).strip()
+        self.api_token: str | None = tok or None
+
         self.app = FastAPI(title="NEXUS Dashboard", version=__version__)
+        self._ws_clients: list[WebSocket] = []
+        self._setup_routes()
         self.app.add_middleware(
             CORSMiddleware,
             allow_origin_regex=r"^https?://(127\.0\.0\.1|localhost)(:\d+)?$",
@@ -67,13 +81,25 @@ class DashboardApp:
             allow_methods=["GET", "POST", "OPTIONS"],
             allow_headers=["*"],
         )
-        self._ws_clients: list[WebSocket] = []
-        self._setup_routes()
 
     # ── Route Setup ───────────────────────────────────────────────
 
     def _setup_routes(self) -> None:
         app = self.app
+
+        @app.middleware("http")
+        async def _require_api_token(request: Request, call_next):
+            if (
+                self.api_token
+                and request.url.path.startswith("/api/")
+                and request.method != "OPTIONS"
+            ):
+                auth_hdr = request.headers.get("authorization", "")
+                bearer = auth_hdr[7:].strip() if auth_hdr.lower().startswith("bearer ") else ""
+                supplied = bearer or request.headers.get("x-nexus-token", "").strip()
+                if not supplied or not hmac.compare_digest(supplied.encode("utf-8"), self.api_token.encode("utf-8")):
+                    return JSONResponse({"error": "Unauthorized"}, status_code=401)
+            return await call_next(request)
 
         @app.get("/api/status")
         async def status():
@@ -119,10 +145,17 @@ class DashboardApp:
             findings = self.engine.db.get_findings(eng_id)
             if not include_suppressed:
                 findings = [f for f in findings if not getattr(f, "false_positive", False)]
-            return [
-                f.model_dump() if hasattr(f, "model_dump") else f
-                for f in findings
-            ]
+            out: list[dict[str, Any]] = []
+            for f in findings:
+                item = f.model_dump() if hasattr(f, "model_dump") else dict(f)
+                if not item.get("remediation") and getattr(self.engine, "remediation", None):
+                    rem = self.engine.remediation.get_for_finding(
+                        item.get("cwe_id", ""), item.get("cve_ids") or []
+                    )
+                    if rem:
+                        item["remediation"] = rem.short_fix or rem.detailed_fix
+                out.append(item)
+            return out
 
         @app.get("/api/engagements/{eng_id}/sarif")
         async def get_sarif(eng_id: str):
@@ -175,6 +208,17 @@ class DashboardApp:
 
         @app.websocket("/ws")
         async def websocket_endpoint(websocket: WebSocket):
+            if self.api_token:
+                auth_hdr = websocket.headers.get("authorization", "")
+                bearer = auth_hdr[7:].strip() if auth_hdr.lower().startswith("bearer ") else ""
+                ws_tok = (
+                    websocket.query_params.get("token", "").strip()
+                    or bearer
+                    or websocket.headers.get("x-nexus-token", "").strip()
+                )
+                if not ws_tok or not hmac.compare_digest(ws_tok.encode("utf-8"), self.api_token.encode("utf-8")):
+                    await websocket.close(code=1008)
+                    return
             await websocket.accept()
             self._ws_clients.append(websocket)
             try:
@@ -214,18 +258,37 @@ class DashboardApp:
             self._ws_clients.remove(ws)
 
 
-def create_app(engine: NexusEngine | None = None) -> Any:
+def create_app(engine: NexusEngine | None = None, api_token: str | None = None) -> Any:
     """Factory function — returns the FastAPI app instance."""
     _check_fastapi()
-    dash = DashboardApp(engine)
+    dash = DashboardApp(engine, api_token=api_token)
     return dash.app
 
 
-def run_dashboard(host: str = "127.0.0.1", port: int = 8477, engine: NexusEngine | None = None) -> None:
-    """Start the dashboard server (blocking)."""
+def run_dashboard(
+    host: str = "127.0.0.1",
+    port: int = 8477,
+    engine: NexusEngine | None = None,
+    api_token: str | None = None,
+) -> None:
+    """Start the dashboard server (blocking), enforcing token auth when bound beyond loopback."""
     _check_fastapi()
     import uvicorn
-    app = create_app(engine)
+
+    resolved_tok = (
+        api_token
+        or (getattr(engine.config, "dashboard_token", None) if engine else None)
+        or os.environ.get("NEXUS_DASHBOARD_TOKEN")
+        or ""
+    ).strip() or None
+    if host not in ("127.0.0.1", "::1", "localhost") and not resolved_tok:
+        resolved_tok = secrets.token_urlsafe(24)
+        print(
+            f"[NEXUS] Non-loopback bind ({host}) auto-generated dashboard token: {resolved_tok}",
+            file=sys.stderr,
+            flush=True,
+        )
+    app = create_app(engine, api_token=resolved_tok)
     log.info("Starting NEXUS dashboard at http://%s:%d", host, port)
     uvicorn.run(app, host=host, port=port, log_level="info")
 

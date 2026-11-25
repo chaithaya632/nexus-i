@@ -44,8 +44,10 @@ def _version_in_range(ver_str: str, range_spec: str) -> bool:
         return False
 
     spec = range_spec.strip()
-    # Comparator clauses: "<2.4.51", ">=8.5,<9.8"
+    # Comparator clauses: "<2.4.51", ">=8.5,<9.8", or "product >=8.5,<9.8"
     if any(op in spec for op in ("<", ">", "=")):
+        if " " in spec and not spec.startswith(("<", ">", "=")):
+            spec = spec.split(None, 1)[-1].strip()
         clauses = [c.strip() for c in spec.split(",") if c.strip()]
         for cl in clauses:
             for op, fn in (
@@ -58,9 +60,16 @@ def _version_in_range(ver_str: str, range_spec: str) -> bool:
             ):
                 if cl.startswith(op):
                     bound = _parse_version(cl[len(op):])
-                    if bound is None or not fn(ver, bound):
+                    if bound is None:
+                        return False
+                    # Do not match an ambiguous minor-only banner (e.g. 'Apache/2.4') against patch bounds ('<=2.4.48')
+                    if len(ver) < len(bound) and ver == bound[:len(ver)]:
+                        return False
+                    if not fn(ver, bound):
                         return False
                     break
+            else:
+                return False
         return True
 
     # Find all version segments inside spec (e.g. 'openssh-8.5-9.7' -> ['8.5', '9.7'])
@@ -101,6 +110,7 @@ class VulnEntry:
     vuln_type: str = ""  # rce, sqli, xss, lfi, auth_bypass, etc.
     description: str = ""
     affected_versions: str = ""
+    version_specs: list[str] = field(default_factory=list)
     exploits: list[ExploitInfo] = field(default_factory=list)
     chain_to: list[str] = field(default_factory=list)  # Next attack steps
     remediation: str = ""
@@ -186,6 +196,7 @@ class KnowledgeGraph:
                         vuln_type=v.get("type", ""),
                         description=v.get("description", ""),
                         affected_versions=version_range,
+                        version_specs=[version_range] if any(op in version_range for op in ("<", ">", "=")) else [s.strip() for s in version_range.split(",") if s.strip()],
                         exploits=exploits,
                         chain_to=v.get("chain_to", []),
                         remediation=v.get("remediation", ""),
@@ -220,6 +231,7 @@ class KnowledgeGraph:
                 vuln_type=cve_data.get("cwe", cve_data.get("type", "")),
                 description=cve_data.get("description", ""),
                 affected_versions=", ".join(str(p) for p in products),
+                version_specs=[str(p).strip() for p in products if str(p).strip()],
                 exploits=exploits,
                 chain_to=cve_data.get("chain_to", []),
                 remediation=cve_data.get("remediation", ""),
@@ -273,11 +285,11 @@ class KnowledgeGraph:
             return sk.vulns
         matched: list[VulnEntry] = []
         for v in sk.vulns:
-            if not v.affected_versions:
+            if not v.affected_versions and not v.version_specs:
                 matched.append(v)
                 continue
-            specs = [s.strip() for s in v.affected_versions.split(",") if s.strip()]
-            if any(_version_in_range(version, s) for s in specs) or version in v.affected_versions:
+            specs = v.version_specs or [s.strip() for s in v.affected_versions.split(",") if s.strip()]
+            if any(_version_in_range(version, s) for s in specs) or (v.affected_versions and version in v.affected_versions):
                 matched.append(v)
         return matched
 
@@ -313,7 +325,7 @@ class KnowledgeGraph:
             for entry in sk.vulns:
                 if entry.cve in seen_cves:
                     continue
-                specs = [s.strip() for s in entry.affected_versions.split(",") if s.strip()]
+                specs = entry.version_specs or [s.strip() for s in entry.affected_versions.split(",") if s.strip()]
                 # If a version string is present on the port banner, require a matching version range
                 spec_has_ver = any(_VER_RE.search(s) for s in specs)
                 if has_num_ver:

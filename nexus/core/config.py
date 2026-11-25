@@ -39,6 +39,7 @@ SCAN_PROFILE_SETTINGS: dict[str, dict[str, Any]] = {
     "quick": {
         "use_amass": False, "run_osint": False, "run_waf": False,
         "run_crawl": False, "run_headers": True, "run_exposure": True,
+        "run_graphql": False, "run_auth_diff": False,
         "run_nuclei": True, "targeted_nuclei": True,
         "run_ffuf": False, "run_nikto": False,
         "run_tls": True, "run_ssh": True, "run_network_audits": True,
@@ -46,6 +47,7 @@ SCAN_PROFILE_SETTINGS: dict[str, dict[str, Any]] = {
     "web": {
         "use_amass": True, "run_osint": False, "run_waf": True,
         "run_crawl": True, "run_headers": True, "run_exposure": True,
+        "run_graphql": True, "run_auth_diff": True,
         "run_nuclei": True, "targeted_nuclei": True,
         "run_ffuf": True, "ffuf_wordlist": "common", "run_nikto": True,
         "run_tls": True, "run_ssh": False, "run_network_audits": False,
@@ -53,6 +55,7 @@ SCAN_PROFILE_SETTINGS: dict[str, dict[str, Any]] = {
     "network": {
         "use_amass": False, "run_osint": True, "run_waf": False,
         "run_crawl": False, "run_headers": False, "run_exposure": False,
+        "run_graphql": False, "run_auth_diff": False,
         "run_nuclei": False, "targeted_nuclei": False,
         "run_ffuf": False, "run_nikto": False,
         "run_tls": True, "run_ssh": True, "run_network_audits": True,
@@ -60,6 +63,7 @@ SCAN_PROFILE_SETTINGS: dict[str, dict[str, Any]] = {
     "api": {
         "use_amass": False, "run_osint": False, "run_waf": True,
         "run_crawl": True, "run_headers": True, "run_exposure": True,
+        "run_graphql": True, "run_auth_diff": True,
         "run_nuclei": True, "targeted_nuclei": True,
         "run_ffuf": True, "ffuf_wordlist": "api", "run_nikto": False,
         "run_tls": True, "run_ssh": False, "run_network_audits": False,
@@ -67,6 +71,7 @@ SCAN_PROFILE_SETTINGS: dict[str, dict[str, Any]] = {
     "full": {
         "use_amass": True, "run_osint": True, "run_waf": True,
         "run_crawl": True, "run_headers": True, "run_exposure": True,
+        "run_graphql": True, "run_auth_diff": True,
         "run_nuclei": True, "targeted_nuclei": False,
         "run_ffuf": True, "ffuf_wordlist": "common", "run_nikto": True,
         "run_tls": True, "run_ssh": True, "run_network_audits": True,
@@ -85,6 +90,10 @@ class NexusConfig(BaseModel):
     profile: ScanProfile = ScanProfile.FULL
     auth_headers: dict[str, str] = Field(default_factory=dict, exclude=True, repr=False)
     wpscan_api_token: str | None = Field(default=None, exclude=True, repr=False)
+    dashboard_token: str | None = Field(default=None, exclude=True, repr=False)
+    ssh_user: str | None = Field(default=None, exclude=True, repr=False)
+    ssh_key_path: Path | None = Field(default=None, exclude=True, repr=False)
+    local_pkg_audit: bool = False
     openapi_spec: Path | None = None
     ignore_file: Path | None = None
     ollama_host: str = "http://127.0.0.1:11434"
@@ -135,6 +144,7 @@ class NexusConfig(BaseModel):
             "NEXUS_MAX_THREADS": "max_threads",
             "NEXUS_OUTPUT_DIR": "output_dir",
             "NEXUS_WPSCAN_API_TOKEN": "wpscan_api_token",
+            "NEXUS_DASHBOARD_TOKEN": "dashboard_token",
         }
         for env_key, cfg_key in env_map.items():
             val = os.environ.get(env_key)

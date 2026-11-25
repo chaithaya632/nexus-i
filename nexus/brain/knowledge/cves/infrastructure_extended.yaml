@@ -1,0 +1,444 @@
+# Extended Infrastructure, Database, Proxy & App Framework CVEs (Version-Bounded)
+# Keeps strict SemVer/patch upper bounds so patched releases do not false-positive.
+
+cves:
+  CVE-2021-40438:
+    description: "Apache HTTP Server mod_proxy SSRF vulnerability"
+    severity: critical
+    cvss: 9.0
+    products: ["apache-httpd <=2.4.48"]
+    cwe: "CWE-918"
+    fingerprints: ["Apache/2.4"]
+    remediation: "Upgrade Apache HTTP Server to 2.4.49+ (ideally 2.4.62+)."
+
+  CVE-2022-31813:
+    description: "Apache HTTP Server mod_proxy X-Forwarded-For IP spoofing"
+    severity: critical
+    cvss: 9.8
+    products: ["apache-httpd <=2.4.53"]
+    cwe: "CWE-345"
+    fingerprints: ["Apache/2.4"]
+    remediation: "Upgrade Apache HTTP Server to 2.4.54 or later."
+
+  CVE-2024-38476:
+    description: "Apache HTTP Server mod_proxy backend response splitting / info leak"
+    severity: high
+    cvss: 7.5
+    products: ["apache-httpd <=2.4.59"]
+    cwe: "CWE-829"
+    fingerprints: ["Apache/2.4"]
+    remediation: "Upgrade Apache HTTP Server to 2.4.60 or later."
+
+  CVE-2021-23017:
+    description: "Nginx DNS resolver off-by-one heap write"
+    severity: high
+    cvss: 7.7
+    products: ["nginx 0.6.18-1.20.0"]
+    cwe: "CWE-193"
+    fingerprints: ["nginx"]
+    remediation: "Upgrade Nginx to 1.20.1 / 1.21.0 or later."
+
+  CVE-2022-41741:
+    description: "Nginx ngx_http_mp4_module memory corruption"
+    severity: high
+    cvss: 7.8
+    products: ["nginx <=1.23.1"]
+    cwe: "CWE-787"
+    fingerprints: ["nginx"]
+    remediation: "Upgrade Nginx to 1.23.2 / 1.22.1 or later."
+
+  CVE-2024-7347:
+    description: "Nginx ngx_http_mp4_module buffer over-read DoS"
+    severity: medium
+    cvss: 5.7
+    products: ["nginx <=1.27.0"]
+    cwe: "CWE-125"
+    fingerprints: ["nginx"]
+    remediation: "Upgrade Nginx to 1.27.1 / 1.26.2 or later."
+
+  CVE-2022-3602:
+    description: "OpenSSL 3.0.x X.509 certificate punycode buffer overrun"
+    severity: high
+    cvss: 7.5
+    products: ["openssl >=3.0.0,<3.0.7"]
+    cwe: "CWE-787"
+    fingerprints: ["OpenSSL/3.0", "OpenSSL 3.0"]
+    remediation: "Upgrade OpenSSL 3.0.x to 3.0.7 or later."
+
+  CVE-2023-0286:
+    description: "OpenSSL X.400 address type confusion memory read"
+    severity: high
+    cvss: 7.4
+    products: ["openssl >=3.0.0,<3.0.8", "openssl >=1.1.1,<1.1.1t"]
+    cwe: "CWE-843"
+    fingerprints: ["OpenSSL"]
+    remediation: "Upgrade OpenSSL to 3.0.8+ or supported LTS branch."
+
+  CVE-2024-5535:
+    description: "OpenSSL SSL_select_next_proto buffer overread"
+    severity: high
+    cvss: 7.4
+    products: ["openssl >=3.0.0,<3.3.2"]
+    cwe: "CWE-125"
+    fingerprints: ["OpenSSL"]
+    remediation: "Upgrade OpenSSL to 3.3.2 / 3.2.3 / 3.0.15 or later."
+
+  CVE-2016-6210:
+    description: "OpenSSH user timing enumeration via long passwords"
+    severity: medium
+    cvss: 5.9
+    products: ["openssh <=7.2"]
+    cwe: "CWE-200"
+    fingerprints: ["OpenSSH"]
+    remediation: "Upgrade OpenSSH to 7.3+."
+
+  CVE-2021-41617:
+    description: "OpenSSH AuthorizedKeysCommand supplemental group privilege escalation"
+    severity: high
+    cvss: 7.0
+    products: ["openssh >=6.2,<8.8"]
+    cwe: "CWE-269"
+    fingerprints: ["OpenSSH"]
+    remediation: "Upgrade OpenSSH to 8.8p1 or later."
+
+  CVE-2022-0543:
+    description: "Redis Lua sandbox escape on Debian/Ubuntu builds"
+    severity: critical
+    cvss: 10.0
+    products: ["redis <=6.2.6"]
+    cwe: "CWE-862"
+    fingerprints: ["Redis"]
+    remediation: "Upgrade Redis packages cleanly and restrict AUTH / bind localhost."
+
+  CVE-2023-41056:
+    description: "Redis integer overflow heap corruption on malformed memory size"
+    severity: high
+    cvss: 7.1
+    products: ["redis >=6.0.0,<7.2.4"]
+    cwe: "CWE-190"
+    fingerprints: ["Redis"]
+    remediation: "Upgrade Redis to 7.2.4 / 7.0.15 / 6.2.14 or later."
+
+  CVE-2024-31449:
+    description: "Redis Lua bit library stack buffer overflow RCE"
+    severity: high
+    cvss: 7.0
+    products: ["redis >=2.6.0,<7.4.1"]
+    cwe: "CWE-121"
+    fingerprints: ["Redis"]
+    remediation: "Upgrade Redis to 7.4.1 / 7.2.6 / 6.2.16 or later."
+
+  CVE-2020-25695:
+    description: "PostgreSQL search_path security restricted operation privilege escalation"
+    severity: high
+    cvss: 8.8
+    products: ["postgresql >=9.5,<13.1"]
+    cwe: "CWE-426"
+    fingerprints: ["PostgreSQL"]
+    remediation: "Upgrade PostgreSQL to 13.1 / 12.5 / 11.10 / 10.15 or later."
+
+  CVE-2023-39417:
+    description: "PostgreSQL extension script $@substitutions@$ SQL injection"
+    severity: high
+    cvss: 8.8
+    products: ["postgresql >=11.0,<15.4"]
+    cwe: "CWE-89"
+    fingerprints: ["PostgreSQL"]
+    remediation: "Upgrade PostgreSQL to 15.4 / 14.9 / 13.12 / 12.16 or later."
+
+  CVE-2024-7348:
+    description: "PostgreSQL pg_dump time-of-check time-of-use SQL execution"
+    severity: high
+    cvss: 8.8
+    products: ["postgresql >=12.0,<16.4"]
+    cwe: "CWE-367"
+    fingerprints: ["PostgreSQL"]
+    remediation: "Upgrade PostgreSQL to 16.4 / 15.8 / 14.13 / 13.16 / 12.20 or later."
+
+  CVE-2020-14812:
+    description: "MySQL Server locking denial-of-service / privilege vulnerability"
+    severity: high
+    cvss: 7.5
+    products: ["mysql >=8.0.0,<8.0.22", "mysql >=5.7.0,<5.7.32"]
+    cwe: "CWE-400"
+    fingerprints: ["MySQL"]
+    remediation: "Apply Oracle Critical Patch Update upgrading MySQL 8.0.22+ / 5.7.32+."
+
+  CVE-2023-22084:
+    description: "MySQL Server InnoDB availability / privilege issue"
+    severity: medium
+    cvss: 4.9
+    products: ["mysql >=8.0.0,<8.0.35"]
+    cwe: "CWE-284"
+    fingerprints: ["MySQL"]
+    remediation: "Upgrade MySQL Server to 8.0.35 / 8.2.0 or later."
+
+  CVE-2021-27928:
+    description: "MariaDB / MySQL wsrep_provider OS command execution"
+    severity: high
+    cvss: 7.2
+    products: ["mariadb >=10.2.0,<10.5.9"]
+    cwe: "CWE-78"
+    fingerprints: ["MariaDB"]
+    remediation: "Upgrade MariaDB to 10.5.9 / 10.4.18 / 10.3.28 or later."
+
+  CVE-2020-7921:
+    description: "MongoDB improper serialization permitting auth/authorization bypass"
+    severity: medium
+    cvss: 6.5
+    products: ["mongodb >=3.6.0,<4.2.6"]
+    cwe: "CWE-287"
+    fingerprints: ["MongoDB"]
+    remediation: "Upgrade MongoDB to 4.2.6+ / 4.0.18+ and enable SCRAM-SHA-256."
+
+  CVE-2023-1409:
+    description: "MongoDB Server missing TLS certificate hostname validation"
+    severity: medium
+    cvss: 5.9
+    products: ["mongodb >=5.0.0,<6.0.7"]
+    cwe: "CWE-295"
+    fingerprints: ["MongoDB"]
+    remediation: "Upgrade MongoDB to 6.0.7+ / 5.0.18+."
+
+  CVE-2015-1427:
+    description: "Elasticsearch Groovy scripting engine remote code execution"
+    severity: critical
+    cvss: 10.0
+    products: ["elasticsearch <1.4.3"]
+    cwe: "CWE-94"
+    fingerprints: ["Elasticsearch"]
+    remediation: "Upgrade Elasticsearch and disable dynamic scripting."
+
+  CVE-2020-7014:
+    description: "Elasticsearch arbitrary file read via snapshot repository path"
+    severity: medium
+    cvss: 6.5
+    products: ["elasticsearch >=6.8.0,<7.6.2"]
+    cwe: "CWE-22"
+    fingerprints: ["Elasticsearch"]
+    remediation: "Upgrade Elasticsearch to 7.6.2+ / 6.8.8+."
+
+  CVE-2019-5736:
+    description: "Docker / runc container breakout via overwritten host runc binary"
+    severity: critical
+    cvss: 8.6
+    products: ["docker <=18.09.1"]
+    cwe: "CWE-78"
+    fingerprints: ["Docker"]
+    remediation: "Upgrade Docker Engine & runc >= 18.09.2."
+
+  CVE-2024-21626:
+    description: "runc / Docker container breakout via leaked internal file descriptor"
+    severity: critical
+    cvss: 8.6
+    products: ["docker <25.0.2"]
+    cwe: "CWE-668"
+    fingerprints: ["Docker"]
+    remediation: "Upgrade runc to 1.1.12+ and Docker Engine to 25.0.2+."
+
+  CVE-2021-25741:
+    description: "Kubernetes kubelet symlink exchange arbitrary host file access"
+    severity: high
+    cvss: 8.8
+    products: ["kubernetes >=1.18.0,<1.22.2"]
+    cwe: "CWE-59"
+    fingerprints: ["Kubernetes", "kubelet"]
+    remediation: "Upgrade Kubernetes nodes/kubelet to 1.22.2 / 1.21.5 / 1.20.11+."
+
+  CVE-2023-2727:
+    description: "Kubernetes API server ImagePolicyWebhook bypass"
+    severity: medium
+    cvss: 6.5
+    products: ["kubernetes >=1.20.0,<1.27.3"]
+    cwe: "CWE-863"
+    fingerprints: ["Kubernetes"]
+    remediation: "Upgrade Kubernetes control plane to 1.27.3 / 1.26.6 / 1.25.11+."
+
+  CVE-2023-41990:
+    description: "Grafana rendering / SQL expression arbitrary SQLite access"
+    severity: high
+    cvss: 7.5
+    products: ["grafana >=8.0.0,<10.2.0"]
+    cwe: "CWE-89"
+    fingerprints: ["Grafana"]
+    remediation: "Upgrade Grafana to 10.2.0+."
+
+  CVE-2024-9264:
+    description: "Grafana SQL Expressions DuckDB command injection & LFI"
+    severity: critical
+    cvss: 9.9
+    products: ["grafana >=11.0.0,<11.2.2"]
+    cwe: "CWE-78"
+    fingerprints: ["Grafana"]
+    remediation: "Upgrade Grafana to 11.2.2 / 11.1.7 / 11.0.6+ or uninstall duckdb CLI."
+
+  CVE-2023-2825:
+    description: "GitLab CE/EE unauthenticated arbitrary file read in nested public projects"
+    severity: critical
+    cvss: 10.0
+    products: ["gitlab 16.0.0-16.0.0"]
+    cwe: "CWE-22"
+    fingerprints: ["GitLab"]
+    remediation: "Upgrade GitLab immediately to 16.0.1+."
+
+  CVE-2023-7028:
+    description: "GitLab account takeover via multi-email password reset flow"
+    severity: critical
+    cvss: 10.0
+    products: ["gitlab >=16.1.0,<16.7.2"]
+    cwe: "CWE-640"
+    fingerprints: ["GitLab"]
+    remediation: "Upgrade GitLab to 16.7.2 / 16.6.4 / 16.5.6+ and enforce 2FA."
+
+  CVE-2022-22963:
+    description: "Spring Cloud Function routing-expression SpEL RCE"
+    severity: critical
+    cvss: 9.8
+    products: ["spring >=3.0.0,<3.2.3"]
+    cwe: "CWE-917"
+    fingerprints: ["Spring", "SpringBoot"]
+    remediation: "Upgrade Spring Cloud Function to 3.1.7 / 3.2.3 or later."
+
+  CVE-2022-26134:
+    description: "Atlassian Confluence Server OGNL injection unauthenticated RCE"
+    severity: critical
+    cvss: 9.8
+    products: ["confluence >=1.3.0,<7.18.1"]
+    cwe: "CWE-917"
+    fingerprints: ["Confluence"]
+    remediation: "Upgrade Confluence Server/Data Center to 7.18.1+ or 7.13.7 LTS+."
+
+  CVE-2023-22515:
+    description: "Atlassian Confluence Data Center broken access control admin creation"
+    severity: critical
+    cvss: 10.0
+    products: ["confluence >=8.0.0,<8.5.2"]
+    cwe: "CWE-284"
+    fingerprints: ["Confluence"]
+    remediation: "Upgrade Confluence to 8.3.3 / 8.4.3 / 8.5.2+ and isolate /setup/*."
+
+  CVE-2023-46604:
+    description: "Apache ActiveMQ OpenWire unauthenticated deserialization RCE"
+    severity: critical
+    cvss: 10.0
+    products: ["activemq <5.18.3"]
+    cwe: "CWE-502"
+    fingerprints: ["ActiveMQ"]
+    remediation: "Upgrade Apache ActiveMQ to 5.18.3 / 5.17.6 / 5.16.7 / 5.15.16+."
+
+  CVE-2024-4577:
+    description: "PHP-CGI Windows best-fit character encoding argument injection RCE"
+    severity: critical
+    cvss: 9.8
+    products: ["php >=8.0.0,<8.3.8"]
+    cwe: "CWE-78"
+    fingerprints: ["PHP/8"]
+    remediation: "Upgrade PHP to 8.3.8 / 8.2.20 / 8.1.29+ and avoid exposed php-cgi.exe."
+
+  CVE-2019-10149:
+    description: "Exim Mail Server Return of the Wizard remote command execution"
+    severity: critical
+    cvss: 9.8
+    products: ["exim >=4.87,<4.92"]
+    cwe: "CWE-78"
+    fingerprints: ["Exim"]
+    remediation: "Upgrade Exim to 4.92 or later."
+
+  CVE-2023-42115:
+    description: "Exim SMTP AUTH out-of-bounds write pre-auth RCE"
+    severity: critical
+    cvss: 9.8
+    products: ["exim <4.96.1"]
+    cwe: "CWE-787"
+    fingerprints: ["Exim"]
+    remediation: "Upgrade Exim to 4.96.1+ or 4.97+."
+
+  CVE-2011-2523:
+    description: "vsftpd 2.3.4 compromised backdoor listener"
+    severity: critical
+    cvss: 10.0
+    products: ["vsftpd 2.3.4-2.3.4"]
+    cwe: "CWE-94"
+    fingerprints: ["vsftpd 2.3.4"]
+    remediation: "Replace compromised vsftpd 2.3.4 binary with verified clean package."
+
+  CVE-2015-3306:
+    description: "ProFTPD mod_copy unauthenticated arbitrary file copy"
+    severity: critical
+    cvss: 10.0
+    products: ["proftpd <=1.3.5"]
+    cwe: "CWE-284"
+    fingerprints: ["ProFTPD"]
+    remediation: "Disable mod_copy or upgrade ProFTPD to 1.3.5a+."
+
+  CVE-2021-44142:
+    description: "Samba vfs_fruit out-of-bounds heap read/write RCE"
+    severity: critical
+    cvss: 9.9
+    products: ["samba <4.15.5"]
+    cwe: "CWE-787"
+    fingerprints: ["Samba"]
+    remediation: "Upgrade Samba to 4.15.5 / 4.14.12 / 4.13.17+."
+
+  CVE-2023-34968:
+    description: "Samba Spotlight RPC argument injection / path disclosure"
+    severity: high
+    cvss: 7.5
+    products: ["samba <4.18.5"]
+    cwe: "CWE-22"
+    fingerprints: ["Samba"]
+    remediation: "Upgrade Samba to 4.18.5+ and restrict SMB ports to internal subnets."
+
+  CVE-2023-40225:
+    description: "HAProxy empty Content-Length header smuggling"
+    severity: high
+    cvss: 7.5
+    products: ["haproxy <2.8.2"]
+    cwe: "CWE-444"
+    fingerprints: ["HAProxy"]
+    remediation: "Upgrade HAProxy to 2.8.2 / 2.6.15 / 2.4.23+."
+
+  CVE-2023-35945:
+    description: "Envoy HTTP/2 memory leak and stream reset denial-of-service"
+    severity: high
+    cvss: 7.5
+    products: ["envoy <1.27.0"]
+    cwe: "CWE-400"
+    fingerprints: ["Envoy", "envoy"]
+    remediation: "Upgrade Envoy Proxy to 1.27.0 / 1.26.4 / 1.25.9+."
+
+  CVE-2024-2961:
+    description: "glibc iconv ISO-2022-CN-EXT buffer overflow RCE (PHP/web filter target)"
+    severity: high
+    cvss: 8.8
+    products: ["glibc <=2.39"]
+    cwe: "CWE-787"
+    fingerprints: ["glibc"]
+    remediation: "Apply vendor glibc security patch (gconv-modules-extra hardening)."
+
+  CVE-2024-27308:
+    description: "Jetty / Eclipse Jetty HTTP/2 HPACK dynamic table DoS"
+    severity: high
+    cvss: 7.5
+    products: ["jetty >=12.0.0,<12.0.8"]
+    cwe: "CWE-400"
+    fingerprints: ["Jetty"]
+    remediation: "Upgrade Eclipse Jetty cleanly to 12.0.8+."
+
+  CVE-2024-34351:
+    description: "Next.js Server Actions Host header SSRF vulnerability"
+    severity: high
+    cvss: 7.5
+    products: ["nextjs >=13.0.0,<14.1.1"]
+    cwe: "CWE-918"
+    fingerprints: ["Next.js"]
+    remediation: "Upgrade Next.js to 14.1.1+ and validate Image Optimization domains."
+
+  CVE-2024-27983:
+    description: "Node.js HTTP/2 assertion failure crash on incomplete header frames"
+    severity: high
+    cvss: 7.5
+    products: ["nodejs >=18.0.0,<20.12.1"]
+    cwe: "CWE-617"
+    fingerprints: ["Node.js", "Express"]
+    remediation: "Upgrade Node.js LTS to 20.12.1 / 18.20.1 or later."

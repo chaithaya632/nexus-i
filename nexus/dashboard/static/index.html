@@ -54,6 +54,13 @@ tr:hover{background:#141828}
 </div>
 
 <div class="container">
+  <div id="auth-banner" class="card" style="display:none;margin-bottom:14px;border-color:#ffab00">
+    <h3 style="color:#ffab00">Dashboard Authentication Required</h3>
+    <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-top:6px">
+      <input id="dash-token-input" type="password" placeholder="Enter NEXUS Dashboard Token" class="btn" style="min-width:260px;background:#0a0e17;color:#fff">
+      <button id="dash-token-btn" class="btn">Unlock</button>
+    </div>
+  </div>
   <!-- Status Cards -->
   <div class="cards" id="stats-cards"></div>
 
@@ -98,6 +105,29 @@ tr:hover{background:#141828}
 let currentEngId = null;
 let includeSuppressed = true;
 let cachedEngagements = [];
+let cachedFindings = [];
+let searchQuery = '';
+let severityFilter = '';
+
+function getDashToken() {
+  try { return sessionStorage.getItem('nexus_dash_token') || ''; } catch (e) { return ''; }
+}
+
+async function apiFetch(url, opts) {
+  const options = Object.assign({}, opts || {});
+  const hdrs = Object.assign({}, options.headers || {});
+  const tok = getDashToken();
+  if (tok) hdrs['X-Nexus-Token'] = tok;
+  options.headers = hdrs;
+  const resp = await fetch(url, options);
+  const banner = document.getElementById('auth-banner');
+  if (resp.status === 401 && banner) {
+    banner.style.display = 'block';
+  } else if (resp.ok && banner) {
+    banner.style.display = 'none';
+  }
+  return resp;
+}
 
 function esc(v) {
   const d = document.createElement('div');
@@ -125,7 +155,12 @@ function phaseClass(phase) {
 
 async function loadStatus() {
   try {
-    const r = await fetch('/api/status');
+    const r = await apiFetch('/api/status');
+    if (r.status === 401) {
+      document.getElementById('conn-status').innerHTML =
+        '<span class="status-dot err"></span> Locked (token required)';
+      return;
+    }
     const st = await r.json();
     document.getElementById('conn-status').innerHTML =
       '<span class="status-dot ok"></span> Connected | Profile: ' + esc(st.profile || 'full') +
@@ -157,7 +192,8 @@ async function loadStatus() {
 
 async function loadEngagements() {
   try {
-    const r = await fetch('/api/engagements');
+    const r = await apiFetch('/api/engagements');
+    if (!r.ok) return;
     const engs = await r.json();
     cachedEngagements = engs;
     populateDiffSelectors(engs);
@@ -178,7 +214,7 @@ async function loadEngagements() {
         '<td>' + esc(new Date(e.created_at).toLocaleString()) + '</td>' +
         '<td style="display:flex;gap:6px">' +
           '<button class="btn view-eng-btn" data-eng-id="' + safeId + '">View</button>' +
-          '<a class="btn" href="' + sarifHref + '" download="nexus_' + safeId + '.sarif" style="text-decoration:none">SARIF</a>' +
+          '<a class="btn sarif-dl-link" href="' + sarifHref + '" data-sarif-url="' + esc(sarifHref) + '" data-sarif-name="nexus_' + safeId + '.sarif" download="nexus_' + safeId + '.sarif" style="text-decoration:none">SARIF</a>' +
         '</td>' +
         '</tr>';
     });
@@ -187,10 +223,31 @@ async function loadEngagements() {
     document.querySelectorAll('#engagements .view-eng-btn').forEach(btn => {
       btn.addEventListener('click', () => loadFindings(btn.dataset.engId));
     });
+    bindSarifDownloads('#engagements');
   } catch (e) {
     document.getElementById('engagements').innerHTML =
       '<div class="empty">Failed to load engagements.</div>';
   }
+}
+
+function bindSarifDownloads(rootSelector) {
+  document.querySelectorAll(rootSelector + ' .sarif-dl-link').forEach(a => {
+    a.addEventListener('click', async (ev) => {
+      if (!getDashToken()) return;
+      ev.preventDefault();
+      const resp = await apiFetch(a.dataset.sarifUrl);
+      if (!resp.ok) return;
+      const blob = await resp.blob();
+      const objUrl = URL.createObjectURL(blob);
+      const tmp = document.createElement('a');
+      tmp.href = objUrl;
+      tmp.download = a.dataset.sarifName || 'nexus.sarif';
+      document.body.appendChild(tmp);
+      tmp.click();
+      tmp.remove();
+      setTimeout(() => URL.revokeObjectURL(objUrl), 1000);
+    });
+  });
 }
 
 function populateDiffSelectors(engs) {
@@ -219,7 +276,7 @@ async function runDiff() {
     return;
   }
   try {
-    const r = await fetch('/api/diff?old=' + encodeURIComponent(oldId) + '&new=' + encodeURIComponent(newId));
+    const r = await apiFetch('/api/diff?old=' + encodeURIComponent(oldId) + '&new=' + encodeURIComponent(newId));
     const d = await r.json();
     if (!r.ok) {
       out.innerHTML = '<div class="empty">' + esc(d.error || 'Diff failed') + '</div>';
@@ -257,6 +314,58 @@ async function toggleSuppressed(checked) {
   if (currentEngId) await loadFindings(currentEngId);
 }
 
+function renderFindingsTable() {
+  const wrap = document.getElementById('findings-table-wrap');
+  if (!wrap) return;
+  const q = searchQuery.trim().toLowerCase();
+  const sevF = severityFilter.trim().toLowerCase();
+  const filtered = cachedFindings.filter(f => {
+    const sev = (typeof f.severity === 'object' ? f.severity.value || f.severity : f.severity || 'info').toLowerCase();
+    if (sevF && sev !== sevF) return false;
+    if (!q) return true;
+    const hay = [f.title, f.host, f.tool_source, f.cwe_id, ...(f.cve_ids || [])].join(' ').toLowerCase();
+    return hay.includes(q);
+  });
+
+  if (!filtered.length) {
+    wrap.innerHTML = '<div class="empty">No matching findings.</div>';
+    return;
+  }
+
+  let html = '<table><tr><th>Severity</th><th>Title</th><th>Host</th><th>Port</th><th>Tool</th><th>CVEs</th><th>Status</th><th>Details</th></tr>';
+  filtered.forEach((f, idx) => {
+    const sev = typeof f.severity === 'object' ? f.severity.value || f.severity : f.severity || 'info';
+    const statusCell = f.false_positive
+      ? '<span class="badge" style="background:#333;color:#ccc">suppressed</span>'
+      : (f.confirmed ? '<span class="badge" style="background:#00e676;color:#000">verified</span>' : '<span style="color:#888">detected</span>');
+    html += '<tr>' +
+      '<td>' + sevBadge(sev) + '</td>' +
+      '<td>' + esc(f.title || '') + '</td>' +
+      '<td>' + esc(f.host || '') + '</td>' +
+      '<td>' + esc(f.port || '') + '</td>' +
+      '<td>' + esc(f.tool_source || '') + '</td>' +
+      '<td>' + esc((f.cve_ids || []).join(', ') || '-') + '</td>' +
+      '<td>' + statusCell + '</td>' +
+      '<td><button class="btn finding-detail-btn" data-fidx="' + idx + '">Inspect</button></td>' +
+      '</tr>' +
+      '<tr id="finding-detail-' + idx + '" style="display:none;background:#0d1120"><td colspan="8">' +
+        '<div style="padding:8px 4px;font-size:13px;line-height:1.5">' +
+          '<div><strong style="color:#00d4ff">Description:</strong> ' + esc(f.description || '-') + '</div>' +
+          '<div><strong style="color:#00e676">Remediation:</strong> ' + esc(f.remediation || 'See CWE/vendor guidance.') + '</div>' +
+          (f.evidence ? '<div style="margin-top:4px"><strong style="color:#ffab00">Evidence:</strong><pre style="white-space:pre-wrap;color:#ccc;margin-top:2px">' + esc(f.evidence) + '</pre></div>' : '') +
+        '</div>' +
+      '</td></tr>';
+  });
+  html += '</table>';
+  wrap.innerHTML = html;
+  wrap.querySelectorAll('.finding-detail-btn').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const row = document.getElementById('finding-detail-' + btn.dataset.fidx);
+      if (row) row.style.display = row.style.display === 'none' ? 'table-row' : 'none';
+    });
+  });
+}
+
 async function loadFindings(engId) {
   currentEngId = engId;
   // Switch to findings tab
@@ -267,18 +376,23 @@ async function loadFindings(engId) {
 
   try {
     const [fr, sr] = await Promise.all([
-      fetch('/api/engagements/' + encodeURIComponent(engId) + '/findings?include_suppressed=' + String(includeSuppressed)),
-      fetch('/api/engagements/' + encodeURIComponent(engId)),
+      apiFetch('/api/engagements/' + encodeURIComponent(engId) + '/findings?include_suppressed=' + String(includeSuppressed)),
+      apiFetch('/api/engagements/' + encodeURIComponent(engId)),
     ]);
     const findings = await fr.json();
     const summary = await sr.json();
+    cachedFindings = Array.isArray(findings) ? findings : [];
 
     const sarifHref = '/api/engagements/' + encodeURIComponent(engId) + '/sarif';
     let html = '<div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:10px">' +
       '<h3>Engagement: ' + esc(summary.name || engId) + ' → ' + esc(summary.target || '') + '</h3>' +
-      '<div style="display:flex;gap:10px;align-items:center">' +
-        '<label style="font-size:13px"><input type="checkbox" ' + (includeSuppressed ? 'checked ' : '') + 'onchange="toggleSuppressed(this.checked)"> Show suppressed</label>' +
-        '<a class="btn" href="' + sarifHref + '" download="nexus_' + esc(engId) + '.sarif" style="text-decoration:none">Download SARIF</a>' +
+      '<div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap">' +
+        '<input id="findings-search" type="search" value="' + esc(searchQuery) + '" placeholder="Search title, host, CVE..." class="btn" style="background:#0a0e17;color:#fff;min-width:200px">' +
+        '<select id="findings-sev" class="btn"><option value="">All Severities</option>' +
+          ['critical', 'high', 'medium', 'low', 'info'].map(s => '<option value="' + s + '"' + (severityFilter === s ? ' selected' : '') + '>' + s.toUpperCase() + '</option>').join('') +
+        '</select>' +
+        '<label style="font-size:13px"><input id="show-suppressed-chk" type="checkbox" ' + (includeSuppressed ? 'checked ' : '') + '> Show suppressed</label>' +
+        '<a class="btn sarif-dl-link" href="' + sarifHref + '" data-sarif-url="' + esc(sarifHref) + '" data-sarif-name="nexus_' + esc(engId) + '.sarif" download="nexus_' + esc(engId) + '.sarif" style="text-decoration:none">Download SARIF</a>' +
       '</div></div>';
 
     // Severity chart
@@ -287,7 +401,7 @@ async function loadFindings(engId) {
     html += '<div class="severity-chart">';
     ['critical', 'high', 'medium', 'low', 'info'].forEach(s => {
       const pct = ((sc[s] || 0) / total * 100).toFixed(1);
-      if (pct > 0) html += '<div class="sev-' + s + '" style="width:' + pct + '%" title="' + s + ': ' + (sc[s]||0) + '"></div>';
+      if (pct > 0) html += '<div class="sev-' + s + '" style="width:' + pct + '%" title="' + s + ': ' + esc(sc[s] || 0) + '"></div>';
     });
     html += '</div>';
 
@@ -296,34 +410,44 @@ async function loadFindings(engId) {
     ['critical', 'high', 'medium', 'low', 'info'].forEach(s => {
       html += '<div class="risk-cell sev-' + s + '">' + esc(sc[s] || 0) + '<br><small>' + s + '</small></div>';
     });
-    html += '</div>';
+    html += '</div><div id="findings-table-wrap"></div>';
 
-    if (!findings.length) {
-      html += '<div class="empty">No findings for this engagement.</div>';
-    } else {
-      html += '<table><tr><th>Severity</th><th>Title</th><th>Host</th><th>Port</th><th>Tool</th><th>CVEs</th><th>Status</th></tr>';
-      findings.forEach(f => {
-        const sev = typeof f.severity === 'object' ? f.severity.value || f.severity : f.severity || 'info';
-        const statusCell = f.false_positive
-          ? '<span class="badge" style="background:#333;color:#ccc">suppressed</span>'
-          : (f.confirmed ? '<span class="badge" style="background:#00e676;color:#000">verified</span>' : '<span style="color:#888">detected</span>');
-        html += '<tr>' +
-          '<td>' + sevBadge(sev) + '</td>' +
-          '<td>' + esc(f.title || '') + '</td>' +
-          '<td>' + esc(f.host || '') + '</td>' +
-          '<td>' + esc(f.port || '') + '</td>' +
-          '<td>' + esc(f.tool_source || '') + '</td>' +
-          '<td>' + esc((f.cve_ids || []).join(', ') || '-') + '</td>' +
-          '<td>' + statusCell + '</td>' +
-          '</tr>';
-      });
-      html += '</table>';
-    }
     document.getElementById('findings-view').innerHTML = html;
+    document.getElementById('show-suppressed-chk').addEventListener('change', (e) => toggleSuppressed(e.target.checked));
+    document.getElementById('findings-search').addEventListener('input', (e) => { searchQuery = e.target.value; renderFindingsTable(); });
+    document.getElementById('findings-sev').addEventListener('change', (e) => { severityFilter = e.target.value; renderFindingsTable(); });
+    bindSarifDownloads('#findings-view');
+    renderFindingsTable();
   } catch (e) {
     document.getElementById('findings-view').innerHTML =
       '<div class="empty">Failed to load findings.</div>';
   }
+}
+
+let activeWs = null;
+function connectWs() {
+  try {
+    if (activeWs) { try { activeWs.close(); } catch (x) {} }
+    const tok = getDashToken();
+    const wsProto = location.protocol === 'https:' ? 'wss:' : 'ws:';
+    const wsUrl = wsProto + '//' + location.host + '/ws' + (tok ? '?token=' + encodeURIComponent(tok) : '');
+    activeWs = new WebSocket(wsUrl);
+    activeWs.onmessage = function(e) {
+      try { const m = JSON.parse(e.data); if (m.event) { loadStatus(); loadEngagements(); } } catch(x) {}
+    };
+    activeWs.onclose = function(ev) { if (ev.code !== 1008) setTimeout(() => location.reload(), 10000); };
+  } catch(e) {}
+}
+
+const unlockBtn = document.getElementById('dash-token-btn');
+if (unlockBtn) {
+  unlockBtn.addEventListener('click', () => {
+    const val = document.getElementById('dash-token-input').value.trim();
+    try { sessionStorage.setItem('nexus_dash_token', val); } catch (e) {}
+    loadStatus();
+    loadEngagements();
+    connectWs();
+  });
 }
 
 function card(label, value, color) {
@@ -336,15 +460,7 @@ loadStatus();
 loadEngagements();
 setInterval(loadStatus, 15000);
 setInterval(loadEngagements, 15000);
-
-// WebSocket
-try {
-  const ws = new WebSocket((location.protocol === 'https:' ? 'wss:' : 'ws:') + '//' + location.host + '/ws');
-  ws.onmessage = function(e) {
-    try { const m = JSON.parse(e.data); if (m.event) { loadStatus(); loadEngagements(); } } catch(x) {}
-  };
-  ws.onclose = function() { setTimeout(() => location.reload(), 10000); };
-} catch(e) {}
+connectWs();
 </script>
 </body>
 </html>

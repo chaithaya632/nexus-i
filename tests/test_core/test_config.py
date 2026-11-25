@@ -84,6 +84,7 @@ class TestNexusConfig:
             output_dir=tmp_path / "output",
             auth_headers={"Authorization": "Bearer sensitive_token"},
             wpscan_api_token="wp_secret_token_val",
+            dashboard_token="dash_secret_tok_val",
             api_keys={"wpscan": "wp_map_secret"},
             openapi_spec=tmp_path / "spec.yaml",
         )
@@ -92,8 +93,11 @@ class TestNexusConfig:
         loaded_dict = yaml.safe_load(raw)
         assert "sensitive_token" not in raw
         assert "wp_secret_token_val" not in raw
+        assert "dash_secret_tok_val" not in raw
         assert "wp_map_secret" not in raw
+        assert "dash_secret_tok_val" not in repr(cfg)
         assert "auth_headers" not in loaded_dict
         assert "wpscan_api_token" not in loaded_dict
+        assert "dashboard_token" not in loaded_dict
         assert "api_keys" not in loaded_dict
         assert "openapi_spec" in loaded_dict
