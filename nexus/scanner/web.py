@@ -8,7 +8,13 @@ from pathlib import Path
 from typing import Any
 
 from nexus.db.models import Finding, Severity
-from nexus.recon.runner import ToolRunner
+from nexus.recon.runner import (
+    ToolRunner,
+    validate_cli_target,
+    validate_extra_args,
+    validate_headers,
+)
+from nexus.scanner._http import parse_url_target
 
 log = logging.getLogger("nexus.scanner.web")
 
@@ -39,12 +45,18 @@ def _resolve_wordlist(wordlist: str, wordlist_name: str) -> str:
             return candidate
     return preferred
 
-# Stealth-aware thread counts
+# Stealth-aware thread counts, rate limits (req/s), and pause delays (seconds)
 _STEALTH_THREADS: dict[str, int] = {
     "loud": 80,
     "normal": 40,
     "quiet": 15,
     "ghost": 5,
+}
+_STEALTH_RATE_PAUSE: dict[str, tuple[int, str]] = {
+    "loud": (200, ""),
+    "normal": (50, "0.05"),
+    "quiet": (10, "0.25"),
+    "ghost": (2, "1.0"),
 }
 
 
@@ -65,32 +77,45 @@ async def ffuf_scan(
     The URL must contain 'FUZZ' where the wordlist value is injected.
     If not present, '/FUZZ' is appended automatically.
     """
-    if "FUZZ" not in target_url:
-        target_url = target_url.rstrip("/") + "/FUZZ"
+    clean_url = validate_cli_target(target_url, label="target_url")
+    if "FUZZ" not in clean_url:
+        clean_url = clean_url.rstrip("/") + "/FUZZ"
 
+    if wordlist:
+        wordlist = validate_cli_target(wordlist, label="wordlist", allow_spaces=True)
     wl = _resolve_wordlist(wordlist, wordlist_name)
+    clean_match_codes = validate_cli_target(match_codes, label="match_codes")
+    clean_headers = validate_headers(headers)
+    safe_extra = validate_extra_args(extra_args)
+
     threads = _STEALTH_THREADS.get(stealth, 40)
+    rate_limit, pause_delay = _STEALTH_RATE_PAUSE.get(stealth, (50, "0.05"))
     json_path = ToolRunner.make_temp_path(".json")
 
     args = [
-        "-u", target_url,
+        "-u", clean_url,
         "-w", wl,
         "-t", str(threads),
-        "-mc", match_codes,
+        "-rate", str(rate_limit),
+        "-ac",  # soft-404 auto-calibration
+        "-mc", clean_match_codes,
         "-o", json_path,
         "-of", "json",
         "-s",  # silent mode
     ]
+    if pause_delay:
+        args.extend(["-p", pause_delay])
 
     if extensions:
-        args.extend(["-e", ",".join(extensions)])
+        clean_exts = [validate_cli_target(e, label="extension") for e in extensions]
+        args.extend(["-e", ",".join(clean_exts)])
 
-    if headers:
-        for k, v in headers.items():
+    if clean_headers:
+        for k, v in clean_headers.items():
             args.extend(["-H", f"{k}: {v}"])
 
-    if extra_args:
-        args.extend(extra_args)
+    if safe_extra:
+        args.extend(safe_extra)
 
     try:
         out = await ToolRunner.run("ffuf", args, timeout=timeout)
@@ -113,11 +138,7 @@ async def ffuf_scan(
         log.warning("ffuf did not return valid JSON")
         return findings
 
-    base_host_port = target_url.split("//")[-1].split("/")[0] if "//" in target_url else target_url.split("/")[0]
-    base_host = base_host_port.split(":")[0]
-    base_port: int | None = None
-    if ":" in base_host_port and base_host_port.split(":")[1].isdigit():
-        base_port = int(base_host_port.split(":")[1])
+    base_host, base_port, base_proto = parse_url_target(clean_url)
 
     for r in results:
         url = r.get("url", "")

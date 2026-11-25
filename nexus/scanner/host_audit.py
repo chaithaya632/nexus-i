@@ -68,9 +68,13 @@ def normalize_pkg_version(raw: str) -> str:
     s = _EPOCH_RE.sub("", (raw or "").strip())
     # Split off Debian/RPM revision suffix ('2.4.68-2', '3.0.2-0ubuntu1', '1.1.1t-0+deb11u2')
     base = re.split(r"[-+~]", s, maxsplit=1)[0]
-    # Strip trailing distro build tags like 'p2' in OpenSSH '10.6p2'
-    base = re.sub(r"[a-zA-Z]+\d*$", "", base)
+    # Strip trailing distro/portable build tags like 'p2' in OpenSSH '10.6p2',
+    # while preserving OpenSSL patch letters such as '1.1.1t' or '1.0.2zf'.
+    base = re.sub(r"(?<=\d)(?:p\d+|(?:ubuntu|deb|el|fc|dfsg|ds)\d*)$", "", base, flags=re.IGNORECASE)
     return base.strip()
+
+
+_normalize_pkg_version = normalize_pkg_version
 
 
 def _resolve_pkg_service(pkg_name: str) -> tuple[str, str] | None:
@@ -107,7 +111,7 @@ def correlate_installed_packages(
 ) -> list[Finding]:
     """Correlate installed OS packages against KnowledgeGraph version-bounded CVEs."""
     findings: list[Finding] = []
-    seen_cves: set[str] = set()
+    seen_pkg_cves: set[tuple[str, str]] = set()
 
     for pkg_name, raw_ver in packages:
         mapped = _resolve_pkg_service(pkg_name)
@@ -120,9 +124,10 @@ def correlate_installed_packages(
             continue
         banner = f"{banner_prod}/{clean_ver}"
         for svc_name, entry in knowledge.match_banner_vulns(svc_hint, banner):
-            if entry.cve in seen_cves:
+            dedup_key = (pkg_name, entry.cve)
+            if dedup_key in seen_pkg_cves:
                 continue
-            seen_cves.add(entry.cve)
+            seen_pkg_cves.add(dedup_key)
             findings.append(Finding(
                 host=host,
                 port=None,

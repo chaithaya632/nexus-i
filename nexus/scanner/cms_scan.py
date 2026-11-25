@@ -10,7 +10,7 @@ from pathlib import Path
 from typing import Any
 
 from nexus.db.models import Finding, Severity
-from nexus.recon.runner import ToolRunner
+from nexus.recon.runner import ToolRunner, validate_cli_target, validate_headers
 from nexus.scanner._http import parse_url_target
 
 log = logging.getLogger("nexus.scanner.cms_scan")
@@ -148,21 +148,25 @@ async def wpscan_audit(
     timeout: int = 180,
 ) -> list[Finding]:
     """Run read-only WPScan enumeration against a detected WordPress URL."""
+    clean_url = validate_cli_target(target_url, label="target_url")
+    clean_headers = validate_headers(headers)
+
     if not ToolRunner.is_available("wpscan"):
         return []
 
-    token = (
+    raw_token = (
         api_token
         or os.environ.get("NEXUS_WPSCAN_API_TOKEN")
         or os.environ.get("WPSCAN_API_TOKEN")
         or ""
     ).strip()
+    token = validate_cli_target(raw_token, label="api_token") if raw_token else ""
 
     with tempfile.TemporaryDirectory(prefix="nexus_wp_") as td:
         json_path = Path(td) / "wpscan.json"
         enum_scope = "vp,u" if token else "p,u"
         args = [
-            "--url", target_url,
+            "--url", clean_url,
             "--format", "json",
             "-o", str(json_path),
             "--enumerate", enum_scope,
@@ -180,8 +184,8 @@ async def wpscan_audit(
         else:
             args.extend(["--detection-mode", "passive"])
 
-        if headers:
-            cookie = headers.get("Cookie") or headers.get("cookie")
+        if clean_headers:
+            cookie = clean_headers.get("Cookie") or clean_headers.get("cookie")
             if cookie:
                 args.extend(["--cookie-string", cookie])
 

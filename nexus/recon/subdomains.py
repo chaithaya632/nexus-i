@@ -9,13 +9,28 @@ import re
 from typing import Any
 
 from nexus.db.models import Target
-from nexus.recon.runner import ToolRunner
+from nexus.recon.runner import ToolRunner, validate_cli_target
 
 log = logging.getLogger("nexus.recon.subdomains")
 
-# Strict hostname regex — rejects progress bars, ANSI artifacts, arrows, etc.
-_HOST_RE = re.compile(r"^(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,63}$")
+# Strict hostname regex — supports punycode IDN TLDs (xn--...) and rejects progress bars / ANSI artifacts.
+_HOST_RE = re.compile(
+    r"^(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+(?:[a-z]{2,63}|xn--[a-z0-9]{1,59})$"
+)
 _ANSI_RE = re.compile(r"\x1b\[[0-9;]*m")
+
+
+def _to_punycode(host: str) -> str:
+    """Normalize a domain/hostname (including Unicode IDNs) to lowercase ASCII punycode."""
+    val = host.strip().lower().lstrip("*.").rstrip(".")
+    if not val:
+        return ""
+    if not val.isascii():
+        try:
+            val = val.encode("idna").decode("ascii").lower()
+        except UnicodeError:
+            return ""
+    return val
 
 
 def _extract_valid_host(raw_line: str, domain: str) -> str:
@@ -24,9 +39,9 @@ def _extract_valid_host(raw_line: str, domain: str) -> str:
     if not cleaned or "%" in cleaned or "[" in cleaned or "p/s" in cleaned:
         return ""
     # Amass v5 may output: "sub.example.com (FQDN) --> node --> ..."
-    candidate = cleaned.split()[0].lstrip("*.").rstrip(".")
-    domain_l = domain.lower().lstrip("*.").rstrip(".")
-    if not _HOST_RE.match(candidate):
+    candidate = _to_punycode(cleaned.split()[0])
+    domain_l = _to_punycode(domain)
+    if not candidate or not domain_l or not _HOST_RE.match(candidate):
         return ""
     if candidate != domain_l and not candidate.endswith(f".{domain_l}"):
         return ""
@@ -40,10 +55,11 @@ async def subfinder_enum(
     silent: bool = True,
 ) -> list[Target]:
     """Run subfinder and return discovered subdomains as Target models."""
+    clean_domain = validate_cli_target(domain, label="domain")
     # Ensure ToolRunner timeout allows subfinder -max-time (minutes) to flush before SIGKILL
     max_mins = max(1, min((timeout - 15) // 60, 5)) if timeout >= 75 else 1
     effective_timeout = max(timeout, max_mins * 60 + 15) if timeout >= 60 else timeout
-    args = ["-d", domain, "-json", "-max-time", str(max_mins)]
+    args = ["-d", clean_domain, "-json", "-max-time", str(max_mins)]
     if silent:
         args.append("-silent")
 
@@ -83,9 +99,10 @@ async def amass_enum(
 
     Uses passive mode by default to stay stealthy and bounds runtime via -timeout.
     """
+    clean_domain = validate_cli_target(domain, label="domain")
     # Skip amass for local/IP targets — passive OSINT isn't meaningful
     try:
-        ipaddress.ip_address(domain.strip())
+        ipaddress.ip_address(clean_domain)
         return []
     except ValueError:
         pass
@@ -94,7 +111,7 @@ async def amass_enum(
     args = ["enum", "-silent", "-nocolor", "-timeout", str(mins)]
     if passive_only:
         args.append("-passive")
-    args.extend(["-d", domain])
+    args.extend(["-d", clean_domain])
 
     out = await ToolRunner.run("amass", args, timeout=timeout)
     targets: list[Target] = []
@@ -122,7 +139,9 @@ async def enumerate_subdomains(
     Deduplicates by hostname.  Falls back gracefully if a tool is missing.
     Skips public passive subdomain lookup for raw IP addresses / localhost.
     """
-    domain_clean = domain.strip().lower()
+    domain_clean = validate_cli_target(domain, label="domain").lower()
+    if not domain_clean.isascii():
+        domain_clean = _to_punycode(domain_clean) or domain_clean
     is_local_or_ip = domain_clean in ("localhost", "127.0.0.1", "::1")
     if not is_local_or_ip:
         try:

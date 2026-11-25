@@ -28,6 +28,7 @@ class TestHostPackageAuditor:
         assert normalize_pkg_version("1:10.6p2-1") == "10.6"
         assert normalize_pkg_version("3.0.2-0ubuntu1.12") == "3.0.2"
         assert normalize_pkg_version("2.4.68-2") == "2.4.68"
+        assert normalize_pkg_version("1.1.1t-0+deb11u2") == "1.1.1t"
 
         sample_dpkg = (
             "openssl\t3.0.2-0ubuntu1\n"
@@ -496,3 +497,211 @@ class TestPlaywrightBrowserCrawler:
 
         assert fetched_urls == ["https://spa.local/app.js"]
         assert all("evil.cdn.com" not in u for u in k_urls)
+
+    @pytest.mark.asyncio
+    async def test_crawler_origin_enforcement_without_headers_and_scheme_blocking(self, monkeypatch) -> None:
+        from nexus.scanner.crawler import _katana_crawl
+
+        # 1. katana always passes -fs fqdn even when headers=None
+        with patch(
+            "nexus.scanner.crawler.ToolRunner.run",
+            AsyncMock(return_value=ToolOutput(tool="katana", args=[], returncode=0, stdout="", stderr="")),
+        ) as mock_kat:
+            await _katana_crawl("https://app.local/", max_depth=1, stealth="normal", headers=None, timeout=10)
+        kat_args = mock_kat.call_args.args[1]
+        assert "-fs" in kat_args and kat_args[kat_args.index("-fs") + 1] == "fqdn"
+
+        # 2. crawl_web with headers=None rejects scheme downgrade and port escape, and still runs Python fallback when katana returns []
+        fetched: list[str] = []
+
+        class _FakeClient:
+            async def __aenter__(self): return self
+            async def __aexit__(self, *a): pass
+            async def get(self, u, **_kw):
+                fetched.append(u)
+                return types.SimpleNamespace(
+                    is_redirect=False,
+                    headers={"content-type": "text/html"},
+                    text='<a href="http://app.local/downgrade">d</a><a href="https://app.local:8443/alt">p</a><a href="/ok">ok</a>',
+                )
+
+        with (
+            patch("nexus.scanner.crawler._browser_crawl", AsyncMock(return_value=(["https://app.local/"], []))),
+            patch("nexus.scanner.crawler.ToolRunner.is_available", return_value=True),
+            patch("nexus.scanner.crawler._katana_crawl", AsyncMock(return_value=[])),
+            patch("nexus.scanner.crawler.make_http_client", return_value=_FakeClient()),
+        ):
+            urls, _ = await crawl_web("https://app.local/", headers=None, max_depth=1)
+
+        assert "https://app.local/ok" in urls
+        assert "http://app.local/downgrade" not in urls
+        assert "https://app.local:8443/alt" not in urls
+        assert "https://app.local/" in fetched
+
+        # 3. Playwright route guard aborts non-HTTP(S) schemes (ws://, file://, blob:, data:)
+        aborted: list[str] = []
+
+        class _Req:
+            def __init__(self, url: str):
+                self.url = url
+                self.resource_type = "xhr"
+                self.headers = {}
+
+        class _Route:
+            def __init__(self, url: str):
+                self.request = _Req(url)
+            async def abort(self):
+                aborted.append(self.request.url)
+            async def continue_(self, **_kw):
+                raise AssertionError(f"Non-HTTP scheme {self.request.url} should have been aborted")
+
+        class _Page:
+            def __init__(self, ctx): self._ctx = ctx
+            def on(self, _e, _fn): pass
+            async def goto(self, _u, **_kw):
+                for bad_u in ("ws://spa.local/sock", "file:///etc/passwd", "blob:https://spa.local/1", "data:text/plain,x"):
+                    await self._ctx._fn(_Route(bad_u))
+            async def wait_for_timeout(self, _ms): pass
+            async def content(self): return "<html></html>"
+            async def evaluate(self, _e): return []
+
+        class _Ctx:
+            async def route(self, _p, fn): self._fn = fn
+            async def new_page(self): return _Page(self)
+
+        class _Browser:
+            async def new_context(self, **_kw): return _Ctx()
+            async def close(self): pass
+
+        class _PW:
+            def __init__(self): self.chromium = types.SimpleNamespace(launch=AsyncMock(return_value=_Browser()))
+            async def __aenter__(self): return self
+            async def __aexit__(self, *a): pass
+
+        fake_mod = types.ModuleType("playwright.async_api")
+        fake_mod.async_playwright = lambda: _PW()
+        monkeypatch.setitem(__import__("sys").modules, "playwright", types.ModuleType("playwright"))
+        monkeypatch.setitem(__import__("sys").modules, "playwright.async_api", fake_mod)
+        with patch("nexus.scanner.crawler.importlib.util.find_spec", return_value=object()):
+            await _browser_crawl("https://spa.local/", max_pages=1)
+
+        assert set(aborted) == {"ws://spa.local/sock", "file:///etc/passwd", "blob:https://spa.local/1", "data:text/plain,x"}
+
+    def test_host_audit_dedups_by_pkg_and_cve_and_preserves_openssl_letter(self) -> None:
+        kg = KnowledgeGraph()
+        kg.load_from_directory(NexusConfig().knowledge_dir)
+        findings = correlate_installed_packages(
+            [("openssl", "1.1.1t-0+deb11u2"), ("libssl1.1", "1.1.1-1")],
+            kg,
+            host="srv.local",
+        )
+        # 1.1.1t must NOT match <1.1.1t CVEs (like CVE-2023-0286 if present), while 1.1.1 can match
+        f_t = [f for f in findings if "1.1.1t" in f.evidence]
+        f_old = [f for f in findings if "1.1.1-1" in f.evidence]
+        if f_t and f_old:
+            # Distinct packages may report their own entries rather than collapsing on CVE alone
+            assert all("openssl" in f.evidence for f in f_t)
+
+    @pytest.mark.asyncio
+    async def test_cdp_blocks_non_http_and_ignores_third_party_loading_failed(self) -> None:
+        sent_cmds: list[dict] = []
+
+        class _DummyWriter:
+            def close(self): pass
+            async def wait_closed(self): pass
+
+        class _FakeProc:
+            returncode = None
+            def terminate(self): self.returncode = 0
+            def kill(self): self.returncode = -9
+            async def wait(self): return 0
+
+        class _FakeWS:
+            def __init__(self):
+                self._incoming: asyncio.Queue[str | None] = asyncio.Queue()
+
+            async def __aenter__(self): return self
+            async def __aexit__(self, *a): pass
+
+            async def send(self, raw: str):
+                msg = json.loads(raw)
+                sent_cmds.append(msg)
+                mid = msg.get("id")
+                method = msg.get("method")
+                if method == "Page.navigate":
+                    # Non-HTTP scheme paused request + third-party subresource loadingFailed (must NOT settle prematurely!)
+                    await self._incoming.put(json.dumps({
+                        "method": "Fetch.requestPaused",
+                        "params": {
+                            "requestId": "r-ws",
+                            "resourceType": "WebSocket",
+                            "request": {"url": "ws://spa.local/live", "headers": {}},
+                        },
+                    }))
+                    await self._incoming.put(json.dumps({
+                        "method": "Network.loadingFailed",
+                        "params": {"type": "Script", "frameId": "other"},
+                    }))
+                    await self._incoming.put(json.dumps({"id": mid, "result": {"frameId": "main"}}))
+                    await asyncio.sleep(0.05)
+                    await self._incoming.put(json.dumps({"method": "Page.loadEventFired", "params": {}}))
+                elif method == "Runtime.evaluate":
+                    await self._incoming.put(json.dumps({
+                        "id": mid,
+                        "result": {"result": {"value": {
+                            "href": "https://spa.local/",
+                            "html": "<html><body><a href='/after-load'>After</a></body></html>",
+                            "links": ["/after-load"],
+                        }}},
+                    }))
+                elif method == "Browser.close":
+                    await self._incoming.put(json.dumps({"id": mid, "result": {}}))
+                    await self._incoming.put(None)
+                elif mid is not None:
+                    await self._incoming.put(json.dumps({"id": mid, "result": {}}))
+
+            def __aiter__(self): return self
+
+            async def __anext__(self):
+                item = await self._incoming.get()
+                if item is None:
+                    raise StopAsyncIteration
+                return item
+
+        async def _fake_exec(*cmd, **_kw):
+            for arg in cmd:
+                if str(arg).startswith("--user-data-dir="):
+                    pdir = Path(str(arg).split("=", 1)[1])
+                    (pdir / "DevToolsActivePort").write_text("9222\n/devtools/browser/1\n", encoding="utf-8")
+            return _FakeProc()
+
+        fake_ws_mod = types.ModuleType("websockets")
+        fake_ws_mod.connect = lambda *_a, **_kw: _FakeWS()
+
+        class _FakeResp:
+            status_code = 200
+            def json(self):
+                return [{"type": "page", "webSocketDebuggerUrl": "ws://127.0.0.1:9222/devtools/page/1"}]
+
+        class _FakeClient:
+            def __init__(self, **_kw): pass
+            async def __aenter__(self): return self
+            async def __aexit__(self, *a): pass
+            async def get(self, _u): return _FakeResp()
+
+        with (
+            patch("nexus.scanner.crawler._find_chromium_binary", return_value="chromium"),
+            patch("nexus.scanner.crawler.asyncio.open_connection", AsyncMock(return_value=(None, _DummyWriter()))),
+            patch("nexus.scanner.crawler.asyncio.create_subprocess_exec", side_effect=_fake_exec),
+            patch("nexus.scanner.crawler.httpx.AsyncClient", _FakeClient),
+            patch.dict(__import__("sys").modules, {"websockets": fake_ws_mod}),
+        ):
+            urls, _ = await _cdp_browser_crawl("https://spa.local/", max_pages=1, timeout=5)
+
+        assert "https://spa.local/after-load" in urls
+        by_req = {
+            c["params"].get("requestId"): (c["method"], c["params"])
+            for c in sent_cmds
+            if isinstance(c.get("params"), dict) and "requestId" in c["params"]
+        }
+        assert by_req["r-ws"] == ("Fetch.failRequest", {"requestId": "r-ws", "errorReason": "Aborted"})

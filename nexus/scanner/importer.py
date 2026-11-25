@@ -16,8 +16,11 @@ from pathlib import Path
 from typing import Any
 
 from nexus.db.models import Finding, Severity
+from nexus.recon.runner import safe_parse_xml
 
 log = logging.getLogger("nexus.scanner.importer")
+
+MAX_IMPORT_BYTES = 50 * 1024 * 1024  # 50 MiB guard against oversized import files
 
 _SEV_MAP: dict[str, Severity] = {
     "critical": Severity.CRITICAL, "4": Severity.CRITICAL,
@@ -29,11 +32,17 @@ _SEV_MAP: dict[str, Severity] = {
 }
 
 
-def import_file(path: str | Path) -> list[Finding]:
+def import_file(path: str | Path, *, max_bytes: int = MAX_IMPORT_BYTES) -> list[Finding]:
     """Auto-detect format and import findings from a file."""
     p = Path(path)
     if not p.is_file():
         raise FileNotFoundError(f"Import file not found: {p}")
+
+    file_size = p.stat().st_size
+    if file_size > max_bytes:
+        raise ValueError(
+            f"Import file size ({file_size} bytes) exceeds limit ({max_bytes} bytes): {p}"
+        )
 
     content = p.read_text(encoding="utf-8", errors="replace")
     suffix = p.suffix.lower()
@@ -60,8 +69,11 @@ def import_file(path: str | Path) -> list[Finding]:
 def import_nessus(xml_content: str) -> list[Finding]:
     """Parse Nessus .nessus XML into Findings."""
     findings: list[Finding] = []
+    if len(xml_content) > MAX_IMPORT_BYTES:
+        log.error("Nessus XML content exceeds %d byte limit", MAX_IMPORT_BYTES)
+        return findings
     try:
-        root = ET.fromstring(xml_content)
+        root = safe_parse_xml(xml_content)
     except ET.ParseError as e:
         log.error("Failed to parse Nessus XML: %s", e)
         return findings
@@ -107,8 +119,11 @@ def import_nessus(xml_content: str) -> list[Finding]:
 def import_burp_xml(xml_content: str) -> list[Finding]:
     """Parse Burp Suite XML export into Findings."""
     findings: list[Finding] = []
+    if len(xml_content) > MAX_IMPORT_BYTES:
+        log.error("Burp XML content exceeds %d byte limit", MAX_IMPORT_BYTES)
+        return findings
     try:
-        root = ET.fromstring(xml_content)
+        root = safe_parse_xml(xml_content)
     except ET.ParseError as e:
         log.error("Failed to parse Burp XML: %s", e)
         return findings

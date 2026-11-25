@@ -7,11 +7,40 @@ import logging
 import shutil
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlparse
 
 from nexus.db.models import Target
-from nexus.recon.runner import ToolRunner
+from nexus.recon.runner import ToolRunner, validate_cli_target, validate_extra_args
 
 log = logging.getLogger("nexus.recon.tech")
+
+
+def _endpoint_key(url_or_host: str, *, default_scheme: str = "http") -> tuple[str, str, int]:
+    """Return a non-colliding (host, scheme, port) key for HTTP/HTTPS endpoints."""
+    raw = (url_or_host or "").strip()
+    if "://" in raw:
+        p = urlparse(raw)
+        scheme = (p.scheme or default_scheme).lower()
+        host = (p.hostname or "").lower()
+        port = p.port or (443 if scheme == "https" else 80)
+        return host, scheme, port
+    p = urlparse(f"{default_scheme}://{raw}")
+    host = (p.hostname or "").lower()
+    port = p.port or (443 if default_scheme == "https" else 80)
+    return host, default_scheme, port
+
+
+def _record_endpoint_key(rec: dict[str, Any]) -> tuple[str, str, int]:
+    """Extract (host, scheme, port) from an httpx JSON record."""
+    url = str(rec.get("url") or "").strip()
+    if url:
+        return _endpoint_key(url)
+    scheme = str(rec.get("scheme") or "http").lower().strip()
+    raw_host = str(rec.get("host") or rec.get("input") or "").strip().lower()
+    raw_port = rec.get("port")
+    if isinstance(raw_port, int) or (isinstance(raw_port, str) and raw_port.isdigit()):
+        return raw_host, scheme, int(raw_port)
+    return _endpoint_key(raw_host, default_scheme=scheme)
 
 
 def _resolve_httpx_bin() -> str | None:
@@ -50,12 +79,15 @@ async def httpx_probe(
     if not targets:
         return []
 
+    clean_targets = [validate_cli_target(t, label="target") for t in targets]
+    safe_extra = validate_extra_args(extra_args)
+
     httpx_bin = _resolve_httpx_bin()
     if not httpx_bin:
         log.warning("ProjectDiscovery httpx/httpx-toolkit not found — skipping HTTP probe")
         return []
 
-    stdin_data = "\n".join(targets)
+    stdin_data = "\n".join(clean_targets)
     args = [
         "-json",
         "-silent",
@@ -67,8 +99,8 @@ async def httpx_probe(
         "-follow-redirects",
         "-threads", str(threads),
     ]
-    if extra_args:
-        args.extend(extra_args)
+    if safe_extra:
+        args.extend(safe_extra)
 
     out = await ToolRunner.run(
         httpx_bin, args, timeout=timeout, stdin_data=stdin_data
@@ -96,11 +128,12 @@ async def whatweb_scan(
 
     aggression levels: 1=stealthy, 3=aggressive, 4=heavy.
     """
+    clean_target = validate_cli_target(target, label="target")
     args = [
         "--log-json=-",  # JSON to stdout
-        f"--aggression={aggression}",
+        f"--aggression={int(aggression)}",
         "--color=never",
-        target,
+        clean_target,
     ]
 
     out = await ToolRunner.run("whatweb", args, timeout=timeout)
@@ -140,26 +173,43 @@ async def detect_tech_stack(
     if not hosts:
         return targets
 
-    # httpx probe (fast, batch)
-    httpx_results: dict[str, dict[str, Any]] = {}
+    # httpx probe (fast, batch) — keyed by (host, scheme, port) to prevent http/https collisions
+    httpx_results: dict[tuple[str, str, int], dict[str, Any]] = {}
+    by_host: dict[str, list[dict[str, Any]]] = {}
     if _resolve_httpx_bin():
         records = await httpx_probe(hosts, timeout=timeout)
         for rec in records:
-            # Match by input first, fallback to resolved host
-            key = (rec.get("input") or rec.get("host") or "").lower().strip()
-            if key:
-                httpx_results[key] = rec
-            host_only = rec.get("host", "").lower().strip()
-            if host_only and host_only not in httpx_results:
-                httpx_results[host_only] = rec
+            ep_key = _record_endpoint_key(rec)
+            if ep_key[0]:
+                httpx_results[ep_key] = rec
+                by_host.setdefault(ep_key[0], []).append(rec)
+            if rec.get("input"):
+                in_key = _endpoint_key(str(rec["input"]))
+                if in_key[0]:
+                    httpx_results.setdefault(in_key, rec)
+                    if ep_key[0] and in_key[0] != ep_key[0]:
+                        by_host.setdefault(in_key[0], []).append(rec)
     else:
         log.warning("httpx / httpx-toolkit not found — skipping HTTP probe")
 
-    # Enrich targets
+    # Enrich targets and track best live URL (supporting HTTPS & non-standard ports) for whatweb
+    live_urls: dict[str, str] = {}
     for t in targets:
-        host_key = t.host.lower()
-        rec = httpx_results.get(host_key, {})
-        if rec:
+        raw_host = (t.host or "").strip()
+        if "://" in raw_host:
+            ep_key = _endpoint_key(raw_host)
+            matched = [httpx_results[ep_key]] if ep_key in httpx_results else []
+        elif ":" in raw_host and not raw_host.startswith("[") and raw_host.rsplit(":", 1)[1].isdigit():
+            h_only, p_str = raw_host.rsplit(":", 1)
+            port_num = int(p_str)
+            matched = [
+                rec for (kh, _ks, kp), rec in httpx_results.items()
+                if kh == h_only.lower() and kp == port_num
+            ]
+        else:
+            matched = by_host.get(raw_host.lower(), [])
+
+        for rec in matched:
             t.is_live = True
             techs = rec.get("tech", [])
             if isinstance(techs, list):
@@ -167,17 +217,23 @@ async def detect_tech_stack(
             webserver = rec.get("webserver", "")
             if webserver and webserver not in t.tech_stack:
                 t.tech_stack.append(webserver)
+            rec_url = str(rec.get("url") or "").strip()
+            if rec_url:
+                cur_url = live_urls.get(t.host, "")
+                if not cur_url or (rec_url.startswith("https://") and not cur_url.startswith("https://")):
+                    live_urls[t.host] = rec_url
 
     # whatweb (slower, per-host — only for live targets if available)
     if ToolRunner.is_available("whatweb"):
         for t in targets:
             if t.is_live:
+                ww_target = live_urls.get(t.host) or t.host
                 try:
-                    result = await whatweb_scan(t.host, timeout=60)
+                    result = await whatweb_scan(ww_target, timeout=60)
                     new_techs = result.get("technologies", [])
                     t.tech_stack = list(set(t.tech_stack + new_techs))
                 except Exception as e:
-                    log.debug("whatweb failed for %s: %s", t.host, e)
+                    log.debug("whatweb failed for %s: %s", ww_target, e)
     else:
         log.warning("whatweb not found — skipping fingerprinting")
 

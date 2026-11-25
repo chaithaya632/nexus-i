@@ -7,7 +7,7 @@ import re
 from typing import Any
 
 from nexus.db.models import Finding, Severity, Target
-from nexus.recon.runner import ToolRunner
+from nexus.recon.runner import ToolRunner, validate_cli_target
 
 log = logging.getLogger("nexus.recon.waf")
 
@@ -29,7 +29,8 @@ async def wafw00f_detect(
     Returns:
         {"target": str, "waf": str | None, "raw": str}
     """
-    args = [target]
+    clean_target = validate_cli_target(target, label="target")
+    args = [clean_target]
     out = await ToolRunner.run("wafw00f", args, timeout=timeout)
 
     combined = out.stdout + "\n" + out.stderr
@@ -46,6 +47,25 @@ async def wafw00f_detect(
         "waf": waf_name,
         "raw": combined,
     }
+
+
+def _candidate_waf_urls(host: str) -> list[str]:
+    """Build candidate HTTPS/HTTP URLs preserving explicit schemes and non-standard ports."""
+    raw = host.strip()
+    if raw.lower().startswith(("http://", "https://")):
+        return [raw]
+    if ":" in raw and not raw.startswith("[") and raw.rsplit(":", 1)[1].isdigit():
+        port = int(raw.rsplit(":", 1)[1])
+        if port in (443, 8443):
+            return [f"https://{raw}"]
+        if port == 80:
+            return [f"http://{raw}"]
+        return [f"https://{raw}", f"http://{raw}"]
+    if raw.startswith("[") and "]:" in raw:
+        port_part = raw.rsplit(":", 1)[1]
+        if port_part.isdigit() and int(port_part) in (443, 8443):
+            return [f"https://{raw}"]
+    return [f"https://{raw}", f"http://{raw}"]
 
 
 async def detect_waf(
@@ -67,30 +87,28 @@ async def detect_waf(
         if not t.is_live:
             continue
 
-        url = t.host
-        if not url.startswith("http"):
-            url = f"http://{t.host}"
-
-        try:
-            result = await wafw00f_detect(url, timeout=timeout)
-            waf = result.get("waf")
-            if waf:
-                t.waf_detected = waf
-                findings.append(Finding(
-                    host=t.host,
-                    title=f"WAF Detected: {waf}",
-                    description=(
-                        f"A Web Application Firewall ({waf}) was detected "
-                        f"protecting {t.host}.  Scan/exploit techniques may "
-                        f"need WAF bypass adjustments."
-                    ),
-                    severity=Severity.INFO,
-                    tool_source="wafw00f",
-                ))
-                log.info("WAF detected on %s: %s", t.host, waf)
-            else:
-                log.info("No WAF detected on %s", t.host)
-        except Exception as e:
-            log.debug("wafw00f failed for %s: %s", t.host, e)
+        for url in _candidate_waf_urls(t.host):
+            try:
+                result = await wafw00f_detect(url, timeout=timeout)
+                waf = result.get("waf")
+                if waf:
+                    t.waf_detected = waf
+                    findings.append(Finding(
+                        host=t.host,
+                        title=f"WAF Detected: {waf}",
+                        description=(
+                            f"A Web Application Firewall ({waf}) was detected "
+                            f"protecting {t.host}.  Scan/exploit techniques may "
+                            f"need WAF bypass adjustments."
+                        ),
+                        severity=Severity.INFO,
+                        tool_source="wafw00f",
+                    ))
+                    log.info("WAF detected on %s: %s", t.host, waf)
+                    break
+            except Exception as e:
+                log.debug("wafw00f failed for %s: %s", url, e)
+        if not t.waf_detected:
+            log.info("No WAF detected on %s", t.host)
 
     return targets, findings

@@ -198,3 +198,59 @@ class TestFtpAndSmbAuditors:
         assert d_findings[0].severity == Severity.CRITICAL and d_findings[0].tool_source == "docker_probe"
         assert len(m_findings) == 1
         assert m_findings[0].tool_source == "memcached_probe"
+
+    @pytest.mark.asyncio
+    async def test_clean_ftp_and_smb_do_not_trigger_duplicate_nmap_rescan(self) -> None:
+        # Clean FTP (anonymous denied with 530) must NOT re-run nmap
+        srv = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        srv.bind(("127.0.0.1", 0))
+        srv.listen(2)
+        ftp_port = srv.getsockname()[1]
+
+        def _deny_ftp() -> None:
+            try:
+                conn, _ = srv.accept()
+            except OSError:
+                return
+            with conn:
+                conn.sendall(b"220 Secure FTP\r\n")
+                while True:
+                    line = conn.recv(256).decode("ascii", errors="ignore").strip().upper()
+                    if not line:
+                        break
+                    if line.startswith("USER "):
+                        conn.sendall(b"331 Password required\r\n")
+                    elif line.startswith("PASS "):
+                        conn.sendall(b"530 Login incorrect.\r\n")
+                        break
+
+        threading.Thread(target=_deny_ftp, daemon=True).start()
+        nmap_mock = AsyncMock()
+        try:
+            with (
+                patch("nexus.scanner.network_services.ToolRunner.is_available", return_value=True),
+                patch("nexus.scanner.network_services.ToolRunner.run", nmap_mock),
+            ):
+                ftp_findings = await audit_ftp("127.0.0.1", ftp_port, timeout=5)
+        finally:
+            srv.close()
+
+        assert ftp_findings == []
+        nmap_mock.assert_not_awaited()
+
+        # Clean SMB from nxc (signing:True, SMBv1:False) must NOT re-run nmap
+        nxc_clean = ToolOutput(
+            tool="nxc", args=[], returncode=0,
+            stdout="SMB 127.0.0.1 445 SRV [*] Windows (signing:True) (SMBv1:False)\n",
+            stderr="",
+        )
+        run_mock = AsyncMock(return_value=nxc_clean)
+        with (
+            patch("nexus.scanner.network_services.ToolRunner.is_available", return_value=True),
+            patch("nexus.scanner.network_services.ToolRunner.run", run_mock),
+        ):
+            smb_findings = await audit_smb("127.0.0.1", 445)
+
+        assert smb_findings == []
+        assert run_mock.await_count == 1
+        assert run_mock.await_args.args[0] == "nxc"

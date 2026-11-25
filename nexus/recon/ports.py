@@ -2,13 +2,20 @@
 
 from __future__ import annotations
 
+import ipaddress
 import logging
 import xml.etree.ElementTree as ET
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlparse
 
 from nexus.db.models import Finding, Port, Severity, Target
-from nexus.recon.runner import ToolRunner
+from nexus.recon.runner import (
+    ToolRunner,
+    safe_parse_xml,
+    validate_cli_target,
+    validate_extra_args,
+)
 
 log = logging.getLogger("nexus.recon.ports")
 
@@ -20,7 +27,40 @@ SCAN_PROFILES: dict[str, list[str]] = {
     "ghost": ["-sS", "-T1", "--max-retries", "1", "-Pn", "--data-length", "24"],
 }
 
-DEFAULT_PORTS = "21,22,23,25,53,80,110,111,135,139,143,443,445,993,995,1723,3306,3389,5432,5900,6379,8080,8443,8888,9200,27017"
+DEFAULT_PORTS = (
+    "21,22,23,25,53,80,110,111,135,139,143,443,445,993,995,1723,"
+    "2375,2379,3306,3389,5000,5432,5900,6379,8000,8080,8443,8500,"
+    "8888,9000,9200,11211,27017"
+)
+
+
+def _extract_nmap_target(target: str) -> str:
+    """Validate and extract a host/IP/CIDR suitable for nmap CLI invocation."""
+    raw = validate_cli_target(target, label="target")
+    try:
+        ipaddress.ip_address(raw)
+        return raw
+    except ValueError:
+        pass
+    try:
+        ipaddress.ip_network(raw, strict=False)
+        return raw
+    except ValueError:
+        pass
+
+    if "://" in raw:
+        parsed = urlparse(raw)
+        host = (parsed.hostname or "").strip()
+    elif raw.startswith("["):
+        parsed = urlparse(f"http://{raw}")
+        host = (parsed.hostname or "").strip()
+    else:
+        head = raw.split("/", 1)[0]
+        if head.count(":") == 1:
+            host = head.split(":", 1)[0]
+        else:
+            host = head
+    return validate_cli_target(host, label="target")
 
 
 async def nmap_scan(
@@ -41,18 +81,18 @@ async def nmap_scan(
             "raw_xml": str,
         }
     """
-    # Strip URL scheme / path if caller passes a URL
-    clean_target = target.strip()
-    if "://" in clean_target:
-        clean_target = clean_target.split("://", 1)[1]
-    clean_target = clean_target.split("/")[0].split(":")[0] or target.strip()
+    clean_target = _extract_nmap_target(target)
+    clean_ports = validate_cli_target(ports, label="ports")
+    safe_extra = validate_extra_args(extra_args)
+
+    if not ToolRunner.is_available("nmap"):
+        log.warning("nmap not found — skipping port scan for %s", clean_target)
+        return {"targets": [], "ports": [], "findings": [], "raw_xml": ""}
 
     xml_path = ToolRunner.make_temp_path(".xml")
     profile = list(SCAN_PROFILES.get(stealth, SCAN_PROFILES["normal"]))
 
-    args = [*profile, "-p", ports, "-oX", xml_path, clean_target]
-    if extra_args:
-        args.extend(extra_args)
+    args = [*profile, "-p", clean_ports, "-oX", xml_path, *safe_extra, clean_target]
 
     try:
         out = await ToolRunner.run("nmap", args, timeout=timeout)
@@ -67,10 +107,12 @@ async def nmap_scan(
             if not any(a.startswith("-s") for a in fallback_profile):
                 fallback_profile.insert(0, "-sT")
             log.info("nmap lacks root caps; retrying with unprivileged profile: %s", fallback_profile)
-            retry_args = [*fallback_profile, "-p", ports, "-oX", xml_path, clean_target]
-            if extra_args:
-                retry_args.extend(extra_args)
+            retry_args = [*fallback_profile, "-p", clean_ports, "-oX", xml_path, *safe_extra, clean_target]
             out = await ToolRunner.run("nmap", retry_args, timeout=timeout)
+
+        if out.returncode == -1:
+            log.warning("nmap timed out for %s after %ds", clean_target, timeout)
+            return {"targets": [], "ports": [], "findings": [], "raw_xml": ""}
 
         if not out.ok and out.returncode != 1:
             log.warning("nmap returned rc=%d: %s", out.returncode, out.stderr[:200])
@@ -93,7 +135,7 @@ def _parse_nmap_xml(xml_text: str, default_host: str = "") -> dict[str, Any]:
     findings: list[Finding] = []
 
     try:
-        root = ET.fromstring(xml_text)
+        root = safe_parse_xml(xml_text)
     except ET.ParseError as e:
         log.error("Failed to parse nmap XML: %s", e)
         return {"targets": targets, "ports": ports, "findings": findings, "raw_xml": xml_text}
@@ -171,8 +213,24 @@ def _parse_nmap_xml(xml_text: str, default_host: str = "") -> dict[str, Any]:
                 tool_source="nmap",
             ))
 
-        # Script output findings (vuln scripts)
-        for script_el in host_el.findall(".//script"):
+            # Port-level NSE script output findings (preserve port/protocol context)
+            for script_el in port_el.findall("script"):
+                script_id = script_el.get("id", "")
+                script_output = script_el.get("output", "")
+                if "VULNERABLE" in script_output.upper() or "vuln" in script_id.lower():
+                    findings.append(Finding(
+                        host=tgt.host or ip,
+                        port=portnum,
+                        protocol=proto,
+                        title=f"Nmap script: {script_id}",
+                        description=script_output[:500],
+                        severity=Severity.MEDIUM,
+                        tool_source="nmap",
+                        evidence=script_output[:2000],
+                    ))
+
+        # Host-level NSE script output findings (<hostscript><script .../></hostscript>)
+        for script_el in host_el.findall("hostscript/script"):
             script_id = script_el.get("id", "")
             script_output = script_el.get("output", "")
             if "VULNERABLE" in script_output.upper() or "vuln" in script_id.lower():

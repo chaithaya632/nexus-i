@@ -8,7 +8,7 @@ import xml.etree.ElementTree as ET
 from pathlib import Path
 
 from nexus.db.models import Finding, Severity
-from nexus.recon.runner import ToolRunner
+from nexus.recon.runner import ToolRunner, safe_parse_xml, validate_cli_target, validate_port
 
 log = logging.getLogger("nexus.scanner.ssh_audit")
 
@@ -84,7 +84,7 @@ def _parse_nmap_ssh_xml(xml_text: str, host: str, port: int) -> list[Finding]:
     """Parse nmap `ssh2-enum-algos` and `ssh-auth-methods` XML script output."""
     findings: list[Finding] = []
     try:
-        root = ET.fromstring(xml_text)
+        root = safe_parse_xml(xml_text)
     except ET.ParseError:
         return findings
 
@@ -134,27 +134,29 @@ async def audit_ssh(
     timeout: int = 60,
 ) -> list[Finding]:
     """Audit SSH configuration via `ssh-audit -j` or `nmap` SSH NSE scripts."""
+    clean_host = validate_cli_target(host, label="host")
+    port_num = validate_port(port)
     if ToolRunner.is_available("ssh-audit"):
-        out = await ToolRunner.run("ssh-audit", ["-j", "-p", str(port), host], timeout=timeout)
+        out = await ToolRunner.run("ssh-audit", ["-j", "-p", str(port_num), clean_host], timeout=timeout)
         if out.stdout.strip():
-            findings = _parse_ssh_audit_json(out.stdout, host, port)
-            log.info("ssh-audit found %d issues on %s:%d", len(findings), host, port)
+            findings = _parse_ssh_audit_json(out.stdout, clean_host, port_num)
+            log.info("ssh-audit found %d issues on %s:%d", len(findings), clean_host, port_num)
             return findings
 
     if ToolRunner.is_available("nmap"):
         xml_path = ToolRunner.make_temp_path(".xml")
         try:
             args = [
-                "-p", str(port),
+                "-p", str(port_num),
                 "--script", "ssh2-enum-algos,ssh-auth-methods",
                 "-oX", xml_path,
-                host,
+                clean_host,
             ]
             await ToolRunner.run("nmap", args, timeout=timeout)
             p = Path(xml_path)
             if p.is_file():
                 xml_text = p.read_text(encoding="utf-8", errors="replace")
-                return _parse_nmap_ssh_xml(xml_text, host, port)
+                return _parse_nmap_ssh_xml(xml_text, clean_host, port_num)
         finally:
             Path(xml_path).unlink(missing_ok=True)
 

@@ -64,7 +64,7 @@ def analyze_security_headers(
         ))
 
     ctype = _hdr_get(resp_headers, "content-type").lower()
-    is_html = "text/html" in ctype or not ctype
+    is_html = "text/html" in ctype
 
     # 2. HSTS on HTTPS
     if proto == "https" and not _hdr_get(resp_headers, "strict-transport-security"):
@@ -122,19 +122,34 @@ def analyze_security_headers(
             evidence=f"URL: {url}",
         ))
 
-    # 6. Cookie security flags
+    # 6. Cookie security flags (parse semicolon-delimited attribute tokens)
     cookie_lines = list(set_cookies or [])
     single_sc = _hdr_get(resp_headers, "set-cookie")
     if single_sc and not cookie_lines:
         cookie_lines.append(single_sc)
     for sc in cookie_lines:
-        name = sc.split("=", 1)[0].strip().lower()
-        flags = sc.lower()
+        parts = [p.strip() for p in sc.split(";") if p.strip()]
+        if not parts or "=" not in parts[0]:
+            continue
+        name = parts[0].split("=", 1)[0].strip().lower()
+        attrs: dict[str, str] = {}
+        for attr in parts[1:]:
+            if "=" in attr:
+                ak, av = attr.split("=", 1)
+                attrs[ak.strip().lower()] = av.strip().lower()
+            else:
+                attrs[attr.strip().lower()] = ""
+
         if any(h in name for h in _SENSITIVE_COOKIE_HINTS):
             missing_flags = []
-            if "httponly" not in flags:
+            if "httponly" not in attrs:
                 missing_flags.append("HttpOnly")
-            if proto == "https" and "secure" not in flags:
+            if proto == "https" and "secure" not in attrs:
+                missing_flags.append("Secure")
+            samesite = attrs.get("samesite", "")
+            if samesite not in ("strict", "lax", "none"):
+                missing_flags.append("SameSite")
+            elif samesite == "none" and "secure" not in attrs and "Secure" not in missing_flags:
                 missing_flags.append("Secure")
             if missing_flags:
                 findings.append(Finding(
@@ -160,7 +175,7 @@ async def audit_http_security(
         return []
 
     findings: list[Finding] = []
-    seen_keys: set[tuple[str, int | None, str]] = set()
+    seen_keys: set[tuple[str, int | None, str, str]] = set()
 
     async with make_http_client(headers=headers, timeout=timeout) as client:
         for url in urls[:8]:
@@ -177,16 +192,17 @@ async def audit_http_security(
             except Exception:
                 pass
 
+            resp_url = str(resp.url)
             set_cookies = resp.headers.get_list("set-cookie") if hasattr(resp.headers, "get_list") else None
             url_findings = analyze_security_headers(
-                str(resp.url),
+                resp_url,
                 resp.headers,
                 cors_headers=cors_hdrs,
                 tested_origin=_TEST_CORS_ORIGIN,
                 set_cookies=set_cookies,
             )
             for f in url_findings:
-                dedup_key = (f.host, f.port, f.title)
+                dedup_key = (f.host, f.port, resp_url, f.title)
                 if dedup_key not in seen_keys:
                     seen_keys.add(dedup_key)
                     findings.append(f)

@@ -6,12 +6,13 @@ import asyncio
 import ftplib
 import logging
 import socket
+import ssl
 import struct
 import xml.etree.ElementTree as ET
 from pathlib import Path
 
 from nexus.db.models import Finding, Severity
-from nexus.recon.runner import ToolRunner
+from nexus.recon.runner import ToolRunner, safe_parse_xml, validate_cli_target, validate_port
 from nexus.scanner._http import make_http_client
 
 log = logging.getLogger("nexus.scanner.network_services")
@@ -48,12 +49,14 @@ async def audit_redis(host: str, port: int = 6379, *, timeout: float = 5.0) -> l
     return await asyncio.to_thread(_probe_redis_sync, host, port, timeout)
 
 
-def _probe_ftp_anon_sync(host: str, port: int, timeout: float = 6.0) -> list[Finding]:
-    """Read-only check whether anonymous FTP login is permitted."""
+def _probe_ftp_anon_sync(host: str, port: int, timeout: float = 6.0) -> tuple[list[Finding], bool]:
+    """Read-only check whether anonymous FTP login is permitted; returns (findings, checked_cleanly)."""
     findings: list[Finding] = []
+    checked = False
     ftp = ftplib.FTP()
     try:
         banner = ftp.connect(host, port, timeout=timeout)
+        checked = True
         resp = ftp.login("anonymous", "nexus-audit@local.invalid")
         if resp.startswith("230"):
             findings.append(Finding(
@@ -68,20 +71,23 @@ def _probe_ftp_anon_sync(host: str, port: int, timeout: float = 6.0) -> list[Fin
                 evidence=f"Banner: {banner[:200]}\nLogin response: {resp[:200]}",
                 confirmed=True,
             ))
+    except ftplib.error_perm as exc:
+        checked = True
+        log.debug("FTP anonymous login denied for %s:%d: %s", host, port, exc)
     except (ftplib.all_errors, OSError) as exc:
-        log.debug("FTP anonymous check failed/denied for %s:%d: %s", host, port, exc)
+        log.debug("FTP anonymous check failed for %s:%d: %s", host, port, exc)
     finally:
         try:
             ftp.close()
         except Exception:
             pass
-    return findings
+    return findings, checked
 
 
 def _parse_nmap_ftp_xml(xml_text: str, host: str, port: int) -> list[Finding]:
     findings: list[Finding] = []
     try:
-        root = ET.fromstring(xml_text)
+        root = safe_parse_xml(xml_text)
     except ET.ParseError:
         return findings
     for script in root.findall(".//script"):
@@ -105,18 +111,22 @@ def _parse_nmap_ftp_xml(xml_text: str, host: str, port: int) -> list[Finding]:
 
 async def audit_ftp(host: str, port: int = 21, *, timeout: int = 30) -> list[Finding]:
     """Audit FTP service for anonymous authentication using pure-Python probe or nmap."""
-    findings = await asyncio.to_thread(_probe_ftp_anon_sync, host, port, min(float(timeout), 8.0))
-    if findings:
+    clean_host = validate_cli_target(host, label="host")
+    port_num = validate_port(port)
+    findings, checked = await asyncio.to_thread(
+        _probe_ftp_anon_sync, clean_host, port_num, min(float(timeout), 8.0)
+    )
+    if findings or checked:
         return findings
     if ToolRunner.is_available("nmap"):
         xml_path = ToolRunner.make_temp_path(".xml")
         try:
             await ToolRunner.run(
-                "nmap", ["-p", str(port), "--script", "ftp-anon", "-oX", xml_path, host], timeout=timeout
+                "nmap", ["-p", str(port_num), "--script", "ftp-anon", "-oX", xml_path, clean_host], timeout=timeout
             )
             p = Path(xml_path)
             if p.is_file():
-                return _parse_nmap_ftp_xml(p.read_text(encoding="utf-8", errors="replace"), host, port)
+                return _parse_nmap_ftp_xml(p.read_text(encoding="utf-8", errors="replace"), clean_host, port_num)
         finally:
             Path(xml_path).unlink(missing_ok=True)
     return []
@@ -126,7 +136,7 @@ def _parse_nmap_smb_xml(xml_text: str, host: str, port: int) -> list[Finding]:
     """Parse nmap `smb2-security-mode,smb-protocols` XML output for signing/SMBv1 issues."""
     findings: list[Finding] = []
     try:
-        root = ET.fromstring(xml_text)
+        root = safe_parse_xml(xml_text)
     except ET.ParseError:
         return findings
 
@@ -149,7 +159,7 @@ def _parse_nmap_smb_xml(xml_text: str, host: str, port: int) -> list[Finding]:
                     confirmed=True,
                 ))
         elif sid == "smb-protocols":
-            if "nt lm 0.12" in lower or "smbv1" in lower or "2.0.2" in lower and "nt lm 0.12" in lower:
+            if "nt lm 0.12" in lower or "smbv1" in lower:
                 findings.append(Finding(
                     host=host,
                     port=port,
@@ -200,11 +210,14 @@ def _parse_nxc_smb_output(output: str, host: str, port: int) -> list[Finding]:
 
 async def audit_smb(host: str, port: int = 445, *, timeout: int = 45) -> list[Finding]:
     """Audit SMB signing enforcement & SMBv1 dialect via NetExec or nmap NSE."""
+    clean_host = validate_cli_target(host, label="host")
+    port_num = validate_port(port)
     nxc_bin = "nxc" if ToolRunner.is_available("nxc") else ("netexec" if ToolRunner.is_available("netexec") else None)
     if nxc_bin:
-        out = await ToolRunner.run(nxc_bin, ["smb", host, "--port", str(port)], timeout=timeout)
-        findings = _parse_nxc_smb_output(out.stdout + "\n" + out.stderr, host, port)
-        if findings:
+        out = await ToolRunner.run(nxc_bin, ["smb", clean_host, "--port", str(port_num)], timeout=timeout)
+        combined = out.stdout + "\n" + out.stderr
+        findings = _parse_nxc_smb_output(combined, clean_host, port_num)
+        if findings or out.ok or "signing:" in combined.lower():
             return findings
 
     if ToolRunner.is_available("nmap"):
@@ -212,12 +225,12 @@ async def audit_smb(host: str, port: int = 445, *, timeout: int = 45) -> list[Fi
         try:
             await ToolRunner.run(
                 "nmap",
-                ["-p", str(port), "--script", "smb2-security-mode,smb-protocols", "-oX", xml_path, host],
+                ["-p", str(port_num), "--script", "smb2-security-mode,smb-protocols", "-oX", xml_path, clean_host],
                 timeout=timeout,
             )
             p = Path(xml_path)
             if p.is_file():
-                return _parse_nmap_smb_xml(p.read_text(encoding="utf-8", errors="replace"), host, port)
+                return _parse_nmap_smb_xml(p.read_text(encoding="utf-8", errors="replace"), clean_host, port_num)
         finally:
             Path(xml_path).unlink(missing_ok=True)
     return []
@@ -311,25 +324,34 @@ async def audit_memcached(host: str, port: int = 11211, *, timeout: float = 5.0)
 
 
 def _probe_mongodb_sync(host: str, port: int, timeout: float = 5.0) -> list[Finding]:
-    """Send read-only BSON OP_QUERY (`isMaster: 1`) to test unauthenticated MongoDB exposure."""
-    # BSON doc: {"isMaster": 1} -> length(19) + int32 type(0x10) + "isMaster\x00" + int32(1) + \x00
-    bson_doc = struct.pack("<ib", 19, 0x10) + b"isMaster\x00" + struct.pack("<i", 1) + b"\x00"
-    ns = b"admin.$cmd\x00"
-    payload = struct.pack("<i", 0) + ns + struct.pack("<ii", 0, -1) + bson_doc
-    header = struct.pack("<iiii", 16 + len(payload), 1, 0, 2004)  # OP_QUERY = 2004
+    """Send read-only BSON OP_MSG (2013) (`isMaster: 1`) to test unauthenticated MongoDB exposure."""
+    # BSON doc: {"isMaster": 1, "$db": "admin"}
+    doc_body = (
+        b"\x10isMaster\x00" + struct.pack("<i", 1)
+        + b"\x02$db\x00" + struct.pack("<i", 6) + b"admin\x00"
+    )
+    bson_doc = struct.pack("<i", 4 + len(doc_body) + 1) + doc_body + b"\x00"
+    # OP_MSG (2013): flagBits(uint32=0) + section kind 0 (\x00) + BSON body
+    payload = struct.pack("<I", 0) + b"\x00" + bson_doc
+    header = struct.pack("<iiii", 16 + len(payload), 1, 0, 2013)
     try:
         with socket.create_connection((host, port), timeout=timeout) as sock:
             sock.settimeout(timeout)
             sock.sendall(header + payload)
             raw = sock.recv(1024)
-            if len(raw) > 36 and b"ismaster" in raw.lower() and (b"maxBsonObjectSize" in raw or b"ok" in raw):
+            low = raw.lower()
+            if (
+                len(raw) > 20
+                and (b"ismaster" in low or b"iswritableprimary" in low)
+                and (b"maxbsonobjectsize" in low or b"ok" in low)
+            ):
                 return [Finding(
                     host=host, port=port, protocol="mongodb",
                     title="MongoDB: Unauthenticated Instance Exposed",
-                    description=f"MongoDB on {host}:{port} responds to isMaster metadata queries without authentication.",
+                    description=f"MongoDB on {host}:{port} responds to OP_MSG isMaster metadata queries without authentication.",
                     severity=Severity.HIGH, cwe_id="CWE-306",
                     tool_source="mongodb_probe", confirmed=True,
-                    evidence="OP_QUERY admin.$cmd isMaster succeeded without auth",
+                    evidence="OP_MSG (2013) admin.$cmd isMaster succeeded without auth",
                 )]
     except OSError as exc:
         log.debug("MongoDB probe failed for %s:%d: %s", host, port, exc)
@@ -341,9 +363,38 @@ async def audit_mongodb(host: str, port: int = 27017, *, timeout: float = 5.0) -
     return await asyncio.to_thread(_probe_mongodb_sync, host, port, timeout)
 
 
+def _inspect_pg_auth_response(resp: bytes, host: str, port: int) -> list[Finding]:
+    """Inspect a PostgreSQL StartupMessage response for trust/cleartext auth."""
+    if len(resp) >= 9 and resp[:1] == b"R":
+        auth_type = struct.unpack("!i", resp[5:9])[0]
+        if auth_type == 0:
+            return [Finding(
+                host=host, port=port, protocol="postgresql",
+                title="PostgreSQL: Passwordless Trust Authentication Enabled",
+                description=f"PostgreSQL on {host}:{port} returned AuthenticationOk (0) without credentials.",
+                severity=Severity.CRITICAL, cwe_id="CWE-306",
+                tool_source="postgres_probe", confirmed=True,
+                evidence="StartupMessage(user=postgres) -> AuthenticationOk (code=0)",
+            )]
+        if auth_type == 3:
+            return [Finding(
+                host=host, port=port, protocol="postgresql",
+                title="PostgreSQL: Cleartext Password Authentication Advertised",
+                description=f"PostgreSQL on {host}:{port} requests AuthenticationCleartextPassword (3).",
+                severity=Severity.MEDIUM, cwe_id="CWE-523",
+                tool_source="postgres_probe", confirmed=True,
+                evidence="StartupMessage -> AuthenticationCleartextPassword (code=3)",
+            )]
+    return []
+
+
 def _probe_postgresql_sync(host: str, port: int, timeout: float = 5.0) -> list[Finding]:
-    """Inspect PostgreSQL SSLRequest + StartupMessage auth mode without sending any password."""
+    """Inspect PostgreSQL SSLRequest + StartupMessage auth mode (over TLS when 'S' accepted)."""
     findings: list[Finding] = []
+    params = b"user\x00postgres\x00database\x00postgres\x00\x00"
+    startup_msg = struct.pack("!II", 8 + len(params), 196608) + params  # Protocol 3.0
+    ssl_resp = b""
+
     try:
         with socket.create_connection((host, port), timeout=timeout) as sock:
             sock.settimeout(timeout)
@@ -358,37 +409,26 @@ def _probe_postgresql_sync(host: str, port: int, timeout: float = 5.0) -> list[F
                     tool_source="postgres_probe", confirmed=True,
                     evidence="PostgreSQL SSLRequest response: N",
                 ))
-    except OSError as exc:
+            elif ssl_resp == b"S":
+                # Server accepted SSL: upgrade this socket to TLS so SSL-required pg_hba configs still probe auth mode
+                ctx = ssl.create_default_context()
+                ctx.check_hostname = False
+                ctx.verify_mode = ssl.CERT_NONE
+                with ctx.wrap_socket(sock, server_hostname=host) as ssock:
+                    ssock.sendall(startup_msg)
+                    resp = ssock.recv(256)
+                    findings.extend(_inspect_pg_auth_response(resp, host, port))
+                return findings
+    except (OSError, ssl.SSLError) as exc:
         log.debug("PostgreSQL SSL probe failed for %s:%d: %s", host, port, exc)
         return findings
 
     try:
         with socket.create_connection((host, port), timeout=timeout) as sock:
             sock.settimeout(timeout)
-            params = b"user\x00postgres\x00database\x00postgres\x00\x00"
-            msg = struct.pack("!II", 8 + len(params), 196608) + params  # Protocol 3.0
-            sock.sendall(msg)
+            sock.sendall(startup_msg)
             resp = sock.recv(256)
-            if len(resp) >= 9 and resp[:1] == b"R":
-                auth_type = struct.unpack("!i", resp[5:9])[0]
-                if auth_type == 0:
-                    findings.append(Finding(
-                        host=host, port=port, protocol="postgresql",
-                        title="PostgreSQL: Passwordless Trust Authentication Enabled",
-                        description=f"PostgreSQL on {host}:{port} returned AuthenticationOk (0) without credentials.",
-                        severity=Severity.CRITICAL, cwe_id="CWE-306",
-                        tool_source="postgres_probe", confirmed=True,
-                        evidence="StartupMessage(user=postgres) -> AuthenticationOk (code=0)",
-                    ))
-                elif auth_type == 3:
-                    findings.append(Finding(
-                        host=host, port=port, protocol="postgresql",
-                        title="PostgreSQL: Cleartext Password Authentication Advertised",
-                        description=f"PostgreSQL on {host}:{port} requests AuthenticationCleartextPassword (3).",
-                        severity=Severity.MEDIUM, cwe_id="CWE-523",
-                        tool_source="postgres_probe", confirmed=True,
-                        evidence="StartupMessage -> AuthenticationCleartextPassword (code=3)",
-                    ))
+            findings.extend(_inspect_pg_auth_response(resp, host, port))
     except OSError as exc:
         log.debug("PostgreSQL auth probe failed for %s:%d: %s", host, port, exc)
     return findings

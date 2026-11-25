@@ -118,6 +118,34 @@ class TestTlsAuditor:
         assert findings[0].severity == Severity.MEDIUM
         assert findings[0].cwe_id == "CWE-295"
 
+    def test_stdlib_tls_probe_continues_after_cert_verification_error(self) -> None:
+        soon = (datetime.now(timezone.utc) + timedelta(days=3)).strftime("%b %d %H:%M:%S %Y GMT")
+        fake_ssock = MagicMock()
+        fake_ssock.getpeercert.return_value = {"notAfter": soon}
+        fake_ssock.version.return_value = "TLSv1.1"
+        fake_ssock.__enter__.return_value = fake_ssock
+        fake_ssock.__exit__.return_value = False
+
+        fake_sock = MagicMock()
+        fake_sock.__enter__.return_value = fake_sock
+        fake_sock.__exit__.return_value = False
+
+        verified_ctx = MagicMock()
+        verified_ctx.wrap_socket.side_effect = ssl.SSLCertVerificationError("self-signed")
+        unverified_ctx = MagicMock()
+        unverified_ctx.wrap_socket.return_value = fake_ssock
+
+        with (
+            patch("nexus.scanner.tls.ssl.create_default_context", side_effect=[verified_ctx, unverified_ctx]),
+            patch("nexus.scanner.tls.socket.create_connection", return_value=fake_sock),
+        ):
+            findings = _stdlib_tls_probe("selfsigned.local", 443)
+
+        titles = [f.title for f in findings]
+        assert any("Certificate Verification Failed" in t for t in titles)
+        assert any("Deprecated Protocol" in t for t in titles)
+        assert any("Expiring Soon" in t for t in titles)
+
     @pytest.mark.asyncio
     async def test_audit_tls_uses_sslyze_when_available(self) -> None:
         sample = {
