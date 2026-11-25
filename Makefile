@@ -1,4 +1,4 @@
-.PHONY: install dev test lint clean docker-build docker-run format
+.PHONY: install dev test lint clean format
 
 install:
 	pip install -e .
@@ -23,9 +23,3 @@ clean:
 	find . -type d -name __pycache__ -exec rm -rf {} + 2>/dev/null || true
 	find . -type f -name "*.pyc" -delete 2>/dev/null || true
 	rm -rf build/ dist/ *.egg-info .pytest_cache .ruff_cache
-
-docker-build:
-	docker build -t nexus-pt .
-
-docker-run:
-	docker run --rm -it --net=host nexus-pt
