@@ -6,12 +6,33 @@ import ipaddress
 import re
 from dataclasses import dataclass, field
 from pathlib import Path
+from urllib.parse import urlparse
 
 import yaml
 
 
 class ScopeViolation(Exception):
     """Raised when a target is outside the authorized engagement scope."""
+
+
+def _compile_domain_pattern(domain: str) -> re.Pattern[str]:
+    """Compile an exact or wildcard domain entry into a case-insensitive regex."""
+    cleaned = domain.strip().rstrip(".").lower()
+    if cleaned == "*":
+        return re.compile(r"^.+$", re.IGNORECASE)
+    if cleaned.startswith("*."):
+        # Wildcard: *.example.com matches sub.example.com and example.com
+        base = re.escape(cleaned[2:])
+        return re.compile(rf"^(.+\.)?{base}$", re.IGNORECASE)
+    return re.compile(rf"^{re.escape(cleaned)}$", re.IGNORECASE)
+
+
+def _canonicalize_ip(value: str) -> str | None:
+    """Return canonical IPv4/IPv6 string if *value* is a valid IP, else None."""
+    try:
+        return str(ipaddress.ip_address(value.strip().strip("[]")))
+    except ValueError:
+        return None
 
 
 @dataclass
@@ -39,21 +60,42 @@ class ScopeEnforcer:
 
     def __init__(self, scope: Scope) -> None:
         self._scope = scope
-        self._domain_patterns: list[re.Pattern[str]] = []
-        for d in scope.allowed_domains:
-            if d == "*":
-                pattern = re.compile(r"^.+$", re.IGNORECASE)
-            elif d.startswith("*."):
-                # Wildcard: *.example.com matches sub.example.com and example.com
-                base = re.escape(d[2:])
-                pattern = re.compile(rf"^(.+\.)?{base}$", re.IGNORECASE)
-            else:
-                pattern = re.compile(rf"^{re.escape(d)}$", re.IGNORECASE)
-            self._domain_patterns.append(pattern)
+        self._domain_patterns: list[re.Pattern[str]] = [
+            _compile_domain_pattern(d) for d in scope.allowed_domains if d and d.strip()
+        ]
 
-        self._ip_set: set[str] = set(scope.allowed_ips)
+        self._ip_set: set[str] = set()
+        for ip_str in scope.allowed_ips:
+            if not ip_str or not ip_str.strip():
+                continue
+            canon = _canonicalize_ip(ip_str)
+            self._ip_set.add(canon if canon is not None else ip_str.strip().lower())
+
         self._networks = list(scope.allowed_cidrs)
-        self._excluded: set[str] = {e.lower() for e in scope.excluded_targets}
+        self._excluded: set[str] = set()
+        self._excluded_networks: list[ipaddress.IPv4Network | ipaddress.IPv6Network] = []
+        self._excluded_domain_patterns: list[re.Pattern[str]] = []
+
+        for ex in scope.excluded_targets:
+            if not ex or not ex.strip():
+                continue
+            ex_clean = ex.strip()
+            if "/" in ex_clean:
+                try:
+                    self._excluded_networks.append(
+                        ipaddress.ip_network(ex_clean, strict=False)
+                    )
+                    continue
+                except ValueError:
+                    pass
+            canon = _canonicalize_ip(ex_clean)
+            if canon is not None:
+                self._excluded.add(canon)
+            else:
+                dom = ex_clean.rstrip(".").lower()
+                self._excluded.add(dom)
+                if dom == "*" or dom.startswith("*."):
+                    self._excluded_domain_patterns.append(_compile_domain_pattern(dom))
 
     @classmethod
     def from_file(cls, path: str | Path) -> "ScopeEnforcer":
@@ -64,19 +106,61 @@ class ScopeEnforcer:
         if not isinstance(raw, dict):
             raise ValueError("scope.yaml must be a YAML mapping")
 
-        cidrs = []
-        for cidr_str in raw.get("allowed_cidrs", []):
-            cidrs.append(ipaddress.ip_network(cidr_str, strict=False))
+        cidrs = [
+            ipaddress.ip_network(cidr_str, strict=False)
+            for cidr_str in (raw.get("allowed_cidrs") or [])
+        ]
 
         scope = Scope(
-            allowed_domains=raw.get("allowed_domains", []),
-            allowed_ips=raw.get("allowed_ips", []),
+            allowed_domains=list(raw.get("allowed_domains") or []),
+            allowed_ips=list(raw.get("allowed_ips") or []),
             allowed_cidrs=cidrs,
-            excluded_targets=raw.get("excluded_targets", []),
+            excluded_targets=list(raw.get("excluded_targets") or []),
             allowed_ports=raw.get("allowed_ports"),
-            notes=raw.get("notes", ""),
+            notes=raw.get("notes") or "",
         )
         return cls(scope)
+
+    @classmethod
+    def for_target(cls, target: str) -> "ScopeEnforcer":
+        """Build a strict single-target ScopeEnforcer from a URL, IP, CIDR, or domain."""
+        raw = target.strip()
+        if not raw:
+            raise ValueError("Target cannot be empty")
+        if raw in ("*", "0.0.0.0/0", "::/0"):
+            raise ValueError(f"Wildcard target {target!r} is not allowed in for_target()")
+
+        # 1. CIDR notation (e.g. 10.0.0.0/24)
+        if "/" in raw and "://" not in raw:
+            try:
+                net = ipaddress.ip_network(raw, strict=False)
+                if net.prefixlen == 0:
+                    raise ValueError(
+                        f"Overbroad CIDR {target!r} is not allowed in for_target()"
+                    )
+                return cls(Scope(allowed_cidrs=[net]))
+            except ValueError as exc:
+                if "Overbroad CIDR" in str(exc):
+                    raise
+
+        # 2. Bare IPv4 or IPv6 (with optional brackets)
+        canon = _canonicalize_ip(raw)
+        if canon is not None:
+            return cls(Scope(allowed_ips=[canon]))
+
+        # 3. URL or host[:port][/path]
+        parsed = urlparse(raw if "://" in raw else f"http://{raw}")
+        host = (parsed.hostname or "").strip().rstrip(".").lower()
+        if not host:
+            raise ValueError(f"Could not extract host from target: {target!r}")
+        if host == "*" or host.startswith("*."):
+            raise ValueError(f"Wildcard host {target!r} is not allowed in for_target()")
+
+        host_ip = _canonicalize_ip(host)
+        if host_ip is not None:
+            return cls(Scope(allowed_ips=[host_ip]))
+
+        return cls(Scope(allowed_domains=[f"*.{host}"]))
 
     @classmethod
     def allow_all(cls) -> "ScopeEnforcer":
@@ -89,29 +173,48 @@ class ScopeEnforcer:
             ],
         ))
 
+    def _is_excluded(self, raw_target: str, addr: ipaddress.IPv4Address | ipaddress.IPv6Address | None) -> bool:
+        if addr is not None:
+            if str(addr) in self._excluded:
+                return True
+            return any(addr in net for net in self._excluded_networks)
+
+        dom = raw_target.rstrip(".").lower()
+        if dom in self._excluded:
+            return True
+        return any(pat.match(dom) for pat in self._excluded_domain_patterns)
+
     def is_in_scope(self, target: str) -> bool:
         """Check whether a target (domain, IP, or CIDR) is in scope."""
-        target_lower = target.strip().lower()
-
-        # Exclusion list takes priority
-        if target_lower in self._excluded:
+        raw_target = target.strip()
+        if not raw_target:
             return False
 
-        # Check domain match
-        for pat in self._domain_patterns:
-            if pat.match(target_lower):
-                return True
-
-        # Check IP/CIDR match
+        addr: ipaddress.IPv4Address | ipaddress.IPv6Address | None = None
         try:
-            addr = ipaddress.ip_address(target.strip())
+            addr = ipaddress.ip_address(raw_target.strip("[]"))
+        except ValueError:
+            addr = None
+
+        # Exclusion list always takes priority
+        if self._is_excluded(raw_target, addr):
+            return False
+
+        if addr is not None:
             if str(addr) in self._ip_set:
                 return True
-            for net in self._networks:
-                if addr in net:
-                    return True
-        except ValueError:
-            pass  # Not a valid IP — that's fine, could be a domain
+            if any(addr in net for net in self._networks):
+                return True
+            # Allow explicit wildcard domain ("*") only if configured
+            return any(pat.pattern == r"^.+$" and pat.match(str(addr)) for pat in self._domain_patterns)
+
+        target_domain = raw_target.rstrip(".").lower()
+        if not target_domain:
+            return False
+
+        for pat in self._domain_patterns:
+            if pat.match(target_domain):
+                return True
 
         return False
 

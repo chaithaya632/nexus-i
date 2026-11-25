@@ -91,3 +91,67 @@ class TestScopeEnforcer:
     def test_missing_file(self, tmp_path):
         with pytest.raises(FileNotFoundError):
             ScopeEnforcer.from_file(tmp_path / "nonexistent.yaml")
+
+    def test_for_target_url_ip_cidr_domain(self):
+        url_scope = ScopeEnforcer.for_target("https://app.example.com:8443/api?x=1")
+        assert url_scope.is_in_scope("app.example.com")
+        assert not url_scope.is_in_scope("other.example.com")
+
+        ip_scope = ScopeEnforcer.for_target("10.0.0.5")
+        assert ip_scope.is_in_scope("10.0.0.5")
+        assert not ip_scope.is_in_scope("10.0.0.6")
+
+        v6_scope = ScopeEnforcer.for_target("2001:0db8::1")
+        assert v6_scope.is_in_scope("2001:db8::1")
+        assert not v6_scope.is_in_scope("2001:db8::2")
+
+        cidr_scope = ScopeEnforcer.for_target("192.168.10.0/24")
+        assert cidr_scope.is_in_scope("192.168.10.42")
+        assert not cidr_scope.is_in_scope("192.168.11.42")
+
+        dom_scope = ScopeEnforcer.for_target("example.com.")
+        assert dom_scope.is_in_scope("example.com")
+        assert dom_scope.is_in_scope("sub.example.com")
+        assert not dom_scope.is_in_scope("notexample.com")
+
+        for bad in ("", "   ", "*", "*.example.com", "0.0.0.0/0", "::/0"):
+            with pytest.raises(ValueError):
+                ScopeEnforcer.for_target(bad)
+
+    def test_from_file_null_yaml_lists(self, tmp_path):
+        p = tmp_path / "scope.yaml"
+        p.write_text(
+            "allowed_domains:\n  - example.com\n"
+            "allowed_ips:\nallowed_cidrs:\nexcluded_targets:\nnotes:\n",
+            encoding="utf-8",
+        )
+        enforcer = ScopeEnforcer.from_file(p)
+        assert enforcer.is_in_scope("example.com")
+        assert not enforcer.is_in_scope("evil.com")
+
+    def test_ipv6_canonicalization_and_trailing_dot(self, tmp_path):
+        p = self._write_scope(tmp_path, {
+            "allowed_domains": ["example.com"],
+            "allowed_ips": ["2001:0db8:0000:0000::1", "2001:0db8::2"],
+            "excluded_targets": ["2001:0db8::2"],
+        })
+        enforcer = ScopeEnforcer.from_file(p)
+
+        assert enforcer.is_in_scope("2001:db8::1")
+        assert not enforcer.is_in_scope("2001:db8::2")
+        assert enforcer.is_in_scope("example.com.")
+        assert enforcer.is_in_scope("EXAMPLE.COM.")
+
+    def test_excluded_cidr_and_wildcard_domain(self, tmp_path):
+        p = self._write_scope(tmp_path, {
+            "allowed_cidrs": ["10.0.0.0/24"],
+            "allowed_domains": ["*.example.com"],
+            "excluded_targets": ["10.0.0.0/28", "*.prod.example.com"],
+        })
+        enforcer = ScopeEnforcer.from_file(p)
+
+        assert not enforcer.is_in_scope("10.0.0.5")
+        assert enforcer.is_in_scope("10.0.0.20")
+        assert not enforcer.is_in_scope("api.prod.example.com")
+        assert not enforcer.is_in_scope("prod.example.com")
+        assert enforcer.is_in_scope("dev.example.com")

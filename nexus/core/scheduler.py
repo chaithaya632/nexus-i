@@ -3,10 +3,11 @@
 from __future__ import annotations
 
 import asyncio
+import inspect
 import time
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Any, Awaitable, Callable
+from typing import Any, Awaitable
 
 
 class TaskStatus(str, Enum):
@@ -25,6 +26,12 @@ class TaskResult:
     duration_s: float = 0.0
 
 
+def _close_unawaited(awaitable: Awaitable[Any]) -> None:
+    """Close an unstarted coroutine so skipped/cancelled tasks don't emit warnings."""
+    if inspect.iscoroutine(awaitable) and inspect.getcoroutinestate(awaitable) == inspect.CORO_CREATED:
+        awaitable.close()
+
+
 @dataclass
 class TaskScheduler:
     """Manages concurrent and sequential async task execution."""
@@ -34,6 +41,10 @@ class TaskScheduler:
     _running: int = 0
     _completed: int = 0
     _failed: int = 0
+
+    def __post_init__(self) -> None:
+        if self.max_concurrent < 1:
+            raise ValueError(f"max_concurrent must be >= 1, got {self.max_concurrent}")
 
     @property
     def stats(self) -> dict[str, int]:
@@ -47,32 +58,39 @@ class TaskScheduler:
     async def _run_one(
         self, name: str, coro: Awaitable[Any], semaphore: asyncio.Semaphore
     ) -> TaskResult:
-        async with semaphore:
-            self._running += 1
-            start = time.monotonic()
-            try:
-                result = await coro
-                duration = time.monotonic() - start
-                self._running -= 1
-                self._completed += 1
-                tr = TaskResult(
-                    name=name,
-                    status=TaskStatus.COMPLETED,
-                    result=result,
-                    duration_s=round(duration, 2),
-                )
-            except Exception as exc:
-                duration = time.monotonic() - start
-                self._running -= 1
-                self._failed += 1
-                tr = TaskResult(
-                    name=name,
-                    status=TaskStatus.FAILED,
-                    error=str(exc),
-                    duration_s=round(duration, 2),
-                )
-            self._results.append(tr)
-            return tr
+        try:
+            async with semaphore:
+                self._running += 1
+                start = time.monotonic()
+                try:
+                    result = await coro
+                except asyncio.CancelledError:
+                    raise
+                except Exception as exc:
+                    duration = time.monotonic() - start
+                    self._failed += 1
+                    tr = TaskResult(
+                        name=name,
+                        status=TaskStatus.FAILED,
+                        error=str(exc),
+                        duration_s=round(duration, 2),
+                    )
+                else:
+                    duration = time.monotonic() - start
+                    self._completed += 1
+                    tr = TaskResult(
+                        name=name,
+                        status=TaskStatus.COMPLETED,
+                        result=result,
+                        duration_s=round(duration, 2),
+                    )
+                finally:
+                    self._running -= 1
+                self._results.append(tr)
+                return tr
+        except asyncio.CancelledError:
+            _close_unawaited(coro)
+            raise
 
     async def run_parallel(
         self, tasks: list[tuple[str, Awaitable[Any]]]
@@ -88,11 +106,20 @@ class TaskScheduler:
         """Run tasks one after another, stopping on first failure."""
         sem = asyncio.Semaphore(1)
         results: list[TaskResult] = []
-        for name, coro in tasks:
-            tr = await self._run_one(name, coro, sem)
+        failed = False
+        for idx, (name, coro) in enumerate(tasks):
+            if failed:
+                _close_unawaited(coro)
+                continue
+            try:
+                tr = await self._run_one(name, coro, sem)
+            except BaseException:
+                for _, rem_coro in tasks[idx + 1:]:
+                    _close_unawaited(rem_coro)
+                raise
             results.append(tr)
             if tr.status == TaskStatus.FAILED:
-                break
+                failed = True
         return results
 
     def reset(self) -> None:
