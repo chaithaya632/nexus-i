@@ -97,14 +97,13 @@ async def httpx_probe(
         "-web-server",
         "-content-length",
         "-follow-redirects",
-        "-threads", str(threads),
+        "-threads",
+        str(threads),
     ]
     if safe_extra:
         args.extend(safe_extra)
 
-    out = await ToolRunner.run(
-        httpx_bin, args, timeout=timeout, stdin_data=stdin_data
-    )
+    out = await ToolRunner.run(httpx_bin, args, timeout=timeout, stdin_data=stdin_data)
 
     results: list[dict[str, Any]] = []
     for line in out.lines:
@@ -199,11 +198,16 @@ async def detect_tech_stack(
         if "://" in raw_host:
             ep_key = _endpoint_key(raw_host)
             matched = [httpx_results[ep_key]] if ep_key in httpx_results else []
-        elif ":" in raw_host and not raw_host.startswith("[") and raw_host.rsplit(":", 1)[1].isdigit():
+        elif (
+            ":" in raw_host
+            and not raw_host.startswith("[")
+            and raw_host.rsplit(":", 1)[1].isdigit()
+        ):
             h_only, p_str = raw_host.rsplit(":", 1)
             port_num = int(p_str)
             matched = [
-                rec for (kh, _ks, kp), rec in httpx_results.items()
+                rec
+                for (kh, _ks, kp), rec in httpx_results.items()
                 if kh == h_only.lower() and kp == port_num
             ]
         else:
@@ -220,7 +224,9 @@ async def detect_tech_stack(
             rec_url = str(rec.get("url") or "").strip()
             if rec_url:
                 cur_url = live_urls.get(t.host, "")
-                if not cur_url or (rec_url.startswith("https://") and not cur_url.startswith("https://")):
+                if not cur_url or (
+                    rec_url.startswith("https://") and not cur_url.startswith("https://")
+                ):
                     live_urls[t.host] = rec_url
 
     # whatweb (slower, per-host — only for live targets if available)

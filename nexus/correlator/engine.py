@@ -53,6 +53,7 @@ def correlate(
 
     log.info(
         "Correlation complete: %d findings, %d attack chains",
-        len(findings), len(chains),
+        len(findings),
+        len(chains),
     )
     return findings, chains

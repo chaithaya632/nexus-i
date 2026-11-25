@@ -21,8 +21,9 @@ _CVE_PATTERN = re.compile(r"CVE-\d{4}-\d{4,7}", re.IGNORECASE)
 @dataclass
 class GuardResult:
     """Result of AI output validation."""
-    text: str                           # the (possibly sanitized) output
-    confidence: float = 1.0             # 0.0–1.0 confidence in accuracy
+
+    text: str  # the (possibly sanitized) output
+    confidence: float = 1.0  # 0.0–1.0 confidence in accuracy
     warnings: list[str] = field(default_factory=list)
     stripped_cves: list[str] = field(default_factory=list)
     verified_cves: list[str] = field(default_factory=list)
@@ -69,9 +70,11 @@ class AIGuard:
             if unverified_upper:
                 # Preserve longest-first order if ever needed; _CVE_PATTERN.sub replaces each token once
                 result.text = _CVE_PATTERN.sub(
-                    lambda m: f"[UNVERIFIED: {m.group(0)}]"
-                    if m.group(0).upper() in unverified_upper
-                    else m.group(0),
+                    lambda m: (
+                        f"[UNVERIFIED: {m.group(0)}]"
+                        if m.group(0).upper() in unverified_upper
+                        else m.group(0)
+                    ),
                     ai_output,
                 )
                 # Confidence penalty: 10% per unverified CVE, floor at 0.3
@@ -87,7 +90,8 @@ class AIGuard:
         if result.warnings:
             log.info(
                 "AI Guard: %d warnings, confidence %.0f%%",
-                len(result.warnings), result.confidence * 100,
+                len(result.warnings),
+                result.confidence * 100,
             )
         return result
 
@@ -97,9 +101,7 @@ class AIGuard:
         if "critical" in text_lower and "cve" not in text_lower:
             # Claims critical with no CVE backing — flag it
             if "remote code execution" not in text_lower and not re.search(r"\brce\b", text_lower):
-                result.warnings.append(
-                    "AI claims critical severity without CVE or RCE evidence"
-                )
+                result.warnings.append("AI claims critical severity without CVE or RCE evidence")
                 result.confidence = min(result.confidence, 0.7)
         return result
 
@@ -122,9 +124,7 @@ class AIGuard:
         ]
         hedge_count = sum(1 for p in hedge_phrases if p in text.lower())
         if hedge_count >= 3:
-            result.warnings.append(
-                "AI output contains too many generic hedge phrases"
-            )
+            result.warnings.append("AI output contains too many generic hedge phrases")
             result.confidence = min(result.confidence, 0.6)
 
         return result

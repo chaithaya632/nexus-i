@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 import ssl
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -28,7 +28,7 @@ class TestTlsAuditor:
     """Tests for sslyze JSON parser, stdlib TLS fallback, and audit_tls dispatch."""
 
     def test_parse_sslyze_json_detects_weak_proto_heartbleed_and_expired_cert(self) -> None:
-        past_date = (datetime.now(timezone.utc) - timedelta(days=10)).isoformat()
+        past_date = (datetime.now(UTC) - timedelta(days=10)).isoformat()
         payload = {
             "server_scan_results": [
                 {
@@ -41,14 +41,18 @@ class TestTlsAuditor:
                             }
                         },
                         "ssl_3_0_cipher_suites": {
-                            "result": {"accepted_cipher_suites": [{"cipher_suite": {"name": "SSL_RSA"}}]}
+                            "result": {
+                                "accepted_cipher_suites": [{"cipher_suite": {"name": "SSL_RSA"}}]
+                            }
                         },
                         "heartbleed": {"result": {"is_vulnerable_to_heartbleed": True}},
                         "certificate_info": {
                             "result": {
                                 "certificate_deployments": [
                                     {
-                                        "received_certificate_chain": [{"not_valid_after": past_date}],
+                                        "received_certificate_chain": [
+                                            {"not_valid_after": past_date}
+                                        ],
                                         "path_validation_results": [
                                             {
                                                 "was_validation_successful": False,
@@ -75,7 +79,7 @@ class TestTlsAuditor:
         assert all(f.tool_source == "sslyze" for f in findings)
 
     def test_stdlib_tls_probe_flags_deprecated_proto_and_expiring_cert(self) -> None:
-        soon = (datetime.now(timezone.utc) + timedelta(days=5)).strftime("%b %d %H:%M:%S %Y GMT")
+        soon = (datetime.now(UTC) + timedelta(days=5)).strftime("%b %d %H:%M:%S %Y GMT")
         fake_ssock = MagicMock()
         fake_ssock.getpeercert.return_value = {"notAfter": soon}
         fake_ssock.version.return_value = "TLSv1"
@@ -119,7 +123,7 @@ class TestTlsAuditor:
         assert findings[0].cwe_id == "CWE-295"
 
     def test_stdlib_tls_probe_continues_after_cert_verification_error(self) -> None:
-        soon = (datetime.now(timezone.utc) + timedelta(days=3)).strftime("%b %d %H:%M:%S %Y GMT")
+        soon = (datetime.now(UTC) + timedelta(days=3)).strftime("%b %d %H:%M:%S %Y GMT")
         fake_ssock = MagicMock()
         fake_ssock.getpeercert.return_value = {"notAfter": soon}
         fake_ssock.version.return_value = "TLSv1.1"
@@ -136,7 +140,10 @@ class TestTlsAuditor:
         unverified_ctx.wrap_socket.return_value = fake_ssock
 
         with (
-            patch("nexus.scanner.tls.ssl.create_default_context", side_effect=[verified_ctx, unverified_ctx]),
+            patch(
+                "nexus.scanner.tls.ssl.create_default_context",
+                side_effect=[verified_ctx, unverified_ctx],
+            ),
             patch("nexus.scanner.tls.socket.create_connection", return_value=fake_sock),
         ):
             findings = _stdlib_tls_probe("selfsigned.local", 443)
@@ -153,7 +160,9 @@ class TestTlsAuditor:
                 {
                     "scan_result": {
                         "tls_1_1_cipher_suites": {
-                            "result": {"accepted_cipher_suites": [{"cipher_suite": {"name": "TLS_AES"}}]}
+                            "result": {
+                                "accepted_cipher_suites": [{"cipher_suite": {"name": "TLS_AES"}}]
+                            }
                         }
                     }
                 }

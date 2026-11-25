@@ -7,7 +7,7 @@ is skipped with a warning.
 from __future__ import annotations
 
 import logging
-from typing import Any, TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from nexus.reporter.generator import strip_markdown
 
@@ -33,8 +33,7 @@ def render_docx(data: ReportData, output_path: str) -> None:
         from docx.enum.text import WD_ALIGN_PARAGRAPH  # type: ignore[import-untyped]
     except ImportError:
         raise ImportError(
-            "python-docx is required for DOCX reports. "
-            "Install it with: pip install python-docx"
+            "python-docx is required for DOCX reports. Install it with: pip install python-docx"
         )
 
     meta = data.meta

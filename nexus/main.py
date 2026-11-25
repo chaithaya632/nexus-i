@@ -2,7 +2,7 @@
 
 import click
 
-from nexus import __version__, __codename__
+from nexus import __codename__, __version__
 from nexus.cli.commands import ALL_COMMANDS
 
 
@@ -17,6 +17,7 @@ def cli(ctx: click.Context) -> None:
     ctx.ensure_object(dict)
     if ctx.invoked_subcommand is None:
         from nexus.cli.tui import print_banner
+
         print_banner()
         click.echo(ctx.get_help())
 

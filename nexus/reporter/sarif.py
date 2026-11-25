@@ -5,7 +5,7 @@ from __future__ import annotations
 import hashlib
 import json
 import re
-from typing import Any, TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 from urllib.parse import urlsplit
 
 from nexus import __version__
@@ -107,7 +107,9 @@ def render_sarif(data: ReportData, *, include_suppressed: bool = True) -> str:
         rule_id = _rule_id_for(f)
         title = str(f.get("title") or rule_id)
         desc = str(f.get("description") or title)
-        remediation = str(f.get("remediation") or "Review finding details and apply vendor hardening/patches.")
+        remediation = str(
+            f.get("remediation") or "Review finding details and apply vendor hardening/patches."
+        )
         sec_score = _security_severity(f.get("cvss_score"), sev)
 
         if rule_id not in rules_by_id:

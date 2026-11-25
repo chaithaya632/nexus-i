@@ -10,10 +10,11 @@ import logging
 import os
 import secrets
 import sqlite3
+from collections.abc import Generator
 from contextlib import contextmanager
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any, Generator
+from typing import Any
 
 from nexus.db.models import (
     AttackChain,
@@ -171,8 +172,10 @@ class _SecretCipher:
             return ""
         if ciphertext.startswith(self._FERNET_PREFIX):
             if self._fernet is None:
-                raise RuntimeError("cryptography is required to decrypt Fernet-encrypted credentials")
-            token = ciphertext[len(self._FERNET_PREFIX):].encode("ascii")
+                raise RuntimeError(
+                    "cryptography is required to decrypt Fernet-encrypted credentials"
+                )
+            token = ciphertext[len(self._FERNET_PREFIX) :].encode("ascii")
             return self._fernet.decrypt(token).decode("utf-8")
         if ciphertext.startswith(self._XOR_PREFIX):
             return self._xor_decrypt(ciphertext)
@@ -183,7 +186,9 @@ class _SecretCipher:
         out = bytearray()
         counter = 0
         while len(out) < length:
-            blk = hmac.new(self._raw_key, nonce + counter.to_bytes(4, "big"), hashlib.sha256).digest()
+            blk = hmac.new(
+                self._raw_key, nonce + counter.to_bytes(4, "big"), hashlib.sha256
+            ).digest()
             out.extend(blk)
             counter += 1
         return bytes(out[:length])
@@ -198,7 +203,7 @@ class _SecretCipher:
         return f"{self._XOR_PREFIX}{blob}"
 
     def _xor_decrypt(self, ciphertext: str) -> str:
-        raw = base64.urlsafe_b64decode(ciphertext[len(self._XOR_PREFIX):].encode("ascii"))
+        raw = base64.urlsafe_b64decode(ciphertext[len(self._XOR_PREFIX) :].encode("ascii"))
         nonce, tag, cipher = raw[:16], raw[16:32], raw[32:]
         expected = hmac.new(self._raw_key, nonce + cipher, hashlib.sha256).digest()[:16]
         if not hmac.compare_digest(tag, expected):
@@ -293,7 +298,9 @@ class EngagementStore:
                         if exists:
                             cur.execute("DELETE FROM ports WHERE id = ?", (dp["id"],))
                         else:
-                            cur.execute("UPDATE ports SET target_id = ? WHERE id = ?", (keep_id, dp["id"]))
+                            cur.execute(
+                                "UPDATE ports SET target_id = ? WHERE id = ?", (keep_id, dp["id"])
+                            )
                     cur.execute("DELETE FROM targets WHERE id = ?", (dup_id,))
 
             # Deduplicate ports by (target_id, port, protocol)
@@ -308,9 +315,15 @@ class EngagementStore:
                 for dup in rows[1:]:
                     cur.execute("DELETE FROM ports WHERE id = ?", (dup["id"],))
 
-            cur.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_targets_eng_host ON targets(engagement_id, host)")
-            cur.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_ports_target_port_proto ON ports(target_id, port, protocol)")
-            cur.execute("CREATE INDEX IF NOT EXISTS idx_credentials_engagement ON credentials(engagement_id)")
+            cur.execute(
+                "CREATE UNIQUE INDEX IF NOT EXISTS idx_targets_eng_host ON targets(engagement_id, host)"
+            )
+            cur.execute(
+                "CREATE UNIQUE INDEX IF NOT EXISTS idx_ports_target_port_proto ON ports(target_id, port, protocol)"
+            )
+            cur.execute(
+                "CREATE INDEX IF NOT EXISTS idx_credentials_engagement ON credentials(engagement_id)"
+            )
             cur.execute("CREATE INDEX IF NOT EXISTS idx_chains_engagement ON chains(engagement_id)")
             cur.execute(f"PRAGMA user_version = {_SCHEMA_VERSION}")
 
@@ -321,9 +334,18 @@ class EngagementStore:
             cur.execute(
                 "INSERT INTO engagements (id, name, target, scope_file, phase, created_at, updated_at, stealth, tier, notes) "
                 "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-                (eng.id, eng.name, eng.target, eng.scope_file, eng.phase.value,
-                 eng.created_at.isoformat(), eng.updated_at.isoformat(),
-                 eng.stealth, eng.tier, eng.notes),
+                (
+                    eng.id,
+                    eng.name,
+                    eng.target,
+                    eng.scope_file,
+                    eng.phase.value,
+                    eng.created_at.isoformat(),
+                    eng.updated_at.isoformat(),
+                    eng.stealth,
+                    eng.tier,
+                    eng.notes,
+                ),
             )
         return eng.id
 
@@ -341,7 +363,7 @@ class EngagementStore:
             return [Engagement(**dict(r)) for r in cur.fetchall()]
 
     def update_phase(self, eng_id: str, phase: EngagementPhase) -> None:
-        now_iso = datetime.now(timezone.utc).isoformat()
+        now_iso = datetime.now(UTC).isoformat()
         with self._cursor() as cur:
             cur.execute(
                 "UPDATE engagements SET phase = ?, updated_at = ? WHERE id = ?",
@@ -353,7 +375,9 @@ class EngagementStore:
             cur.execute("DELETE FROM chains WHERE engagement_id = ?", (eng_id,))
             cur.execute("DELETE FROM credentials WHERE engagement_id = ?", (eng_id,))
             cur.execute("DELETE FROM findings WHERE engagement_id = ?", (eng_id,))
-            for row in cur.execute("SELECT id FROM targets WHERE engagement_id = ?", (eng_id,)).fetchall():
+            for row in cur.execute(
+                "SELECT id FROM targets WHERE engagement_id = ?", (eng_id,)
+            ).fetchall():
                 cur.execute("DELETE FROM ports WHERE target_id = ?", (row["id"],))
             cur.execute("DELETE FROM targets WHERE engagement_id = ?", (eng_id,))
             cur.execute("DELETE FROM engagements WHERE id = ?", (eng_id,))
@@ -370,7 +394,14 @@ class EngagementStore:
                 t.id = existing["id"]
                 cur.execute(
                     "UPDATE targets SET ip=?, is_live=?, os_guess=?, tech_stack=?, waf_detected=? WHERE id=?",
-                    (t.ip, int(t.is_live), t.os_guess, json.dumps(t.tech_stack), t.waf_detected, t.id),
+                    (
+                        t.ip,
+                        int(t.is_live),
+                        t.os_guess,
+                        json.dumps(t.tech_stack),
+                        t.waf_detected,
+                        t.id,
+                    ),
                 )
             else:
                 cur.execute(
@@ -380,8 +411,16 @@ class EngagementStore:
                     "host=excluded.host, ip=excluded.ip, is_live=excluded.is_live, "
                     "os_guess=excluded.os_guess, tech_stack=excluded.tech_stack, "
                     "waf_detected=excluded.waf_detected",
-                    (t.id, t.engagement_id, t.host, t.ip, int(t.is_live),
-                     t.os_guess, json.dumps(t.tech_stack), t.waf_detected),
+                    (
+                        t.id,
+                        t.engagement_id,
+                        t.host,
+                        t.ip,
+                        int(t.is_live),
+                        t.os_guess,
+                        json.dumps(t.tech_stack),
+                        t.waf_detected,
+                    ),
                 )
         return t.id
 
@@ -417,8 +456,16 @@ class EngagementStore:
                     "ON CONFLICT(id) DO UPDATE SET "
                     "target_id=excluded.target_id, port=excluded.port, protocol=excluded.protocol, "
                     "state=excluded.state, service=excluded.service, version=excluded.version, banner=excluded.banner",
-                    (p.id, p.target_id, p.port, p.protocol, p.state,
-                     p.service, p.version, p.banner),
+                    (
+                        p.id,
+                        p.target_id,
+                        p.port,
+                        p.protocol,
+                        p.state,
+                        p.service,
+                        p.version,
+                        p.banner,
+                    ),
                 )
         return p.id
 
@@ -437,11 +484,29 @@ class EngagementStore:
                 "cvss_score, cve_ids, epss_score, cwe_id, owasp_category, tool_source, "
                 "evidence, request, response, remediation, false_positive, confirmed, discovered_at) "
                 "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-                (f.id, f.engagement_id, f.host, f.port, f.protocol,
-                 f.title, f.description, f.severity.value, f.cvss_score,
-                 json.dumps(f.cve_ids), f.epss_score, f.cwe_id, f.owasp_category,
-                 f.tool_source, f.evidence, f.request, f.response, f.remediation,
-                 int(f.false_positive), int(f.confirmed), f.discovered_at.isoformat()),
+                (
+                    f.id,
+                    f.engagement_id,
+                    f.host,
+                    f.port,
+                    f.protocol,
+                    f.title,
+                    f.description,
+                    f.severity.value,
+                    f.cvss_score,
+                    json.dumps(f.cve_ids),
+                    f.epss_score,
+                    f.cwe_id,
+                    f.owasp_category,
+                    f.tool_source,
+                    f.evidence,
+                    f.request,
+                    f.response,
+                    f.remediation,
+                    int(f.false_positive),
+                    int(f.confirmed),
+                    f.discovered_at.isoformat(),
+                ),
             )
         return f.id
 
@@ -482,11 +547,29 @@ class EngagementStore:
                     "cvss_score, cve_ids, epss_score, cwe_id, owasp_category, tool_source, "
                     "evidence, request, response, remediation, false_positive, confirmed, discovered_at) "
                     "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-                    (f.id, eng_id, f.host, f.port, f.protocol,
-                     f.title, f.description, f.severity.value, f.cvss_score,
-                     json.dumps(f.cve_ids), f.epss_score, f.cwe_id, f.owasp_category,
-                     f.tool_source, f.evidence, f.request, f.response, f.remediation,
-                     int(f.false_positive), int(f.confirmed), f.discovered_at.isoformat()),
+                    (
+                        f.id,
+                        eng_id,
+                        f.host,
+                        f.port,
+                        f.protocol,
+                        f.title,
+                        f.description,
+                        f.severity.value,
+                        f.cvss_score,
+                        json.dumps(f.cve_ids),
+                        f.epss_score,
+                        f.cwe_id,
+                        f.owasp_category,
+                        f.tool_source,
+                        f.evidence,
+                        f.request,
+                        f.response,
+                        f.remediation,
+                        int(f.false_positive),
+                        int(f.confirmed),
+                        f.discovered_at.isoformat(),
+                    ),
                 )
 
     # --- Credentials ---
@@ -499,8 +582,18 @@ class EngagementStore:
                 "INSERT OR REPLACE INTO credentials "
                 "(id, engagement_id, host, port, service, username, password, hash_value, source, confirmed) "
                 "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-                (c.id, c.engagement_id, c.host, c.port, c.service,
-                 c.username, enc_pw, enc_hash, c.source, int(c.confirmed)),
+                (
+                    c.id,
+                    c.engagement_id,
+                    c.host,
+                    c.port,
+                    c.service,
+                    c.username,
+                    enc_pw,
+                    enc_hash,
+                    c.source,
+                    int(c.confirmed),
+                ),
             )
         return c.id
 
@@ -524,9 +617,17 @@ class EngagementStore:
                 "INSERT OR REPLACE INTO chains "
                 "(id, engagement_id, name, description, steps, confidence, impact, confirmed, poc_script) "
                 "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
-                (c.id, c.engagement_id, c.name, c.description,
-                 json.dumps([s.model_dump() for s in c.steps]),
-                 c.confidence, c.impact.value, int(c.confirmed), c.poc_script),
+                (
+                    c.id,
+                    c.engagement_id,
+                    c.name,
+                    c.description,
+                    json.dumps([s.model_dump() for s in c.steps]),
+                    c.confidence,
+                    c.impact.value,
+                    int(c.confirmed),
+                    c.poc_script,
+                ),
             )
         return c.id
 
@@ -539,9 +640,17 @@ class EngagementStore:
                     "INSERT INTO chains "
                     "(id, engagement_id, name, description, steps, confidence, impact, confirmed, poc_script) "
                     "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
-                    (c.id, eng_id, c.name, c.description,
-                     json.dumps([s.model_dump() for s in c.steps]),
-                     c.confidence, c.impact.value, int(c.confirmed), c.poc_script),
+                    (
+                        c.id,
+                        eng_id,
+                        c.name,
+                        c.description,
+                        json.dumps([s.model_dump() for s in c.steps]),
+                        c.confidence,
+                        c.impact.value,
+                        int(c.confirmed),
+                        c.poc_script,
+                    ),
                 )
 
     def get_chains(self, eng_id: str) -> list[AttackChain]:

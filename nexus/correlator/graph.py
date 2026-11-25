@@ -32,7 +32,9 @@ _ACTION_TO_STATES: dict[str, tuple[str, ...]] = {
 
 
 class ChainBuilderLike(Protocol):
-    def find_attack_paths(self, start: str, goal: str, max_paths: int = 5) -> list[list[dict[str, Any]]]: ...
+    def find_attack_paths(
+        self, start: str, goal: str, max_paths: int = 5
+    ) -> list[list[dict[str, Any]]]: ...
 
 
 class ExpertEngineLike(Protocol):
@@ -82,9 +84,18 @@ def build_attack_chains(
         if "xss" in title_l or "cwe-79" in cwe_l:
             states.add("vuln_xss")
             states.add("xss_found")
-        if re.search(r"\brce\b", title_l) or "remote code" in title_l or "remote command" in title_l:
+        if (
+            re.search(r"\brce\b", title_l)
+            or "remote code" in title_l
+            or "remote command" in title_l
+        ):
             states.add("vuln_rce")
-        if "lfi" in title_l or "file inclusion" in title_l or "path traversal" in title_l or "cwe-22" in cwe_l:
+        if (
+            "lfi" in title_l
+            or "file inclusion" in title_l
+            or "path traversal" in title_l
+            or "cwe-22" in cwe_l
+        ):
             states.add("vuln_lfi")
             states.add("lfi_found")
         if "ssti" in title_l or "template injection" in title_l:
@@ -138,22 +149,31 @@ def build_attack_chains(
                     action = step_dict.get("action", "") or step_dict.get("to", "")
                     from_node = step_dict.get("from", "")
                     to_node = step_dict.get("to", "")
-                    related = _find_related_finding(findings, from_node) or _find_related_finding(findings, to_node)
-                    steps.append(ChainStep(
-                        order=i,
-                        action=f"{action} ({from_node} -> {to_node})" if from_node and to_node else action,
-                        tool=step_dict.get("tool") or (related.tool_source if related else "manual"),
-                        target=related.host if related else "",
-                        finding_id=related.id if related else "",
-                        result=to_node,
-                    ))
+                    related = _find_related_finding(findings, from_node) or _find_related_finding(
+                        findings, to_node
+                    )
+                    steps.append(
+                        ChainStep(
+                            order=i,
+                            action=f"{action} ({from_node} -> {to_node})"
+                            if from_node and to_node
+                            else action,
+                            tool=step_dict.get("tool")
+                            or (related.tool_source if related else "manual"),
+                            target=related.host if related else "",
+                            finding_id=related.id if related else "",
+                            result=to_node,
+                        )
+                    )
 
                 chain = AttackChain(
                     name=f"{start_state} → {goal}",
                     description=f"Attack path from {start_state} to {goal} via {len(steps)} steps",
                     steps=steps,
                     confidence=round(max(0.1, min(1.0, 1.0 / (1.0 + cost * 0.1))), 2),
-                    impact=Severity.CRITICAL if goal in ("rce_achieved", "privesc_achieved") else Severity.HIGH,
+                    impact=Severity.CRITICAL
+                    if goal in ("rce_achieved", "privesc_achieved")
+                    else Severity.HIGH,
                 )
                 chains.append(chain)
 

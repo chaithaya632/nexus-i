@@ -4,20 +4,20 @@ from __future__ import annotations
 
 import json
 from unittest.mock import MagicMock, patch
+
 import httpx
 
-from nexus.ai.ollama_client import OllamaClient, RECOMMENDED_MODELS, matches_model_name
+from nexus.ai.boost import AIBoost
+from nexus.ai.guard import AIGuard, GuardResult
+from nexus.ai.ollama_client import RECOMMENDED_MODELS, OllamaClient, matches_model_name
 from nexus.ai.prompts import (
     SECURITY_ANALYST_SYSTEM,
-    finding_analysis_prompt,
     chain_analysis_prompt,
     executive_summary_prompt,
     exploit_suggestion_prompt,
+    finding_analysis_prompt,
     remediation_prompt,
 )
-from nexus.ai.guard import AIGuard, GuardResult
-from nexus.ai.boost import AIBoost
-
 
 # ── OllamaClient tests (mocked HTTP) ─────────────────────────────
 
@@ -139,7 +139,11 @@ class TestPrompts:
 
     def test_executive_summary_prompt(self):
         prompt = executive_summary_prompt(
-            "example.com", 42, {"critical": 3, "high": 10, "medium": 20}, 5, 2,
+            "example.com",
+            42,
+            {"critical": 3, "high": 10, "medium": 20},
+            5,
+            2,
         )
         assert "example.com" in prompt
         assert "42" in prompt
@@ -177,7 +181,9 @@ class TestPrompts:
 class TestAIGuard:
     def test_valid_text_passes(self):
         guard = AIGuard()
-        result = guard.validate("This is a detailed finding analysis with specific remediation steps. " * 3)
+        result = guard.validate(
+            "This is a detailed finding analysis with specific remediation steps. " * 3
+        )
         assert result.confidence >= 0.9
         assert len(result.warnings) == 0
 
@@ -241,7 +247,9 @@ class TestAIGuard:
     def test_guard_rce_word_boundary(self):
         guard = AIGuard()
         # "source" contains "rce" substring, must NOT satisfy RCE check
-        res = guard.validate("This is a critical issue found in the source configuration of the service.")
+        res = guard.validate(
+            "This is a critical issue found in the source configuration of the service."
+        )
         assert any("critical severity" in w for w in res.warnings)
 
 
@@ -291,7 +299,11 @@ class TestAIBoost:
 
     @patch.object(OllamaClient, "is_alive", return_value=True)
     @patch.object(OllamaClient, "list_models", return_value=["dolphin-mistral:latest"])
-    @patch.object(OllamaClient, "generate", return_value="Detailed analysis of the SQL injection vulnerability showing high risk. Remediation: use parameterized queries.")
+    @patch.object(
+        OllamaClient,
+        "generate",
+        return_value="Detailed analysis of the SQL injection vulnerability showing high risk. Remediation: use parameterized queries.",
+    )
     def test_enhance_finding_with_mocked_ai(self, mock_gen, mock_models, mock_alive):
         boost = AIBoost(model_name="dolphin-mistral")
         boost.connect()
@@ -304,7 +316,11 @@ class TestAIBoost:
 
     @patch.object(OllamaClient, "is_alive", return_value=True)
     @patch.object(OllamaClient, "list_models", return_value=["dolphin-mistral:latest"])
-    @patch.object(OllamaClient, "generate", return_value="The overall security posture is concerning with 3 critical vulnerabilities requiring immediate remediation.")
+    @patch.object(
+        OllamaClient,
+        "generate",
+        return_value="The overall security posture is concerning with 3 critical vulnerabilities requiring immediate remediation.",
+    )
     def test_executive_summary_with_mocked_ai(self, mock_gen, mock_models, mock_alive):
         boost = AIBoost(model_name="dolphin-mistral")
         boost.connect()

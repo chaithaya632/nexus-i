@@ -25,8 +25,7 @@ def render_pdf(data: ReportData, output_path: str) -> None:
         from weasyprint import HTML  # type: ignore[import-untyped]
     except ImportError:
         raise ImportError(
-            "WeasyPrint is required for PDF reports. "
-            "Install it with: pip install weasyprint"
+            "WeasyPrint is required for PDF reports. Install it with: pip install weasyprint"
         )
 
     from nexus.reporter.html import render_html

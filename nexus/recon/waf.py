@@ -13,9 +13,7 @@ log = logging.getLogger("nexus.recon.waf")
 
 # Pattern to extract WAF name from wafw00f output.
 # Example line: "[*] The site https://example.com is behind Cloudflare (Cloudflare Inc.) WAF."
-_WAF_PATTERN = re.compile(
-    r"is behind\s+(.+?)(?:\s+WAF|\s+\()", re.IGNORECASE
-)
+_WAF_PATTERN = re.compile(r"is behind\s+(.+?)(?:\s+WAF|\s+\()", re.IGNORECASE)
 _NO_WAF_PATTERN = re.compile(r"No WAF detected", re.IGNORECASE)
 
 
@@ -93,17 +91,19 @@ async def detect_waf(
                 waf = result.get("waf")
                 if waf:
                     t.waf_detected = waf
-                    findings.append(Finding(
-                        host=t.host,
-                        title=f"WAF Detected: {waf}",
-                        description=(
-                            f"A Web Application Firewall ({waf}) was detected "
-                            f"protecting {t.host}.  Scan/exploit techniques may "
-                            f"need WAF bypass adjustments."
-                        ),
-                        severity=Severity.INFO,
-                        tool_source="wafw00f",
-                    ))
+                    findings.append(
+                        Finding(
+                            host=t.host,
+                            title=f"WAF Detected: {waf}",
+                            description=(
+                                f"A Web Application Firewall ({waf}) was detected "
+                                f"protecting {t.host}.  Scan/exploit techniques may "
+                                f"need WAF bypass adjustments."
+                            ),
+                            severity=Severity.INFO,
+                            tool_source="wafw00f",
+                        )
+                    )
                     log.info("WAF detected on %s: %s", t.host, waf)
                     break
             except Exception as e:

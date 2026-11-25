@@ -5,7 +5,6 @@ from __future__ import annotations
 import json
 import logging
 from pathlib import Path
-from typing import Any
 
 from nexus.db.models import Finding, Severity
 from nexus.recon.runner import (
@@ -44,6 +43,7 @@ def _resolve_wordlist(wordlist: str, wordlist_name: str) -> str:
         if Path(candidate).is_file():
             return candidate
     return preferred
+
 
 # Stealth-aware thread counts, rate limits (req/s), and pause delays (seconds)
 _STEALTH_THREADS: dict[str, int] = {
@@ -93,14 +93,21 @@ async def ffuf_scan(
     json_path = ToolRunner.make_temp_path(".json")
 
     args = [
-        "-u", clean_url,
-        "-w", wl,
-        "-t", str(threads),
-        "-rate", str(rate_limit),
+        "-u",
+        clean_url,
+        "-w",
+        wl,
+        "-t",
+        str(threads),
+        "-rate",
+        str(rate_limit),
         "-ac",  # soft-404 auto-calibration
-        "-mc", clean_match_codes,
-        "-o", json_path,
-        "-of", "json",
+        "-mc",
+        clean_match_codes,
+        "-o",
+        json_path,
+        "-of",
+        "json",
         "-s",  # silent mode
     ]
     if pause_delay:
@@ -159,19 +166,21 @@ async def ffuf_scan(
             severity = Severity.INFO
             title_prefix = "Redirect"
 
-        findings.append(Finding(
-            host=base_host,
-            port=base_port,
-            protocol="https" if target_url.startswith("https://") else "http",
-            title=f"{title_prefix}: {url}",
-            description=(
-                f"Discovered endpoint via directory brute-force.  "
-                f"Status: {status}, Length: {length}, Words: {words}"
-            ),
-            severity=severity,
-            tool_source="ffuf",
-            evidence=f"URL: {url}\nStatus: {status}\nContent-Length: {length}\nWords: {words}",
-        ))
+        findings.append(
+            Finding(
+                host=base_host,
+                port=base_port,
+                protocol="https" if target_url.startswith("https://") else "http",
+                title=f"{title_prefix}: {url}",
+                description=(
+                    f"Discovered endpoint via directory brute-force.  "
+                    f"Status: {status}, Length: {length}, Words: {words}"
+                ),
+                severity=severity,
+                tool_source="ffuf",
+                evidence=f"URL: {url}\nStatus: {status}\nContent-Length: {length}\nWords: {words}",
+            )
+        )
 
     log.info("ffuf found %d endpoints on %s", len(findings), target_url)
     return findings

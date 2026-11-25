@@ -19,13 +19,15 @@ log = logging.getLogger("nexus.scanner.openapi")
 
 _PATH_PARAM_RE = re.compile(r"\{([^}]+)\}")
 _WRITE_METHODS = frozenset({"post", "put", "patch", "delete"})
-_BLOCKED_METADATA_HOSTS = frozenset({
-    "localhost",
-    "metadata",
-    "metadata.google.internal",
-    "metadata.goog",
-    "instance-data",
-})
+_BLOCKED_METADATA_HOSTS = frozenset(
+    {
+        "localhost",
+        "metadata",
+        "metadata.google.internal",
+        "metadata.goog",
+        "instance-data",
+    }
+)
 
 
 def _is_ssrf_unsafe_server_url(srv_url: str, *, allowed_host: str = "") -> bool:
@@ -42,7 +44,14 @@ def _is_ssrf_unsafe_server_url(srv_url: str, *, allowed_host: str = "") -> bool:
         return True
     try:
         ip = ipaddress.ip_address(host)
-        if ip.is_link_local or ip.is_loopback or ip.is_private or ip.is_reserved or ip.is_multicast or ip.is_unspecified:
+        if (
+            ip.is_link_local
+            or ip.is_loopback
+            or ip.is_private
+            or ip.is_reserved
+            or ip.is_multicast
+            or ip.is_unspecified
+        ):
             return True
     except ValueError:
         pass
@@ -51,6 +60,7 @@ def _is_ssrf_unsafe_server_url(srv_url: str, *, allowed_host: str = "") -> bool:
 
 def _substitute_path_params(path: str) -> str:
     """Replace OpenAPI path parameters like `{user_id}` with deterministic sample values."""
+
     def _repl(match: re.Match[str]) -> str:
         name = match.group(1).lower()
         if "uuid" in name:
@@ -81,7 +91,9 @@ def parse_openapi_spec(spec_path: str | Path, base_url_override: str = "") -> di
     title = str(info.get("title", p.name))
     version = str(info.get("version", ""))
 
-    allowed_base_host = (urlparse(base_url_override).hostname or "").strip().lower() if base_url_override else ""
+    allowed_base_host = (
+        (urlparse(base_url_override).hostname or "").strip().lower() if base_url_override else ""
+    )
     base_urls: list[str] = []
     # OpenAPI 3.x servers
     servers = spec.get("servers")
@@ -95,7 +107,9 @@ def parse_openapi_spec(spec_path: str | Path, base_url_override: str = "") -> di
                         continue
                     base_urls.append(srv_url.rstrip("/"))
                 elif srv_url.startswith("/") and base_url_override:
-                    joined = urljoin(base_url_override.rstrip("/") + "/", srv_url.lstrip("/")).rstrip("/")
+                    joined = urljoin(
+                        base_url_override.rstrip("/") + "/", srv_url.lstrip("/")
+                    ).rstrip("/")
                     base_urls.append(joined)
 
     # Swagger 2.0 host + basePath + schemes
@@ -179,7 +193,9 @@ def parse_openapi_spec(spec_path: str | Path, base_url_override: str = "") -> di
     }
 
 
-def audit_openapi_spec(spec_path: str | Path, base_url_override: str = "") -> tuple[list[str], list[Finding]]:
+def audit_openapi_spec(
+    spec_path: str | Path, base_url_override: str = ""
+) -> tuple[list[str], list[Finding]]:
     """Extract target API URLs and identify security schema weaknesses from an OpenAPI spec."""
     parsed = parse_openapi_spec(spec_path, base_url_override=base_url_override)
     findings: list[Finding] = []
@@ -188,57 +204,69 @@ def audit_openapi_spec(spec_path: str | Path, base_url_override: str = "") -> tu
     host, port, proto = parse_url_target(anchor_url) if anchor_url else ("api-spec", None, "https")
 
     if not parsed["has_security_schemes"] and parsed["endpoints"]:
-        findings.append(Finding(
-            host=host,
-            port=port,
-            protocol=proto,
-            title="OpenAPI: No Security Schemes Defined",
-            description=(
-                f"Specification '{parsed['title']}' defines {len(parsed['endpoints'])} API operation(s) "
-                f"without any securitySchemes or securityDefinitions."
-            ),
-            severity=Severity.LOW,
-            cwe_id="CWE-306",
-            tool_source="openapi",
-            evidence=f"Spec: {Path(spec_path).name} ({len(parsed['endpoints'])} endpoints)",
-        ))
+        findings.append(
+            Finding(
+                host=host,
+                port=port,
+                protocol=proto,
+                title="OpenAPI: No Security Schemes Defined",
+                description=(
+                    f"Specification '{parsed['title']}' defines {len(parsed['endpoints'])} API operation(s) "
+                    f"without any securitySchemes or securityDefinitions."
+                ),
+                severity=Severity.LOW,
+                cwe_id="CWE-306",
+                tool_source="openapi",
+                evidence=f"Spec: {Path(spec_path).name} ({len(parsed['endpoints'])} endpoints)",
+            )
+        )
 
     unauth_writes = [
-        ep for ep in parsed["unauthenticated_endpoints"]
-        if ep["method"].lower() in _WRITE_METHODS
+        ep for ep in parsed["unauthenticated_endpoints"] if ep["method"].lower() in _WRITE_METHODS
     ]
     if unauth_writes:
         sample = ", ".join(f"{e['method']} {e['path']}" for e in unauth_writes[:8])
-        findings.append(Finding(
-            host=host,
-            port=port,
-            protocol=proto,
-            title=f"OpenAPI: {len(unauth_writes)} State-Changing Endpoints Lack Security Requirement",
-            description=(
-                f"Write operations in '{parsed['title']}' do not require authentication in the API schema."
-            ),
-            severity=Severity.MEDIUM,
-            cwe_id="CWE-306",
-            tool_source="openapi",
-            evidence=f"Endpoints: {sample}",
-        ))
+        findings.append(
+            Finding(
+                host=host,
+                port=port,
+                protocol=proto,
+                title=f"OpenAPI: {len(unauth_writes)} State-Changing Endpoints Lack Security Requirement",
+                description=(
+                    f"Write operations in '{parsed['title']}' do not require authentication in the API schema."
+                ),
+                severity=Severity.MEDIUM,
+                cwe_id="CWE-306",
+                tool_source="openapi",
+                evidence=f"Endpoints: {sample}",
+            )
+        )
 
-    insecure_servers = [u for u in parsed["base_urls"] if u.startswith("http://") and "localhost" not in u and "127.0.0.1" not in u]
+    insecure_servers = [
+        u
+        for u in parsed["base_urls"]
+        if u.startswith("http://") and "localhost" not in u and "127.0.0.1" not in u
+    ]
     if insecure_servers:
-        findings.append(Finding(
-            host=host,
-            port=port,
-            protocol=proto,
-            title="OpenAPI: Cleartext HTTP Server URL Declared",
-            description="API specification exposes non-localhost HTTP endpoint URL(s) without TLS.",
-            severity=Severity.LOW,
-            cwe_id="CWE-319",
-            tool_source="openapi",
-            evidence="Servers: " + ", ".join(insecure_servers[:5]),
-        ))
+        findings.append(
+            Finding(
+                host=host,
+                port=port,
+                protocol=proto,
+                title="OpenAPI: Cleartext HTTP Server URL Declared",
+                description="API specification exposes non-localhost HTTP endpoint URL(s) without TLS.",
+                severity=Severity.LOW,
+                cwe_id="CWE-319",
+                tool_source="openapi",
+                evidence="Servers: " + ", ".join(insecure_servers[:5]),
+            )
+        )
 
     log.info(
         "Parsed OpenAPI '%s': %d URLs, %d endpoints, %d spec findings",
-        parsed["title"], len(parsed["urls"]), len(parsed["endpoints"]), len(findings),
+        parsed["title"],
+        len(parsed["urls"]),
+        len(parsed["endpoints"]),
+        len(findings),
     )
     return parsed["urls"], findings

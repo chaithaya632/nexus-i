@@ -18,18 +18,53 @@ log = logging.getLogger("nexus.recon.dns")
 RECORD_TYPES = ["a", "aaaa", "cname", "mx", "ns", "txt", "soa", "ptr"]
 _DEFAULT_FORWARD_TYPES = ["a", "aaaa", "cname", "mx", "ns", "txt"]
 
-_MULTI_PART_TLDS = frozenset({
-    "co.uk", "org.uk", "ac.uk", "gov.uk", "net.uk", "me.uk",
-    "co.jp", "ne.jp", "or.jp", "ac.jp", "go.jp",
-    "com.au", "net.au", "org.au", "edu.au", "gov.au",
-    "com.br", "net.br", "org.br",
-    "com.cn", "net.cn", "org.cn", "gov.cn",
-    "co.in", "net.in", "org.in", "gov.in", "ac.in",
-    "co.nz", "net.nz", "org.nz",
-    "co.za", "org.za", "net.za",
-    "com.sg", "com.hk", "com.tw", "com.mx", "com.ar",
-    "co.kr", "com.tr", "com.ua", "com.pl",
-})
+_MULTI_PART_TLDS = frozenset(
+    {
+        "co.uk",
+        "org.uk",
+        "ac.uk",
+        "gov.uk",
+        "net.uk",
+        "me.uk",
+        "co.jp",
+        "ne.jp",
+        "or.jp",
+        "ac.jp",
+        "go.jp",
+        "com.au",
+        "net.au",
+        "org.au",
+        "edu.au",
+        "gov.au",
+        "com.br",
+        "net.br",
+        "org.br",
+        "com.cn",
+        "net.cn",
+        "org.cn",
+        "gov.cn",
+        "co.in",
+        "net.in",
+        "org.in",
+        "gov.in",
+        "ac.in",
+        "co.nz",
+        "net.nz",
+        "org.nz",
+        "co.za",
+        "org.za",
+        "net.za",
+        "com.sg",
+        "com.hk",
+        "com.tw",
+        "com.mx",
+        "com.ar",
+        "co.kr",
+        "com.tr",
+        "com.ua",
+        "com.pl",
+    }
+)
 
 
 def _extract_root_domain(host: str) -> str:
@@ -145,7 +180,7 @@ async def dns_zone_transfer(
         out = await ToolRunner.run("dig", args, timeout=timeout)
 
         # Zone transfer succeeded if we get actual records (not just SOA or error)
-        lines = [l for l in out.lines if not l.startswith(";") and l.strip()]
+        lines = [line for line in out.lines if not line.startswith(";") and line.strip()]
         record_count = len(lines)
 
         if record_count > 2:  # SOA + at least some real records
@@ -208,14 +243,16 @@ async def enumerate_dns(
                 if vals:
                     detail_parts.append(f"{rtype.upper()}: {', '.join(str(v) for v in vals[:5])}")
             if detail_parts:
-                findings.append(Finding(
-                    host=host,
-                    title=f"DNS Records Enumerated ({host})",
-                    description=f"DNS enumeration returned structured records for {host}.",
-                    severity=Severity.INFO,
-                    tool_source="dnsx",
-                    evidence="\n".join(detail_parts),
-                ))
+                findings.append(
+                    Finding(
+                        host=host,
+                        title=f"DNS Records Enumerated ({host})",
+                        description=f"DNS enumeration returned structured records for {host}.",
+                        severity=Severity.INFO,
+                        tool_source="dnsx",
+                        evidence="\n".join(detail_parts),
+                    )
+                )
 
         for t in targets:
             if not t.ip and t.host.lower() in ip_map:

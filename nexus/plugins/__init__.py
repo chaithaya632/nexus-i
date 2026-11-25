@@ -1,4 +1,4 @@
-﻿"""NEXUS Plugin System — load community and custom scanner/recon extensions.
+"""NEXUS Plugin System — load community and custom scanner/recon extensions.
 
 Plugins are Python modules placed in `nexus/plugins/community/` or a custom
 directory.  Each plugin must expose a `register(registry)` function that
@@ -32,9 +32,10 @@ import importlib.util
 import inspect
 import logging
 import sys
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Awaitable, Callable
+from typing import Any
 
 log = logging.getLogger("nexus.plugins")
 
@@ -48,6 +49,7 @@ PostHookFunc = Callable[..., Any]
 @dataclass
 class PluginInfo:
     """Metadata about a loaded plugin."""
+
     name: str
     version: str
     plugin_type: str
@@ -147,10 +149,7 @@ class PluginRegistry:
     def post_hooks(self) -> list[PostHookFunc]:
         if not self._post_hook_owners:
             return list(self._post_hooks)
-        return [
-            fn for owner, fn in self._post_hook_owners
-            if self.is_plugin_enabled(owner)
-        ]
+        return [fn for owner, fn in self._post_hook_owners if self.is_plugin_enabled(owner)]
 
     async def run_post_hooks(self, **kwargs: Any) -> list[Exception]:
         """Invoke all enabled post-hooks, awaiting async hooks cleanly."""

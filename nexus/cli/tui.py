@@ -8,12 +8,11 @@ from rich.console import Console
 from rich.layout import Layout
 from rich.live import Live
 from rich.panel import Panel
-from rich.progress import Progress, SpinnerColumn, TextColumn, BarColumn, TaskProgressColumn
+from rich.progress import BarColumn, Progress, SpinnerColumn, TaskProgressColumn, TextColumn
 from rich.table import Table
 from rich.text import Text
 
 from nexus.db.models import Severity
-
 
 console = Console()
 
@@ -73,9 +72,13 @@ def make_status_panel(
 ) -> Panel:
     """Create the status info panel."""
     phase_icons = {
-        "init": "⚙️", "recon": "🔍", "scan": "🔎",
-        "correlate": "🧠", "exploit": "💥",
-        "report": "📄", "complete": "✅",
+        "init": "⚙️",
+        "recon": "🔍",
+        "scan": "🔎",
+        "correlate": "🧠",
+        "exploit": "💥",
+        "report": "📄",
+        "complete": "✅",
     }
     icon = phase_icons.get(phase, "⚙️")
 
@@ -132,8 +135,13 @@ def make_severity_bar(counts: dict[str, int]) -> Panel:
     """Create a visual severity distribution bar."""
     total = sum(counts.values()) or 1
     parts = []
-    for sev_name, color in [("critical", "red"), ("high", "bright_red"),
-                             ("medium", "yellow"), ("low", "blue"), ("info", "dim")]:
+    for sev_name, color in [
+        ("critical", "red"),
+        ("high", "bright_red"),
+        ("medium", "yellow"),
+        ("low", "blue"),
+        ("info", "dim"),
+    ]:
         c = counts.get(sev_name, 0)
         if c > 0:
             width = max(1, int((c / total) * 40))
@@ -192,20 +200,24 @@ def render_tui(
     """Render a full TUI frame."""
     layout = make_layout()
 
-    layout["header"].update(Panel(
-        Text("NEXUS — Autonomous Penetration Testing", justify="center", style="bold cyan"),
-        border_style="cyan",
-    ))
+    layout["header"].update(
+        Panel(
+            Text("NEXUS — Autonomous Penetration Testing", justify="center", style="bold cyan"),
+            border_style="cyan",
+        )
+    )
 
     layout["status"].update(make_status_panel(target, phase, tier, stealth, elapsed))
     layout["severity"].update(make_severity_bar(severity_counts or {}))
     layout["right"].update(make_findings_table(findings or []))
 
     footer_msg = progress_text or "Press Ctrl+C to abort | 'nexus engagements list' to see all"
-    layout["footer"].update(Panel(
-        Text(footer_msg, justify="center", style="dim"),
-        border_style="dim",
-    ))
+    layout["footer"].update(
+        Panel(
+            Text(footer_msg, justify="center", style="dim"),
+            border_style="dim",
+        )
+    )
 
     return layout
 
@@ -223,7 +235,7 @@ class LiveEngagementTUI:
         self.progress_text = ""
         self._live: Live | None = None
 
-    def __enter__(self) -> "LiveEngagementTUI":
+    def __enter__(self) -> LiveEngagementTUI:
         self._live = Live(self.render(), console=console, refresh_per_second=4)
         self._live.__enter__()
         return self

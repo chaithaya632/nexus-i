@@ -6,7 +6,7 @@ from pathlib import Path
 
 import pytest
 
-from nexus.core.config import NexusConfig, Tier, StealthLevel
+from nexus.core.config import NexusConfig, StealthLevel, Tier
 from nexus.core.engine import NexusEngine
 
 
@@ -105,7 +105,10 @@ class TestStealthMapping:
         ],
     )
     def test_stealth_level_maps(
-        self, tmp_path: Path, level: StealthLevel, expected_profile: str,
+        self,
+        tmp_path: Path,
+        level: StealthLevel,
+        expected_profile: str,
     ) -> None:
         cfg = NexusConfig(
             data_dir=tmp_path / f"s_{level.value}",
@@ -123,7 +126,9 @@ class TestStealthMapping:
 class TestEngineIntegrationContracts:
     """Tests for scope wiring, FK ordering in recon, correlate persistence, and plugins."""
 
-    def test_scope_propagates_to_exploit_executor(self, engine: NexusEngine, tmp_path: Path) -> None:
+    def test_scope_propagates_to_exploit_executor(
+        self, engine: NexusEngine, tmp_path: Path
+    ) -> None:
         scope_file = tmp_path / "scope.yaml"
         scope_file.write_text("allowed_domains:\n  - example.com\n", encoding="utf-8")
 
@@ -135,7 +140,9 @@ class TestEngineIntegrationContracts:
         assert not engine.scope.is_in_scope("evil.com")
 
     @pytest.mark.asyncio
-    async def test_run_recon_rejects_out_of_scope_target(self, engine: NexusEngine, tmp_path: Path) -> None:
+    async def test_run_recon_rejects_out_of_scope_target(
+        self, engine: NexusEngine, tmp_path: Path
+    ) -> None:
         scope_file = tmp_path / "scope.yaml"
         scope_file.write_text("allowed_domains:\n  - allowed.com\n", encoding="utf-8")
         eng = engine.create_engagement("allowed.com", scope_file=str(scope_file))
@@ -145,23 +152,37 @@ class TestEngineIntegrationContracts:
 
     @pytest.mark.asyncio
     async def test_run_recon_ports_and_correlate_persistence(self, engine: NexusEngine) -> None:
-        from unittest.mock import patch, AsyncMock
+        from unittest.mock import AsyncMock, patch
+
         from nexus.db.models import Finding, Port, Severity, Target
 
         eng = engine.create_engagement("app.local")
         fake_nmap = {
-            "targets": [Target(host="app.local", ip="127.0.0.1", is_live=True, os_guess="Linux 6.x")],
-            "ports": [Port(port=8080, protocol="tcp", state="open", service="http", version="Apache/2.4")],
-            "findings": [Finding(
-                host="app.local", port=8080, protocol="http",
-                title="SQL Injection in login", cwe_id="CWE-89",
-                severity=Severity.HIGH, tool_source="nmap",
-            )],
+            "targets": [
+                Target(host="app.local", ip="127.0.0.1", is_live=True, os_guess="Linux 6.x")
+            ],
+            "ports": [
+                Port(port=8080, protocol="tcp", state="open", service="http", version="Apache/2.4")
+            ],
+            "findings": [
+                Finding(
+                    host="app.local",
+                    port=8080,
+                    protocol="http",
+                    title="SQL Injection in login",
+                    cwe_id="CWE-89",
+                    severity=Severity.HIGH,
+                    tool_source="nmap",
+                )
+            ],
             "raw_xml": "",
         }
 
         with (
-            patch("nexus.core.engine.enumerate_subdomains", AsyncMock(return_value=[Target(host="app.local")])),
+            patch(
+                "nexus.core.engine.enumerate_subdomains",
+                AsyncMock(return_value=[Target(host="app.local")]),
+            ),
             patch("nexus.core.engine.enumerate_dns", AsyncMock(side_effect=lambda ts: (ts, []))),
             patch("nexus.core.engine.nmap_scan", AsyncMock(return_value=fake_nmap)),
             patch("nexus.core.engine.detect_tech_stack", AsyncMock(side_effect=lambda ts: ts)),
@@ -194,7 +215,8 @@ class TestEngineIntegrationContracts:
 
     @pytest.mark.asyncio
     async def test_run_recon_parallel_and_banner_cve(self, engine: NexusEngine) -> None:
-        from unittest.mock import patch, AsyncMock
+        from unittest.mock import AsyncMock, patch
+
         from nexus.core.config import ScanProfile
         from nexus.db.models import Port, Target
 
@@ -205,13 +227,29 @@ class TestEngineIntegrationContracts:
             if host == "web.multi.local":
                 return {
                     "targets": [Target(host="web.multi.local", ip="10.0.0.10", is_live=True)],
-                    "ports": [Port(port=80, protocol="tcp", state="open", service="http", version="Apache/2.4.49")],
+                    "ports": [
+                        Port(
+                            port=80,
+                            protocol="tcp",
+                            state="open",
+                            service="http",
+                            version="Apache/2.4.49",
+                        )
+                    ],
                     "findings": [],
                     "raw_xml": "",
                 }
             return {
                 "targets": [Target(host="ssh.multi.local", ip="10.0.0.11", is_live=True)],
-                "ports": [Port(port=22, protocol="tcp", state="open", service="ssh", version="OpenSSH 8.9p1")],
+                "ports": [
+                    Port(
+                        port=22,
+                        protocol="tcp",
+                        state="open",
+                        service="ssh",
+                        version="OpenSSH 8.9p1",
+                    )
+                ],
                 "findings": [],
                 "raw_xml": "",
             }
@@ -219,12 +257,16 @@ class TestEngineIntegrationContracts:
         with (
             patch(
                 "nexus.core.engine.enumerate_subdomains",
-                AsyncMock(return_value=[Target(host="web.multi.local"), Target(host="ssh.multi.local")]),
+                AsyncMock(
+                    return_value=[Target(host="web.multi.local"), Target(host="ssh.multi.local")]
+                ),
             ),
             patch("nexus.core.engine.enumerate_dns", AsyncMock(side_effect=lambda ts: (ts, []))),
             patch("nexus.core.engine.nmap_scan", AsyncMock(side_effect=_fake_nmap)),
             patch("nexus.core.engine.detect_tech_stack", AsyncMock(side_effect=lambda ts: ts)),
-            patch("nexus.core.engine.detect_waf", AsyncMock(side_effect=lambda ts: (ts, []))) as mock_waf,
+            patch(
+                "nexus.core.engine.detect_waf", AsyncMock(side_effect=lambda ts: (ts, []))
+            ) as mock_waf,
             patch("nexus.core.engine.gather_osint", AsyncMock(return_value=([], []))) as mock_osint,
         ):
             findings = await engine.run_recon(eng.id, "multi.local")
@@ -239,7 +281,8 @@ class TestEngineIntegrationContracts:
 
     @pytest.mark.asyncio
     async def test_run_scan_dynamic_routing_and_waf_throttle(self, engine: NexusEngine) -> None:
-        from unittest.mock import patch, AsyncMock
+        from unittest.mock import AsyncMock, patch
+
         from nexus.core.config import ScanProfile
         from nexus.db.models import Finding, Port, Severity, Target
 
@@ -254,17 +297,39 @@ class TestEngineIntegrationContracts:
             waf_detected="Cloudflare",
         )
         engine.db.add_target(t)
-        engine.db.add_port(Port(target_id=t.id, port=443, protocol="tcp", state="open", service="https"))
-        engine.db.add_port(Port(target_id=t.id, port=22, protocol="tcp", state="open", service="ssh"))
+        engine.db.add_port(
+            Port(target_id=t.id, port=443, protocol="tcp", state="open", service="https")
+        )
+        engine.db.add_port(
+            Port(target_id=t.id, port=22, protocol="tcp", state="open", service="ssh")
+        )
 
         nuclei_mock = AsyncMock(return_value=[])
         ffuf_mock = AsyncMock(return_value=[])
-        tls_mock = AsyncMock(return_value=[
-            Finding(host="web.local", port=443, protocol="https", title="TLS Check", severity=Severity.LOW, tool_source="sslyze")
-        ])
-        ssh_mock = AsyncMock(return_value=[
-            Finding(host="web.local", port=22, protocol="ssh", title="SSH Check", severity=Severity.LOW, tool_source="nmap_ssh")
-        ])
+        tls_mock = AsyncMock(
+            return_value=[
+                Finding(
+                    host="web.local",
+                    port=443,
+                    protocol="https",
+                    title="TLS Check",
+                    severity=Severity.LOW,
+                    tool_source="sslyze",
+                )
+            ]
+        )
+        ssh_mock = AsyncMock(
+            return_value=[
+                Finding(
+                    host="web.local",
+                    port=22,
+                    protocol="ssh",
+                    title="SSH Check",
+                    severity=Severity.LOW,
+                    tool_source="nmap_ssh",
+                )
+            ]
+        )
 
         with (
             patch(
@@ -294,6 +359,7 @@ class TestEngineIntegrationContracts:
 
         # Audit log should capture routing_plan with RuleEngine decisions
         import json
+
         ok, _ = engine.audit.verify_chain()
         assert ok is True
         entries = [
@@ -311,8 +377,11 @@ class TestEngineIntegrationContracts:
         assert "waf_cloudflare" in rule_names
 
     @pytest.mark.asyncio
-    async def test_run_scan_network_profile_skips_web_and_runs_ssh_tls(self, engine: NexusEngine) -> None:
-        from unittest.mock import patch, AsyncMock
+    async def test_run_scan_network_profile_skips_web_and_runs_ssh_tls(
+        self, engine: NexusEngine
+    ) -> None:
+        from unittest.mock import AsyncMock, patch
+
         from nexus.core.config import ScanProfile
         from nexus.db.models import Finding, Port, Severity, Target
 
@@ -320,16 +389,38 @@ class TestEngineIntegrationContracts:
         eng = engine.create_engagement("net.local")
         t = Target(engagement_id=eng.id, host="net.local", ip="10.0.0.30", is_live=True)
         engine.db.add_target(t)
-        engine.db.add_port(Port(target_id=t.id, port=443, protocol="tcp", state="open", service="https"))
-        engine.db.add_port(Port(target_id=t.id, port=22, protocol="tcp", state="open", service="ssh"))
+        engine.db.add_port(
+            Port(target_id=t.id, port=443, protocol="tcp", state="open", service="https")
+        )
+        engine.db.add_port(
+            Port(target_id=t.id, port=22, protocol="tcp", state="open", service="ssh")
+        )
 
         nuclei_mock = AsyncMock(return_value=[])
-        tls_mock = AsyncMock(return_value=[
-            Finding(host="net.local", port=443, protocol="https", title="TLS Test", severity=Severity.LOW, tool_source="sslyze")
-        ])
-        ssh_mock = AsyncMock(return_value=[
-            Finding(host="net.local", port=22, protocol="ssh", title="SSH Test", severity=Severity.LOW, tool_source="nmap_ssh")
-        ])
+        tls_mock = AsyncMock(
+            return_value=[
+                Finding(
+                    host="net.local",
+                    port=443,
+                    protocol="https",
+                    title="TLS Test",
+                    severity=Severity.LOW,
+                    tool_source="sslyze",
+                )
+            ]
+        )
+        ssh_mock = AsyncMock(
+            return_value=[
+                Finding(
+                    host="net.local",
+                    port=22,
+                    protocol="ssh",
+                    title="SSH Test",
+                    severity=Severity.LOW,
+                    tool_source="nmap_ssh",
+                )
+            ]
+        )
 
         with (
             patch("nexus.core.engine.ToolRunner.is_available", return_value=True),
@@ -343,8 +434,11 @@ class TestEngineIntegrationContracts:
         assert {f.tool_source for f in findings} == {"sslyze", "nmap_ssh"}
 
     @pytest.mark.asyncio
-    async def test_engage_resume_skips_completed_phases(self, engine: NexusEngine, tmp_path: Path) -> None:
-        from unittest.mock import patch, AsyncMock
+    async def test_engage_resume_skips_completed_phases(
+        self, engine: NexusEngine, tmp_path: Path
+    ) -> None:
+        from unittest.mock import AsyncMock, patch
+
         from nexus.db.models import EngagementPhase
 
         eng = engine.create_engagement("resume.local")
@@ -360,7 +454,9 @@ class TestEngineIntegrationContracts:
             patch.object(engine, "run_scan", scan_mock),
             patch.object(engine, "run_correlate", correlate_mock),
             patch.object(engine, "run_exploit", exploit_mock),
-            patch("nexus.core.engine.generate_report", return_value=[tmp_path / "r.md"]) as mock_rep,
+            patch(
+                "nexus.core.engine.generate_report", return_value=[tmp_path / "r.md"]
+            ) as mock_rep,
         ):
             resumed_id = await engine.engage(skip_exploit=True, profile="quick", resume_id=eng.id)
 
@@ -374,9 +470,12 @@ class TestEngineIntegrationContracts:
 
     @pytest.mark.asyncio
     async def test_run_scan_wave2_auth_openapi_crawl_headers_and_redaction(
-        self, engine: NexusEngine, tmp_path: Path,
+        self,
+        engine: NexusEngine,
+        tmp_path: Path,
     ) -> None:
-        from unittest.mock import patch, AsyncMock
+        from unittest.mock import AsyncMock, patch
+
         from nexus.core.config import ScanProfile
         from nexus.db.models import Finding, Port, Severity, Target
 
@@ -411,15 +510,38 @@ paths:
         eng = engine.create_engagement("api.local", scope_file=str(scope_file))
         t = Target(engagement_id=eng.id, host="api.local", ip="10.0.0.40", is_live=True)
         engine.db.add_target(t)
-        engine.db.add_port(Port(target_id=t.id, port=443, protocol="tcp", state="open", service="https"))
+        engine.db.add_port(
+            Port(target_id=t.id, port=443, protocol="tcp", state="open", service="https")
+        )
 
-        crawl_mock = AsyncMock(return_value=(
-            ["https://api.local/v1/from-js", "https://evil.external.com/leak"],
-            [Finding(host="api.local", port=443, protocol="https", title="Client-Side Secret Exposed: Test", severity=Severity.MEDIUM, tool_source="crawler")],
-        ))
-        hdr_mock = AsyncMock(return_value=[
-            Finding(host="api.local", port=443, protocol="https", title="HTTP: Missing CSP", severity=Severity.LOW, tool_source="http_headers", confirmed=True),
-        ])
+        crawl_mock = AsyncMock(
+            return_value=(
+                ["https://api.local/v1/from-js", "https://evil.external.com/leak"],
+                [
+                    Finding(
+                        host="api.local",
+                        port=443,
+                        protocol="https",
+                        title="Client-Side Secret Exposed: Test",
+                        severity=Severity.MEDIUM,
+                        tool_source="crawler",
+                    )
+                ],
+            )
+        )
+        hdr_mock = AsyncMock(
+            return_value=[
+                Finding(
+                    host="api.local",
+                    port=443,
+                    protocol="https",
+                    title="HTTP: Missing CSP",
+                    severity=Severity.LOW,
+                    tool_source="http_headers",
+                    confirmed=True,
+                ),
+            ]
+        )
         nuclei_mock = AsyncMock(return_value=[])
         ffuf_mock = AsyncMock(return_value=[])
         tls_mock = AsyncMock(return_value=[])
@@ -459,7 +581,9 @@ paths:
         assert len(findings) >= 3  # OpenAPI, crawler secret, http_headers
 
     @pytest.mark.asyncio
-    async def test_run_correlate_applies_nexusignore_baseline(self, engine: NexusEngine, tmp_path: Path) -> None:
+    async def test_run_correlate_applies_nexusignore_baseline(
+        self, engine: NexusEngine, tmp_path: Path
+    ) -> None:
         from nexus.db.models import Finding, Severity
 
         ign = tmp_path / ".nexusignore"
@@ -467,14 +591,30 @@ paths:
         engine.config.ignore_file = ign
 
         eng = engine.create_engagement("ci.local")
-        engine.db.add_finding(Finding(
-            engagement_id=eng.id, host="ci.local", port=443, protocol="https",
-            title="Missing CSP", cwe_id="CWE-693", severity=Severity.LOW, tool_source="http_headers",
-        ))
-        engine.db.add_finding(Finding(
-            engagement_id=eng.id, host="ci.local", port=443, protocol="https",
-            title="SQL Injection", cwe_id="CWE-89", severity=Severity.CRITICAL, tool_source="nuclei",
-        ))
+        engine.db.add_finding(
+            Finding(
+                engagement_id=eng.id,
+                host="ci.local",
+                port=443,
+                protocol="https",
+                title="Missing CSP",
+                cwe_id="CWE-693",
+                severity=Severity.LOW,
+                tool_source="http_headers",
+            )
+        )
+        engine.db.add_finding(
+            Finding(
+                engagement_id=eng.id,
+                host="ci.local",
+                port=443,
+                protocol="https",
+                title="SQL Injection",
+                cwe_id="CWE-89",
+                severity=Severity.CRITICAL,
+                tool_source="nuclei",
+            )
+        )
 
         await engine.run_correlate(eng.id)
         counts = engine.db.count_findings_by_severity(eng.id)
@@ -488,7 +628,8 @@ paths:
 
     @pytest.mark.asyncio
     async def test_run_scan_dispatches_network_auditors(self, engine: NexusEngine) -> None:
-        from unittest.mock import patch, AsyncMock
+        from unittest.mock import AsyncMock, patch
+
         from nexus.core.config import ScanProfile
         from nexus.db.models import Finding, Port, Severity, Target
 
@@ -496,13 +637,37 @@ paths:
         eng = engine.create_engagement("infra.local")
         t = Target(engagement_id=eng.id, host="infra.local", ip="10.0.0.50", is_live=True)
         engine.db.add_target(t)
-        engine.db.add_port(Port(target_id=t.id, port=6379, protocol="tcp", state="open", service="redis"))
-        engine.db.add_port(Port(target_id=t.id, port=445, protocol="tcp", state="open", service="microsoft-ds"))
+        engine.db.add_port(
+            Port(target_id=t.id, port=6379, protocol="tcp", state="open", service="redis")
+        )
+        engine.db.add_port(
+            Port(target_id=t.id, port=445, protocol="tcp", state="open", service="microsoft-ds")
+        )
 
-        net_mock = AsyncMock(side_effect=[
-            [Finding(host="infra.local", port=6379, protocol="redis", title="Redis Open", severity=Severity.HIGH, tool_source="redis_probe")],
-            [Finding(host="infra.local", port=445, protocol="smb", title="SMB Signing Disabled", severity=Severity.MEDIUM, tool_source="nmap_smb")],
-        ])
+        net_mock = AsyncMock(
+            side_effect=[
+                [
+                    Finding(
+                        host="infra.local",
+                        port=6379,
+                        protocol="redis",
+                        title="Redis Open",
+                        severity=Severity.HIGH,
+                        tool_source="redis_probe",
+                    )
+                ],
+                [
+                    Finding(
+                        host="infra.local",
+                        port=445,
+                        protocol="smb",
+                        title="SMB Signing Disabled",
+                        severity=Severity.MEDIUM,
+                        tool_source="nmap_smb",
+                    )
+                ],
+            ]
+        )
         with patch("nexus.core.engine.audit_network_service", net_mock):
             findings = await engine.run_scan(eng.id, "infra.local")
 
@@ -510,28 +675,57 @@ paths:
         assert {f.tool_source for f in findings} == {"redis_probe", "nmap_smb"}
 
     @pytest.mark.asyncio
-    async def test_run_scan_wave5_exposure_and_wpscan_smart_dispatch(self, engine: NexusEngine) -> None:
-        from unittest.mock import patch, AsyncMock
+    async def test_run_scan_wave5_exposure_and_wpscan_smart_dispatch(
+        self, engine: NexusEngine
+    ) -> None:
+        from unittest.mock import AsyncMock, patch
+
         from nexus.core.config import ScanProfile
         from nexus.db.models import Finding, Port, Severity, Target
 
         engine.config.profile = ScanProfile.WEB
         eng = engine.create_engagement("wp.local")
         t = Target(
-            engagement_id=eng.id, host="wp.local", ip="10.0.0.60",
-            is_live=True, tech_stack=["WordPress", "PHP"],
+            engagement_id=eng.id,
+            host="wp.local",
+            ip="10.0.0.60",
+            is_live=True,
+            tech_stack=["WordPress", "PHP"],
         )
         engine.db.add_target(t)
-        engine.db.add_port(Port(target_id=t.id, port=443, protocol="tcp", state="open", service="https"))
+        engine.db.add_port(
+            Port(target_id=t.id, port=443, protocol="tcp", state="open", service="https")
+        )
 
-        exp_mock = AsyncMock(return_value=[
-            Finding(host="wp.local", port=443, protocol="https", title="Exposed Git", severity=Severity.HIGH, tool_source="exposure_probe")
-        ])
-        wp_mock = AsyncMock(return_value=[
-            Finding(host="wp.local", port=443, protocol="https", title="WPScan Enum", severity=Severity.INFO, tool_source="wpscan")
-        ])
+        exp_mock = AsyncMock(
+            return_value=[
+                Finding(
+                    host="wp.local",
+                    port=443,
+                    protocol="https",
+                    title="Exposed Git",
+                    severity=Severity.HIGH,
+                    tool_source="exposure_probe",
+                )
+            ]
+        )
+        wp_mock = AsyncMock(
+            return_value=[
+                Finding(
+                    host="wp.local",
+                    port=443,
+                    protocol="https",
+                    title="WPScan Enum",
+                    severity=Severity.INFO,
+                    tool_source="wpscan",
+                )
+            ]
+        )
         with (
-            patch("nexus.core.engine.ToolRunner.is_available", side_effect=lambda name: name == "wpscan"),
+            patch(
+                "nexus.core.engine.ToolRunner.is_available",
+                side_effect=lambda name: name == "wpscan",
+            ),
             patch("nexus.core.engine.crawl_web", AsyncMock(return_value=([], []))),
             patch("nexus.core.engine.audit_http_security", AsyncMock(return_value=[])),
             patch("nexus.core.engine.audit_tls", AsyncMock(return_value=[])),
@@ -546,8 +740,11 @@ paths:
         assert {f.tool_source for f in findings} == {"exposure_probe", "wpscan"}
 
     @pytest.mark.asyncio
-    async def test_run_scan_forwards_wpscan_api_token(self, engine: NexusEngine, monkeypatch) -> None:
-        from unittest.mock import patch, AsyncMock
+    async def test_run_scan_forwards_wpscan_api_token(
+        self, engine: NexusEngine, monkeypatch
+    ) -> None:
+        from unittest.mock import AsyncMock, patch
+
         from nexus.core.config import ScanProfile
         from nexus.db.models import Port, Target
 
@@ -555,15 +752,23 @@ paths:
         monkeypatch.setenv("WPSCAN_API_TOKEN", "env_wp_tok_456")
         eng = engine.create_engagement("wp-tok.local")
         t = Target(
-            engagement_id=eng.id, host="wp-tok.local", ip="10.0.0.61",
-            is_live=True, tech_stack=["WordPress"],
+            engagement_id=eng.id,
+            host="wp-tok.local",
+            ip="10.0.0.61",
+            is_live=True,
+            tech_stack=["WordPress"],
         )
         engine.db.add_target(t)
-        engine.db.add_port(Port(target_id=t.id, port=443, protocol="tcp", state="open", service="https"))
+        engine.db.add_port(
+            Port(target_id=t.id, port=443, protocol="tcp", state="open", service="https")
+        )
 
         wp_mock = AsyncMock(return_value=[])
         with (
-            patch("nexus.core.engine.ToolRunner.is_available", side_effect=lambda name: name == "wpscan"),
+            patch(
+                "nexus.core.engine.ToolRunner.is_available",
+                side_effect=lambda name: name == "wpscan",
+            ),
             patch("nexus.core.engine.crawl_web", AsyncMock(return_value=([], []))),
             patch("nexus.core.engine.audit_http_security", AsyncMock(return_value=[])),
             patch("nexus.core.engine.audit_tls", AsyncMock(return_value=[])),
@@ -577,8 +782,11 @@ paths:
         assert wp_mock.call_args.kwargs.get("api_token") == "env_wp_tok_456"
 
     @pytest.mark.asyncio
-    async def test_run_scan_wave6_graphql_auth_diff_and_db_probes(self, engine: NexusEngine) -> None:
-        from unittest.mock import patch, AsyncMock
+    async def test_run_scan_wave6_graphql_auth_diff_and_db_probes(
+        self, engine: NexusEngine
+    ) -> None:
+        from unittest.mock import AsyncMock, patch
+
         from nexus.core.config import ScanProfile
         from nexus.db.models import Finding, Port, Severity, Target
 
@@ -587,17 +795,40 @@ paths:
         eng = engine.create_engagement("api6.local")
         t = Target(engagement_id=eng.id, host="api6.local", ip="10.0.0.70", is_live=True)
         engine.db.add_target(t)
-        engine.db.add_port(Port(target_id=t.id, port=443, protocol="tcp", state="open", service="https"))
+        engine.db.add_port(
+            Port(target_id=t.id, port=443, protocol="tcp", state="open", service="https")
+        )
 
-        gql_mock = AsyncMock(return_value=[
-            Finding(host="api6.local", port=443, protocol="https", title="GraphQL Schema Introspection Enabled", severity=Severity.LOW, tool_source="graphql_probe")
-        ])
-        auth_mock = AsyncMock(return_value=[
-            Finding(host="api6.local", port=443, protocol="https", title="API Endpoint Accessible Without Authentication", severity=Severity.HIGH, tool_source="auth_diff")
-        ])
+        gql_mock = AsyncMock(
+            return_value=[
+                Finding(
+                    host="api6.local",
+                    port=443,
+                    protocol="https",
+                    title="GraphQL Schema Introspection Enabled",
+                    severity=Severity.LOW,
+                    tool_source="graphql_probe",
+                )
+            ]
+        )
+        auth_mock = AsyncMock(
+            return_value=[
+                Finding(
+                    host="api6.local",
+                    port=443,
+                    protocol="https",
+                    title="API Endpoint Accessible Without Authentication",
+                    severity=Severity.HIGH,
+                    tool_source="auth_diff",
+                )
+            ]
+        )
         with (
             patch("nexus.core.engine.ToolRunner.is_available", return_value=False),
-            patch("nexus.core.engine.crawl_web", AsyncMock(return_value=(["https://api6.local/api/users"], []))),
+            patch(
+                "nexus.core.engine.crawl_web",
+                AsyncMock(return_value=(["https://api6.local/api/users"], [])),
+            ),
             patch("nexus.core.engine.audit_http_security", AsyncMock(return_value=[])),
             patch("nexus.core.engine.audit_tls", AsyncMock(return_value=[])),
             patch("nexus.core.engine.audit_exposed_artifacts", AsyncMock(return_value=[])),
@@ -615,13 +846,37 @@ paths:
         eng_net = engine.create_engagement("db.local")
         t_net = Target(engagement_id=eng_net.id, host="db.local", ip="10.0.0.71", is_live=True)
         engine.db.add_target(t_net)
-        engine.db.add_port(Port(target_id=t_net.id, port=5432, protocol="tcp", state="open", service="postgresql"))
-        engine.db.add_port(Port(target_id=t_net.id, port=27017, protocol="tcp", state="open", service="mongodb"))
+        engine.db.add_port(
+            Port(target_id=t_net.id, port=5432, protocol="tcp", state="open", service="postgresql")
+        )
+        engine.db.add_port(
+            Port(target_id=t_net.id, port=27017, protocol="tcp", state="open", service="mongodb")
+        )
 
-        net_mock = AsyncMock(side_effect=[
-            [Finding(host="db.local", port=5432, protocol="postgresql", title="PostgreSQL Trust Auth", severity=Severity.CRITICAL, tool_source="postgres_probe")],
-            [Finding(host="db.local", port=27017, protocol="mongodb", title="MongoDB Open", severity=Severity.HIGH, tool_source="mongodb_probe")],
-        ])
+        net_mock = AsyncMock(
+            side_effect=[
+                [
+                    Finding(
+                        host="db.local",
+                        port=5432,
+                        protocol="postgresql",
+                        title="PostgreSQL Trust Auth",
+                        severity=Severity.CRITICAL,
+                        tool_source="postgres_probe",
+                    )
+                ],
+                [
+                    Finding(
+                        host="db.local",
+                        port=27017,
+                        protocol="mongodb",
+                        title="MongoDB Open",
+                        severity=Severity.HIGH,
+                        tool_source="mongodb_probe",
+                    )
+                ],
+            ]
+        )
         with (
             patch("nexus.core.engine.audit_tls", AsyncMock(return_value=[])),
             patch("nexus.core.engine.audit_ssh", AsyncMock(return_value=[])),
@@ -634,6 +889,7 @@ paths:
 
     def test_fail_closed_scope_and_explicit_minimal_tier(self, tmp_path: Path) -> None:
         from unittest.mock import patch
+
         from nexus.core.hardware import HardwareInfo
 
         eng_unbooted = NexusEngine(NexusConfig(data_dir=tmp_path / "u"))
@@ -642,7 +898,10 @@ paths:
         # Explicit Tier.MINIMAL must NOT be overridden even on high-RAM hosts
         cfg_explicit = NexusConfig(data_dir=tmp_path / "m", tier=Tier.MINIMAL)
         eng_explicit = NexusEngine(cfg_explicit)
-        with patch("nexus.core.engine.detect_hardware", return_value=HardwareInfo(32768, 24000, 16, False, "None")):
+        with patch(
+            "nexus.core.engine.detect_hardware",
+            return_value=HardwareInfo(32768, 24000, 16, False, "None"),
+        ):
             eng_explicit.boot(connect_ai=False)
         assert eng_explicit.config.tier == Tier.MINIMAL
         eng_explicit.shutdown()
@@ -650,12 +909,17 @@ paths:
         # Default (unset tier) auto-selects from hardware
         cfg_default = NexusConfig(data_dir=tmp_path / "a")
         eng_default = NexusEngine(cfg_default)
-        with patch("nexus.core.engine.detect_hardware", return_value=HardwareInfo(32768, 24000, 16, False, "None")):
+        with patch(
+            "nexus.core.engine.detect_hardware",
+            return_value=HardwareInfo(32768, 24000, 16, False, "None"),
+        ):
             eng_default.boot(connect_ai=False)
         assert eng_default.config.tier == Tier.FULL
         eng_default.shutdown()
 
-    def test_create_engagement_without_scope_file_uses_target_scope(self, engine: NexusEngine) -> None:
+    def test_create_engagement_without_scope_file_uses_target_scope(
+        self, engine: NexusEngine
+    ) -> None:
         eng = engine.create_engagement("scoped.example.com")
         assert eng.id
         assert engine.scope is not None
@@ -668,9 +932,12 @@ paths:
 
     @pytest.mark.asyncio
     async def test_run_recon_scope_checks_portless_osint_and_plugins(
-        self, engine: NexusEngine, tmp_path: Path,
+        self,
+        engine: NexusEngine,
+        tmp_path: Path,
     ) -> None:
-        from unittest.mock import patch, AsyncMock
+        from unittest.mock import AsyncMock, patch
+
         from nexus.db.models import Finding, Port, Severity, Target
 
         scope_file = tmp_path / "scope.yaml"
@@ -683,7 +950,11 @@ paths:
         async def _fake_plugin_recon(target: str, **_):
             return [
                 {"host": "sub.app.local", "title": "In-Scope Dict Finding", "severity": "low"},
-                {"host": "outside.evil.com", "title": "Out-of-Scope Dict Finding", "severity": "high"},
+                {
+                    "host": "outside.evil.com",
+                    "title": "Out-of-Scope Dict Finding",
+                    "severity": "high",
+                },
             ]
 
         engine.plugins.registry.add_recon("test-recon", _fake_plugin_recon)
@@ -692,24 +963,53 @@ paths:
             "targets": [Target(host="sub.app.local", ip="10.0.0.2", is_live=True)],
             "ports": [Port(port=443, protocol="tcp", state="open", service="https")],
             "findings": [
-                Finding(host="outside.evil.com", port=None, title="Portless OOS", severity=Severity.HIGH, tool_source="nmap"),
-                Finding(host="sub.app.local", port=None, title="Portless InScope", severity=Severity.INFO, tool_source="nmap"),
+                Finding(
+                    host="outside.evil.com",
+                    port=None,
+                    title="Portless OOS",
+                    severity=Severity.HIGH,
+                    tool_source="nmap",
+                ),
+                Finding(
+                    host="sub.app.local",
+                    port=None,
+                    title="Portless InScope",
+                    severity=Severity.INFO,
+                    tool_source="nmap",
+                ),
             ],
             "raw_xml": "",
         }
         with (
-            patch("nexus.core.engine.enumerate_subdomains", AsyncMock(return_value=[
-                Target(host="sub.app.local"),
-                Target(host="excluded.app.local", ip="10.0.0.99"),
-            ])),
+            patch(
+                "nexus.core.engine.enumerate_subdomains",
+                AsyncMock(
+                    return_value=[
+                        Target(host="sub.app.local"),
+                        Target(host="excluded.app.local", ip="10.0.0.99"),
+                    ]
+                ),
+            ),
             patch("nexus.core.engine.enumerate_dns", AsyncMock(side_effect=lambda ts: (ts, []))),
             patch("nexus.core.engine.nmap_scan", AsyncMock(return_value=fake_nmap)),
             patch("nexus.core.engine.detect_tech_stack", AsyncMock(side_effect=lambda ts: ts)),
             patch("nexus.core.engine.detect_waf", AsyncMock(side_effect=lambda ts: (ts, []))),
-            patch("nexus.core.engine.gather_osint", AsyncMock(return_value=(
-                [],
-                [Finding(host="evil.org", title="OOS OSINT", severity=Severity.LOW, tool_source="theharvester")],
-            ))),
+            patch(
+                "nexus.core.engine.gather_osint",
+                AsyncMock(
+                    return_value=(
+                        [],
+                        [
+                            Finding(
+                                host="evil.org",
+                                title="OOS OSINT",
+                                severity=Severity.LOW,
+                                tool_source="theharvester",
+                            )
+                        ],
+                    )
+                ),
+            ),
         ):
             findings = await engine.run_recon(eng.id, "app.local")
 
@@ -722,19 +1022,27 @@ paths:
 
     @pytest.mark.asyncio
     async def test_run_exploit_requires_confirmation_and_uses_executor(
-        self, engine: NexusEngine, tmp_path: Path,
+        self,
+        engine: NexusEngine,
+        tmp_path: Path,
     ) -> None:
-        from unittest.mock import patch, AsyncMock
+        from unittest.mock import AsyncMock, patch
+
         from nexus.db.models import Finding, Severity, Target
         from nexus.recon.runner import ToolRunner
 
         eng = engine.create_engagement("exp.local")
         engine.db.add_target(Target(engagement_id=eng.id, host="exp.local"))
-        engine.db.add_finding(Finding(
-            engagement_id=eng.id, host="exp.local", port=443,
-            title="Param Finding", evidence="GET https://[2001:db8::1]:8443/search?q=1",
-            severity=Severity.MEDIUM,
-        ))
+        engine.db.add_finding(
+            Finding(
+                engagement_id=eng.id,
+                host="exp.local",
+                port=443,
+                title="Param Finding",
+                evidence="GET https://[2001:db8::1]:8443/search?q=1",
+                severity=Severity.MEDIUM,
+            )
+        )
 
         # Default confirm=False skips active exploitation
         skipped = await engine.run_exploit(eng.id)
@@ -743,8 +1051,11 @@ paths:
         # confirm=True invokes ExploitExecutor with IPv6-safe URL parsing
         sqlmap_mock = AsyncMock(return_value=[])
         scope_file = tmp_path / "s6.yaml"
-        scope_file.write_text("allowed_ips:\n  - 2001:db8::1\nallowed_ports:\n  - 8443\n", encoding="utf-8")
+        scope_file.write_text(
+            "allowed_ips:\n  - 2001:db8::1\nallowed_ports:\n  - 8443\n", encoding="utf-8"
+        )
         from nexus.core.scope import ScopeEnforcer
+
         engine._set_scope(ScopeEnforcer.from_file(scope_file))
 
         with (
@@ -760,9 +1071,12 @@ paths:
 
     @pytest.mark.asyncio
     async def test_engage_does_not_mutate_config_and_honors_output_dir(
-        self, engine: NexusEngine, tmp_path: Path,
+        self,
+        engine: NexusEngine,
+        tmp_path: Path,
     ) -> None:
-        from unittest.mock import patch, AsyncMock
+        from unittest.mock import AsyncMock, patch
+
         from nexus.core.config import get_config
 
         custom_out = tmp_path / "custom_reports"

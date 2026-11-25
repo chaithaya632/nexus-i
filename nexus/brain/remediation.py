@@ -2,10 +2,9 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
 import logging
+from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any
 
 import yaml
 
@@ -15,6 +14,7 @@ log = logging.getLogger("nexus.brain.remediation")
 @dataclass
 class Remediation:
     """Fix guidance for a vulnerability class or specific CVE."""
+
     id: str  # CWE-89, CVE-2021-44228, etc.
     title: str
     severity: str = "high"
@@ -85,12 +85,17 @@ class RemediationDB:
         """Search remediations by keyword in title, fix text, or tags."""
         kw = keyword.lower()
         return [
-            r for r in self._by_id.values()
-            if kw in r.title.lower() or kw in r.short_fix.lower()
-            or kw in r.detailed_fix.lower() or any(kw in t.lower() for t in r.tags)
+            r
+            for r in self._by_id.values()
+            if kw in r.title.lower()
+            or kw in r.short_fix.lower()
+            or kw in r.detailed_fix.lower()
+            or any(kw in t.lower() for t in r.tags)
         ]
 
-    def get_for_finding(self, cwe_id: str = "", cve_ids: list[str] | None = None) -> Remediation | None:
+    def get_for_finding(
+        self, cwe_id: str = "", cve_ids: list[str] | None = None
+    ) -> Remediation | None:
         """Get the best remediation for a finding, preferring CVE-specific over CWE-generic."""
         # Try specific CVEs first
         if cve_ids:
@@ -106,7 +111,9 @@ class RemediationDB:
     def _cwe_remediations(self) -> list[Remediation]:
         return [
             Remediation(
-                id="CWE-89", title="SQL Injection", severity="critical",
+                id="CWE-89",
+                title="SQL Injection",
+                severity="critical",
                 short_fix="Use parameterized queries / prepared statements. Never concatenate user input into SQL.",
                 detailed_fix=(
                     "SQL injection occurs when untrusted data is sent to an interpreter as part of a command or query. "
@@ -116,7 +123,9 @@ class RemediationDB:
                     "Use stored procedures where possible. Apply least-privilege database accounts. "
                     "Deploy a Web Application Firewall as defense-in-depth (not primary fix)."
                 ),
-                references=["https://cheatsheetseries.owasp.org/cheatsheets/SQL_Injection_Prevention_Cheat_Sheet.html"],
+                references=[
+                    "https://cheatsheetseries.owasp.org/cheatsheets/SQL_Injection_Prevention_Cheat_Sheet.html"
+                ],
                 code_examples={
                     "python": 'cursor.execute("SELECT * FROM users WHERE id = %s", (user_id,))',
                     "php": '$stmt = $pdo->prepare("SELECT * FROM users WHERE id = ?"); $stmt->execute([$id]);',
@@ -125,7 +134,9 @@ class RemediationDB:
                 tags=["injection", "database", "owasp-a03"],
             ),
             Remediation(
-                id="CWE-79", title="Cross-Site Scripting (XSS)", severity="high",
+                id="CWE-79",
+                title="Cross-Site Scripting (XSS)",
+                severity="high",
                 short_fix="Encode all user-controlled output for the correct context (HTML, JS, URL, CSS).",
                 detailed_fix=(
                     "XSS attacks occur when an application includes untrusted data in a web page without proper validation or encoding.\n\n"
@@ -133,7 +144,9 @@ class RemediationDB:
                     "**Secondary:** Implement Content Security Policy (CSP) headers. Use HttpOnly and Secure cookie flags. "
                     "Validate input using allowlists. Use auto-escaping template engines (Jinja2 with autoescape, React JSX)."
                 ),
-                references=["https://cheatsheetseries.owasp.org/cheatsheets/Cross_Site_Scripting_Prevention_Cheat_Sheet.html"],
+                references=[
+                    "https://cheatsheetseries.owasp.org/cheatsheets/Cross_Site_Scripting_Prevention_Cheat_Sheet.html"
+                ],
                 code_examples={
                     "python": "from markupsafe import escape; return escape(user_input)",
                     "javascript": "element.textContent = userInput; // NOT innerHTML",
@@ -141,7 +154,9 @@ class RemediationDB:
                 tags=["xss", "injection", "client-side", "owasp-a03"],
             ),
             Remediation(
-                id="CWE-78", title="OS Command Injection", severity="critical",
+                id="CWE-78",
+                title="OS Command Injection",
+                severity="critical",
                 short_fix="Avoid calling OS commands with user input. Use language APIs instead of shell commands.",
                 detailed_fix=(
                     "Command injection occurs when an application passes unsafe user-supplied data to a system shell.\n\n"
@@ -149,14 +164,18 @@ class RemediationDB:
                     "**If unavoidable:** Use parameterized command execution (subprocess with list args, never shell=True). "
                     "Apply strict allowlist validation on inputs. Escape shell metacharacters. Run with minimal OS privileges."
                 ),
-                references=["https://cheatsheetseries.owasp.org/cheatsheets/OS_Command_Injection_Defense_Cheat_Sheet.html"],
+                references=[
+                    "https://cheatsheetseries.owasp.org/cheatsheets/OS_Command_Injection_Defense_Cheat_Sheet.html"
+                ],
                 code_examples={
                     "python": 'subprocess.run(["ping", "-c", "1", validated_host], shell=False)',
                 },
                 tags=["injection", "command", "rce", "owasp-a03"],
             ),
             Remediation(
-                id="CWE-22", title="Path Traversal / LFI", severity="high",
+                id="CWE-22",
+                title="Path Traversal / LFI",
+                severity="high",
                 short_fix="Validate and canonicalize file paths. Use allowlists for accessible directories.",
                 detailed_fix=(
                     "Path traversal allows attackers to access files outside the intended directory.\n\n"
@@ -165,7 +184,9 @@ class RemediationDB:
                     "**Secondary:** Run the application with minimal filesystem permissions. Use chroot jails or containers. "
                     "Strip or reject path separators and '..' sequences from user input."
                 ),
-                references=["https://cheatsheetseries.owasp.org/cheatsheets/Input_Validation_Cheat_Sheet.html"],
+                references=[
+                    "https://cheatsheetseries.owasp.org/cheatsheets/Input_Validation_Cheat_Sheet.html"
+                ],
                 code_examples={
                     "python": (
                         "base = Path(BASE_DIR).resolve()\n"
@@ -177,7 +198,9 @@ class RemediationDB:
                 tags=["file", "traversal", "lfi", "owasp-a01"],
             ),
             Remediation(
-                id="CWE-918", title="Server-Side Request Forgery (SSRF)", severity="high",
+                id="CWE-918",
+                title="Server-Side Request Forgery (SSRF)",
+                severity="high",
                 short_fix="Validate and allowlist URLs. Block requests to internal/metadata endpoints.",
                 detailed_fix=(
                     "SSRF occurs when an application fetches a remote resource using a user-supplied URL without validation.\n\n"
@@ -186,11 +209,15 @@ class RemediationDB:
                     "**Secondary:** Use a network-level firewall to restrict outbound access from the application. "
                     "Disable unnecessary URL schemes (file://, gopher://, dict://). Validate DNS resolution results."
                 ),
-                references=["https://cheatsheetseries.owasp.org/cheatsheets/Server_Side_Request_Forgery_Prevention_Cheat_Sheet.html"],
+                references=[
+                    "https://cheatsheetseries.owasp.org/cheatsheets/Server_Side_Request_Forgery_Prevention_Cheat_Sheet.html"
+                ],
                 tags=["ssrf", "network", "owasp-a10"],
             ),
             Remediation(
-                id="CWE-611", title="XML External Entity (XXE)", severity="high",
+                id="CWE-611",
+                title="XML External Entity (XXE)",
+                severity="high",
                 short_fix="Disable external entity processing in XML parsers.",
                 detailed_fix=(
                     "XXE attacks exploit XML parsers that process external entity references.\n\n"
@@ -198,7 +225,9 @@ class RemediationDB:
                     "**Secondary:** Use less complex data formats (JSON) where possible. Validate, filter, and sanitize XML input. "
                     "Use updated XML libraries with XXE disabled by default."
                 ),
-                references=["https://cheatsheetseries.owasp.org/cheatsheets/XML_External_Entity_Prevention_Cheat_Sheet.html"],
+                references=[
+                    "https://cheatsheetseries.owasp.org/cheatsheets/XML_External_Entity_Prevention_Cheat_Sheet.html"
+                ],
                 code_examples={
                     "python": "from defusedxml import ElementTree  # Drop-in safe replacement",
                     "java": 'factory.setFeature("http://apache.org/xml/features/disallow-doctype-decl", true);',
@@ -206,7 +235,9 @@ class RemediationDB:
                 tags=["xxe", "xml", "injection", "owasp-a05"],
             ),
             Remediation(
-                id="CWE-434", title="Unrestricted File Upload", severity="critical",
+                id="CWE-434",
+                title="Unrestricted File Upload",
+                severity="critical",
                 short_fix="Validate file type, size, and content. Store uploads outside the webroot with random names.",
                 detailed_fix=(
                     "Unrestricted file upload allows attackers to upload executable files (webshells).\n\n"
@@ -215,11 +246,15 @@ class RemediationDB:
                     "**Secondary:** Limit file size. Scan uploads with antivirus. Serve files via a separate domain. "
                     "Set Content-Disposition: attachment headers."
                 ),
-                references=["https://cheatsheetseries.owasp.org/cheatsheets/File_Upload_Cheat_Sheet.html"],
+                references=[
+                    "https://cheatsheetseries.owasp.org/cheatsheets/File_Upload_Cheat_Sheet.html"
+                ],
                 tags=["file-upload", "webshell", "rce", "owasp-a04"],
             ),
             Remediation(
-                id="CWE-287", title="Improper Authentication", severity="critical",
+                id="CWE-287",
+                title="Improper Authentication",
+                severity="critical",
                 short_fix="Implement MFA. Use proven authentication frameworks. Never roll your own auth.",
                 detailed_fix=(
                     "Authentication weaknesses allow attackers to compromise passwords, keys, or session tokens.\n\n"
@@ -231,7 +266,9 @@ class RemediationDB:
                 tags=["authentication", "identity", "owasp-a07"],
             ),
             Remediation(
-                id="CWE-306", title="Missing Authentication for Critical Function", severity="critical",
+                id="CWE-306",
+                title="Missing Authentication for Critical Function",
+                severity="critical",
                 short_fix="Require authentication for all sensitive endpoints. Apply principle of least privilege.",
                 detailed_fix=(
                     "Sensitive functionality is exposed without authentication.\n\n"
@@ -243,7 +280,9 @@ class RemediationDB:
                 tags=["authentication", "access-control", "owasp-a01"],
             ),
             Remediation(
-                id="CWE-200", title="Information Exposure / Sensitive Data Disclosure", severity="medium",
+                id="CWE-200",
+                title="Information Exposure / Sensitive Data Disclosure",
+                severity="medium",
                 short_fix="Remove verbose error messages, debug info, and stack traces from production.",
                 detailed_fix=(
                     "The application exposes sensitive information through error messages, headers, or debug output.\n\n"
@@ -254,7 +293,9 @@ class RemediationDB:
                 tags=["information-disclosure", "owasp-a01"],
             ),
             Remediation(
-                id="CWE-502", title="Deserialization of Untrusted Data", severity="critical",
+                id="CWE-502",
+                title="Deserialization of Untrusted Data",
+                severity="critical",
                 short_fix="Never deserialize untrusted data. Use data-only formats (JSON) instead of serialization.",
                 detailed_fix=(
                     "Insecure deserialization can lead to remote code execution.\n\n"
@@ -265,7 +306,9 @@ class RemediationDB:
                 tags=["deserialization", "rce", "owasp-a08"],
             ),
             Remediation(
-                id="CWE-352", title="Cross-Site Request Forgery (CSRF)", severity="medium",
+                id="CWE-352",
+                title="Cross-Site Request Forgery (CSRF)",
+                severity="medium",
                 short_fix="Use anti-CSRF tokens on all state-changing operations. Use SameSite cookie attribute.",
                 detailed_fix=(
                     "CSRF forces authenticated users to perform unintended actions.\n\n"
@@ -277,7 +320,9 @@ class RemediationDB:
                 tags=["csrf", "session", "owasp-a01"],
             ),
             Remediation(
-                id="CWE-269", title="Improper Privilege Management", severity="high",
+                id="CWE-269",
+                title="Improper Privilege Management",
+                severity="high",
                 short_fix="Apply principle of least privilege. Run services as non-root. Use RBAC.",
                 detailed_fix=(
                     "The application runs with excessive privileges or fails to drop privileges.\n\n"
@@ -289,7 +334,9 @@ class RemediationDB:
                 tags=["privilege", "access-control", "owasp-a01"],
             ),
             Remediation(
-                id="CWE-798", title="Hard-coded Credentials", severity="critical",
+                id="CWE-798",
+                title="Hard-coded Credentials",
+                severity="critical",
                 short_fix="Remove all hard-coded credentials. Use environment variables or secret managers.",
                 detailed_fix=(
                     "Hard-coded passwords, API keys, or cryptographic keys in source code.\n\n"
@@ -301,7 +348,9 @@ class RemediationDB:
                 tags=["credentials", "secrets", "owasp-a07"],
             ),
             Remediation(
-                id="CWE-311", title="Missing Encryption of Sensitive Data", severity="high",
+                id="CWE-311",
+                title="Missing Encryption of Sensitive Data",
+                severity="high",
                 short_fix="Encrypt sensitive data in transit (TLS 1.2+) and at rest (AES-256).",
                 detailed_fix=(
                     "Sensitive data is transmitted or stored without encryption.\n\n"
@@ -312,7 +361,9 @@ class RemediationDB:
                 tags=["encryption", "tls", "owasp-a02"],
             ),
             Remediation(
-                id="CWE-732", title="Incorrect Permission Assignment", severity="medium",
+                id="CWE-732",
+                title="Incorrect Permission Assignment",
+                severity="medium",
                 short_fix="Set restrictive file and directory permissions. Remove world-readable/writable on sensitive files.",
                 detailed_fix=(
                     "Files or directories have overly permissive access controls.\n\n"
@@ -324,7 +375,9 @@ class RemediationDB:
                 tags=["permissions", "filesystem", "owasp-a01"],
             ),
             Remediation(
-                id="CWE-1021", title="Clickjacking / UI Redress", severity="medium",
+                id="CWE-1021",
+                title="Clickjacking / UI Redress",
+                severity="medium",
                 short_fix="Set X-Frame-Options: DENY and Content-Security-Policy: frame-ancestors 'none'.",
                 detailed_fix=(
                     "The application can be framed by malicious pages to trick users into unintended clicks.\n\n"
@@ -336,7 +389,9 @@ class RemediationDB:
                 tags=["clickjacking", "ui", "owasp-a04"],
             ),
             Remediation(
-                id="CWE-94", title="Code Injection / SSTI", severity="critical",
+                id="CWE-94",
+                title="Code Injection / SSTI",
+                severity="critical",
                 short_fix="Never pass user input to eval/exec. Use sandboxed template engines with autoescape.",
                 detailed_fix=(
                     "Server-side template injection or code injection allows arbitrary code execution.\n\n"

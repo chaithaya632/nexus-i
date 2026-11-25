@@ -16,7 +16,9 @@ class TaxonomyLike(Protocol):
 
 
 class RemediationLike(Protocol):
-    def get_for_finding(self, cwe_id: str = "", cve_ids: list[str] | None = None) -> object | None: ...
+    def get_for_finding(
+        self, cwe_id: str = "", cve_ids: list[str] | None = None
+    ) -> object | None: ...
 
 
 class KnowledgeGraphLike(Protocol):
@@ -59,10 +61,13 @@ def enrich_findings(
                 vuln_type = str(getattr(entry, "vuln_type", "") or "")
                 if not f.cwe_id and vuln_type.upper().startswith("CWE-"):
                     f.cwe_id = vuln_type.upper()
-                if getattr(entry, "exploits", None) and severity_rank(f.severity) < severity_rank(Severity.HIGH):
+                if getattr(entry, "exploits", None) and severity_rank(f.severity) < severity_rank(
+                    Severity.HIGH
+                ):
                     log.info(
                         "Upgrading %s severity: known exploit for %s",
-                        f.title, cve_id,
+                        f.title,
+                        cve_id,
                     )
                     f.severity = Severity.HIGH
             if f.cvss_score is None and cve_scores:

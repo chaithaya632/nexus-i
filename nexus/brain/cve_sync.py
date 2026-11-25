@@ -47,7 +47,9 @@ def _normalize_kev_record(item: dict[str, Any]) -> tuple[str, dict[str, Any]] | 
         return None
     vendor = str(item.get("vendorProject") or "").strip()
     product = str(item.get("product") or "").strip()
-    prod_slug = _slug(f"{vendor}-{product}" if vendor and product else (product or vendor or "generic"))
+    prod_slug = _slug(
+        f"{vendor}-{product}" if vendor and product else (product or vendor or "generic")
+    )
     fps = [x for x in dict.fromkeys([product, vendor]) if x]
     ransomware = str(item.get("knownRansomwareCampaignUse") or "").strip().lower() == "known"
     cwes = item.get("cwes") or []
@@ -120,7 +122,9 @@ def _extract_nvd_cpe_specs(cve_obj: dict[str, Any]) -> tuple[list[str], list[str
                 if raw_prod in ("*", "-", ""):
                     continue
                 prod_name = _slug(raw_prod)
-                if raw_prod not in fingerprints and raw_prod.lower() not in {f.lower() for f in fingerprints}:
+                if raw_prod not in fingerprints and raw_prod.lower() not in {
+                    f.lower() for f in fingerprints
+                }:
                     fingerprints.append(raw_prod)
                 ver_start_inc = match.get("versionStartIncluding")
                 ver_start_exc = match.get("versionStartExcluding")
@@ -139,7 +143,11 @@ def _extract_nvd_cpe_specs(cve_obj: dict[str, Any]) -> tuple[list[str], list[str
                     clauses.append(f"<={ver_end_inc}")
 
                 if clauses:
-                    products.append(f"{prod_name} {','.join(clauses)}" if prod_name and prod_name != "*" else ",".join(clauses))
+                    products.append(
+                        f"{prod_name} {','.join(clauses)}"
+                        if prod_name and prod_name != "*"
+                        else ",".join(clauses)
+                    )
                 elif exact_ver:
                     products.append(f"{prod_name}-{exact_ver}")
                 elif prod_name:
@@ -177,11 +185,17 @@ def import_nvd_json_data(data: dict[str, Any], out_dir: Path) -> tuple[int, Path
                 cdata = mlist[0].get("cvssData") or {}
                 if isinstance(cdata, dict) and cdata.get("baseScore") is not None:
                     cvss = float(cdata["baseScore"])
-                    sev_raw = str(cdata.get("baseSeverity") or mlist[0].get("baseSeverity") or "").lower()
+                    sev_raw = str(
+                        cdata.get("baseSeverity") or mlist[0].get("baseSeverity") or ""
+                    ).lower()
                     if sev_raw in ("critical", "high", "medium", "low"):
                         severity = sev_raw
                     else:
-                        severity = "critical" if cvss >= 9.0 else ("high" if cvss >= 7.0 else ("medium" if cvss >= 4.0 else "low"))
+                        severity = (
+                            "critical"
+                            if cvss >= 9.0
+                            else ("high" if cvss >= 7.0 else ("medium" if cvss >= 4.0 else "low"))
+                        )
                     break
 
         cwe = ""

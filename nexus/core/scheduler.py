@@ -5,12 +5,13 @@ from __future__ import annotations
 import asyncio
 import inspect
 import time
+from collections.abc import Awaitable
 from dataclasses import dataclass, field
-from enum import Enum
-from typing import Any, Awaitable
+from enum import StrEnum
+from typing import Any
 
 
-class TaskStatus(str, Enum):
+class TaskStatus(StrEnum):
     PENDING = "pending"
     RUNNING = "running"
     COMPLETED = "completed"
@@ -28,7 +29,10 @@ class TaskResult:
 
 def _close_unawaited(awaitable: Awaitable[Any]) -> None:
     """Close an unstarted coroutine so skipped/cancelled tasks don't emit warnings."""
-    if inspect.iscoroutine(awaitable) and inspect.getcoroutinestate(awaitable) == inspect.CORO_CREATED:
+    if (
+        inspect.iscoroutine(awaitable)
+        and inspect.getcoroutinestate(awaitable) == inspect.CORO_CREATED
+    ):
         awaitable.close()
 
 
@@ -92,17 +96,13 @@ class TaskScheduler:
             _close_unawaited(coro)
             raise
 
-    async def run_parallel(
-        self, tasks: list[tuple[str, Awaitable[Any]]]
-    ) -> list[TaskResult]:
+    async def run_parallel(self, tasks: list[tuple[str, Awaitable[Any]]]) -> list[TaskResult]:
         """Run tasks concurrently up to max_concurrent."""
         sem = asyncio.Semaphore(self.max_concurrent)
         coros = [self._run_one(name, coro, sem) for name, coro in tasks]
         return await asyncio.gather(*coros)
 
-    async def run_sequential(
-        self, tasks: list[tuple[str, Awaitable[Any]]]
-    ) -> list[TaskResult]:
+    async def run_sequential(self, tasks: list[tuple[str, Awaitable[Any]]]) -> list[TaskResult]:
         """Run tasks one after another, stopping on first failure."""
         sem = asyncio.Semaphore(1)
         results: list[TaskResult] = []
@@ -114,7 +114,7 @@ class TaskScheduler:
             try:
                 tr = await self._run_one(name, coro, sem)
             except BaseException:
-                for _, rem_coro in tasks[idx + 1:]:
+                for _, rem_coro in tasks[idx + 1 :]:
                     _close_unawaited(rem_coro)
                 raise
             results.append(tr)

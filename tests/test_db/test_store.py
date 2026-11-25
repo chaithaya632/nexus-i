@@ -1,7 +1,4 @@
-﻿"""Tests for nexus.db.store."""
-
-import json
-from pathlib import Path
+"""Tests for nexus.db.store."""
 
 import pytest
 
@@ -58,8 +55,13 @@ class TestEngagementStore:
     def test_add_target(self, store):
         eng = Engagement(name="test", target="example.com")
         eng_id = store.create_engagement(eng)
-        target = Target(engagement_id=eng_id, host="sub.example.com",
-                        ip="10.0.0.1", is_live=True, tech_stack=["nginx", "php"])
+        target = Target(
+            engagement_id=eng_id,
+            host="sub.example.com",
+            ip="10.0.0.1",
+            is_live=True,
+            tech_stack=["nginx", "php"],
+        )
         store.add_target(target)
 
         targets = store.get_targets(eng_id)
@@ -86,9 +88,13 @@ class TestEngagementStore:
         eng_id = store.create_engagement(eng)
 
         finding = Finding(
-            engagement_id=eng_id, host="example.com", port=80,
-            title="SQL Injection", severity=Severity.CRITICAL,
-            cve_ids=["CVE-2024-1234"], tool_source="sqlmap",
+            engagement_id=eng_id,
+            host="example.com",
+            port=80,
+            title="SQL Injection",
+            severity=Severity.CRITICAL,
+            cve_ids=["CVE-2024-1234"],
+            tool_source="sqlmap",
         )
         store.add_finding(finding)
 
@@ -114,9 +120,16 @@ class TestEngagementStore:
         eng = Engagement(name="test", target="example.com")
         eng_id = store.create_engagement(eng)
 
-        cred = Credential(engagement_id=eng_id, host="example.com", port=22,
-                          service="ssh", username="admin", password="admin123",
-                          source="hydra", confirmed=True)
+        cred = Credential(
+            engagement_id=eng_id,
+            host="example.com",
+            port=22,
+            service="ssh",
+            username="admin",
+            password="admin123",
+            source="hydra",
+            confirmed=True,
+        )
         store.add_credential(cred)
 
         creds = store.get_credentials(eng_id)
@@ -129,12 +142,14 @@ class TestEngagementStore:
         eng_id = store.create_engagement(eng)
 
         chain = AttackChain(
-            engagement_id=eng_id, name="SQLi to RCE",
+            engagement_id=eng_id,
+            name="SQLi to RCE",
             steps=[
                 ChainStep(order=1, action="sqli", tool="sqlmap", target="example.com"),
                 ChainStep(order=2, action="rce", tool="custom", target="example.com"),
             ],
-            confidence=0.8, impact=Severity.CRITICAL,
+            confidence=0.8,
+            impact=Severity.CRITICAL,
         )
         store.add_chain(chain)
 
@@ -147,11 +162,19 @@ class TestEngagementStore:
         eng = Engagement(name="test", target="example.com")
         eng_id = store.create_engagement(eng)
         store.add_finding(Finding(engagement_id=eng_id, title="test finding"))
-        store.add_credential(Credential(
-            engagement_id=eng_id, host="example.com", port=22,
-            service="ssh", username="svc_user", password="super_secret_pw_val",
-            hash_value="ntlm_secret_hash_val", source="audit", confirmed=True,
-        ))
+        store.add_credential(
+            Credential(
+                engagement_id=eng_id,
+                host="example.com",
+                port=22,
+                service="ssh",
+                username="svc_user",
+                password="super_secret_pw_val",
+                hash_value="ntlm_secret_hash_val",
+                source="audit",
+                confirmed=True,
+            )
+        )
 
         data = store.export_engagement_json(eng_id)
         assert "engagement" in data
@@ -187,7 +210,9 @@ class TestEngagementStore:
         # replace_findings + delete_engagement cascade cleanly
         store.add_finding(Finding(engagement_id=eng_id, title="raw1"))
         store.add_finding(Finding(engagement_id=eng_id, title="raw2"))
-        store.replace_findings(eng_id, [Finding(engagement_id=eng_id, title="deduped", owasp_category="A03")])
+        store.replace_findings(
+            eng_id, [Finding(engagement_id=eng_id, title="deduped", owasp_category="A03")]
+        )
         assert [f.title for f in store.get_findings(eng_id)] == ["deduped"]
 
         store.delete_engagement(eng_id)
@@ -222,10 +247,17 @@ class TestEngagementStore:
         db_file = tmp_path / "enc.db"
         store1 = EngagementStore(db_file)
         eng_id = store1.create_engagement(Engagement(name="enc", target="app.local"))
-        store1.add_credential(Credential(
-            engagement_id=eng_id, host="app.local", port=22, service="ssh",
-            username="ops", password="MyRawPassword!99", hash_value="aad3b435b51404ee",
-        ))
+        store1.add_credential(
+            Credential(
+                engagement_id=eng_id,
+                host="app.local",
+                port=22,
+                service="ssh",
+                username="ops",
+                password="MyRawPassword!99",
+                hash_value="aad3b435b51404ee",
+            )
+        )
 
         raw_conn = sqlite3.connect(str(db_file))
         raw_row = raw_conn.execute("SELECT password, hash_value FROM credentials").fetchone()
@@ -244,7 +276,9 @@ class TestEngagementStore:
         eng_id = store.create_engagement(Engagement(name="upsert", target="example.com"))
         t1 = Target(engagement_id=eng_id, host="example.com", ip="1.2.3.4")
         id1 = store.add_target(t1)
-        t2 = Target(engagement_id=eng_id, host="example.com", ip="1.2.3.4", is_live=True, os_guess="Linux")
+        t2 = Target(
+            engagement_id=eng_id, host="example.com", ip="1.2.3.4", is_live=True, os_guess="Linux"
+        )
         id2 = store.add_target(t2)
         assert id1 == id2
         targets = store.get_targets(eng_id)
@@ -253,7 +287,14 @@ class TestEngagementStore:
 
         p1 = Port(target_id=id1, port=80, protocol="tcp", state="open", service="http")
         pid1 = store.add_port(p1)
-        p2 = Port(target_id=id1, port=80, protocol="tcp", state="open", service="http", version="nginx/1.24")
+        p2 = Port(
+            target_id=id1,
+            port=80,
+            protocol="tcp",
+            state="open",
+            service="http",
+            version="nginx/1.24",
+        )
         pid2 = store.add_port(p2)
         assert pid1 == pid2
         ports = store.get_ports(id1)
@@ -298,5 +339,3 @@ class TestEngagementStore:
         assert sorted(p.port for p in ports) == [80, 443]
         with sqlite3.connect(str(db_file)) as check_conn:
             assert check_conn.execute("PRAGMA user_version").fetchone()[0] >= 2
-
-

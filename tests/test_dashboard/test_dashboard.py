@@ -2,17 +2,19 @@
 
 from __future__ import annotations
 
-import pytest
 import json
+
+import pytest
 
 # Skip all tests if FastAPI not installed
 fastapi = pytest.importorskip("fastapi")
 httpx = pytest.importorskip("httpx")
 
 from fastapi.testclient import TestClient
-from nexus.dashboard.app import create_app, DashboardApp, _fallback_html
-from nexus.core.engine import NexusEngine
+
 from nexus.core.config import NexusConfig
+from nexus.core.engine import NexusEngine
+from nexus.dashboard.app import DashboardApp, _fallback_html, create_app
 
 
 @pytest.fixture
@@ -78,12 +80,16 @@ class TestDashboardAPI:
     def test_engagement_with_data(self, client, engine):
         # Create engagement and add data
         eng = engine.create_engagement("example.com", name="Test Engagement")
-        from nexus.db.models import Finding, Target, Severity
+        from nexus.db.models import Finding, Severity, Target
+
         t = Target(engagement_id=eng.id, host="example.com", ip="93.184.216.34", is_live=True)
         engine.db.add_target(t)
         f = Finding(
-            engagement_id=eng.id, host="example.com", port=443,
-            title="SSL/TLS Certificate Mismatch", severity=Severity.LOW,
+            engagement_id=eng.id,
+            host="example.com",
+            port=443,
+            title="SSL/TLS Certificate Mismatch",
+            severity=Severity.LOW,
             tool_source="nexus",
         )
         engine.db.add_finding(f)
@@ -117,23 +123,48 @@ class TestDashboardAPI:
         assert "profile" in st
 
         e1 = engine.create_engagement("ci.local", name="base")
-        engine.db.add_finding(Finding(
-            engagement_id=e1.id, host="ci.local", port=443, title="Missing HSTS",
-            cwe_id="CWE-523", severity=Severity.LOW,
-        ))
+        engine.db.add_finding(
+            Finding(
+                engagement_id=e1.id,
+                host="ci.local",
+                port=443,
+                title="Missing HSTS",
+                cwe_id="CWE-523",
+                severity=Severity.LOW,
+            )
+        )
         e2 = engine.create_engagement("ci.local", name="head")
-        engine.db.add_finding(Finding(
-            engagement_id=e2.id, host="ci.local", port=443, title="Missing HSTS",
-            cwe_id="CWE-523", severity=Severity.LOW,
-        ))
-        engine.db.add_finding(Finding(
-            engagement_id=e2.id, host="ci.local", port=6379, title="Redis Unauth",
-            cwe_id="CWE-306", severity=Severity.HIGH,
-        ))
-        engine.db.add_finding(Finding(
-            engagement_id=e2.id, host="ci.local", port=80, title="Ignored Info",
-            cwe_id="CWE-693", severity=Severity.INFO, false_positive=True,
-        ))
+        engine.db.add_finding(
+            Finding(
+                engagement_id=e2.id,
+                host="ci.local",
+                port=443,
+                title="Missing HSTS",
+                cwe_id="CWE-523",
+                severity=Severity.LOW,
+            )
+        )
+        engine.db.add_finding(
+            Finding(
+                engagement_id=e2.id,
+                host="ci.local",
+                port=6379,
+                title="Redis Unauth",
+                cwe_id="CWE-306",
+                severity=Severity.HIGH,
+            )
+        )
+        engine.db.add_finding(
+            Finding(
+                engagement_id=e2.id,
+                host="ci.local",
+                port=80,
+                title="Ignored Info",
+                cwe_id="CWE-693",
+                severity=Severity.INFO,
+                false_positive=True,
+            )
+        )
 
         all_f = client.get(f"/api/engagements/{e2.id}/findings").json()
         active_f = client.get(f"/api/engagements/{e2.id}/findings?include_suppressed=false").json()
@@ -196,15 +227,22 @@ class TestDashboardApp:
         assert client.get("/api/engagements/missing/targets").status_code == 404
 
     def test_dashboard_token_auth_and_remediation_enrichment(self, engine, tmp_path):
-        from nexus.db.models import Finding, Severity
         from starlette.websockets import WebSocketDisconnect
 
+        from nexus.db.models import Finding, Severity
+
         eng = engine.create_engagement("sec.local", name="Auth Test")
-        engine.db.add_finding(Finding(
-            engagement_id=eng.id, host="sec.local", port=443,
-            title="Log4Shell Match", cwe_id="CWE-917", cve_ids=["CVE-2021-44228"],
-            severity=Severity.CRITICAL,
-        ))
+        engine.db.add_finding(
+            Finding(
+                engagement_id=eng.id,
+                host="sec.local",
+                port=443,
+                title="Log4Shell Match",
+                cwe_id="CWE-917",
+                cve_ids=["CVE-2021-44228"],
+                severity=Severity.CRITICAL,
+            )
+        )
 
         auth_app = create_app(engine, api_token="dash_secret_tok_99")
         auth_client = TestClient(auth_app)
@@ -215,7 +253,12 @@ class TestDashboardApp:
         assert auth_client.get("/").status_code == 200
 
         # Valid X-Nexus-Token and Authorization: Bearer allowed, remediation enriched
-        assert auth_client.get("/api/status", headers={"X-Nexus-Token": "dash_secret_tok_99"}).status_code == 200
+        assert (
+            auth_client.get(
+                "/api/status", headers={"X-Nexus-Token": "dash_secret_tok_99"}
+            ).status_code
+            == 200
+        )
         fr = auth_client.get(
             f"/api/engagements/{eng.id}/findings",
             headers={"Authorization": "Bearer dash_secret_tok_99"},
@@ -231,7 +274,9 @@ class TestDashboardApp:
                 ws.receive_text()
 
         with pytest.raises(WebSocketDisconnect):
-            with auth_client.websocket_connect("/ws", headers={"Authorization": "Bearer wrong"}) as ws:
+            with auth_client.websocket_connect(
+                "/ws", headers={"Authorization": "Bearer wrong"}
+            ) as ws:
                 ws.receive_text()
 
         with pytest.raises(WebSocketDisconnect):
@@ -268,6 +313,7 @@ class TestDashboardApp:
 
     def test_non_loopback_run_dashboard_generates_ephemeral_token(self, engine, capsys):
         from unittest.mock import patch
+
         from nexus.dashboard.app import run_dashboard
 
         with patch("uvicorn.run") as mock_uv:

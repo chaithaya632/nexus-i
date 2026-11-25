@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import os
-from enum import Enum
+from enum import StrEnum
 from pathlib import Path
 from typing import Any
 
@@ -11,14 +11,14 @@ import yaml
 from pydantic import BaseModel, Field
 
 
-class Tier(str, Enum):
+class Tier(StrEnum):
     MINIMAL = "minimal"
     LIGHT = "light"
     STANDARD = "standard"
     FULL = "full"
 
 
-class StealthLevel(str, Enum):
+class StealthLevel(StrEnum):
     OFF = "off"
     LOW = "low"
     MEDIUM = "medium"
@@ -26,7 +26,7 @@ class StealthLevel(str, Enum):
     PARANOID = "paranoid"
 
 
-class ScanProfile(str, Enum):
+class ScanProfile(StrEnum):
     QUICK = "quick"
     WEB = "web"
     NETWORK = "network"
@@ -37,44 +37,92 @@ class ScanProfile(str, Enum):
 # Behavior flags per ScanProfile (kept lightweight & explicit)
 SCAN_PROFILE_SETTINGS: dict[str, dict[str, Any]] = {
     "quick": {
-        "use_amass": False, "run_osint": False, "run_waf": False,
-        "run_crawl": False, "run_headers": True, "run_exposure": True,
-        "run_graphql": False, "run_auth_diff": False,
-        "run_nuclei": True, "targeted_nuclei": True,
-        "run_ffuf": False, "run_nikto": False,
-        "run_tls": True, "run_ssh": True, "run_network_audits": True,
+        "use_amass": False,
+        "run_osint": False,
+        "run_waf": False,
+        "run_crawl": False,
+        "run_headers": True,
+        "run_exposure": True,
+        "run_graphql": False,
+        "run_auth_diff": False,
+        "run_nuclei": True,
+        "targeted_nuclei": True,
+        "run_ffuf": False,
+        "run_nikto": False,
+        "run_tls": True,
+        "run_ssh": True,
+        "run_network_audits": True,
     },
     "web": {
-        "use_amass": True, "run_osint": False, "run_waf": True,
-        "run_crawl": True, "run_headers": True, "run_exposure": True,
-        "run_graphql": True, "run_auth_diff": True,
-        "run_nuclei": True, "targeted_nuclei": True,
-        "run_ffuf": True, "ffuf_wordlist": "common", "run_nikto": True,
-        "run_tls": True, "run_ssh": False, "run_network_audits": False,
+        "use_amass": True,
+        "run_osint": False,
+        "run_waf": True,
+        "run_crawl": True,
+        "run_headers": True,
+        "run_exposure": True,
+        "run_graphql": True,
+        "run_auth_diff": True,
+        "run_nuclei": True,
+        "targeted_nuclei": True,
+        "run_ffuf": True,
+        "ffuf_wordlist": "common",
+        "run_nikto": True,
+        "run_tls": True,
+        "run_ssh": False,
+        "run_network_audits": False,
     },
     "network": {
-        "use_amass": False, "run_osint": True, "run_waf": False,
-        "run_crawl": False, "run_headers": False, "run_exposure": False,
-        "run_graphql": False, "run_auth_diff": False,
-        "run_nuclei": False, "targeted_nuclei": False,
-        "run_ffuf": False, "run_nikto": False,
-        "run_tls": True, "run_ssh": True, "run_network_audits": True,
+        "use_amass": False,
+        "run_osint": True,
+        "run_waf": False,
+        "run_crawl": False,
+        "run_headers": False,
+        "run_exposure": False,
+        "run_graphql": False,
+        "run_auth_diff": False,
+        "run_nuclei": False,
+        "targeted_nuclei": False,
+        "run_ffuf": False,
+        "run_nikto": False,
+        "run_tls": True,
+        "run_ssh": True,
+        "run_network_audits": True,
     },
     "api": {
-        "use_amass": False, "run_osint": False, "run_waf": True,
-        "run_crawl": True, "run_headers": True, "run_exposure": True,
-        "run_graphql": True, "run_auth_diff": True,
-        "run_nuclei": True, "targeted_nuclei": True,
-        "run_ffuf": True, "ffuf_wordlist": "api", "run_nikto": False,
-        "run_tls": True, "run_ssh": False, "run_network_audits": False,
+        "use_amass": False,
+        "run_osint": False,
+        "run_waf": True,
+        "run_crawl": True,
+        "run_headers": True,
+        "run_exposure": True,
+        "run_graphql": True,
+        "run_auth_diff": True,
+        "run_nuclei": True,
+        "targeted_nuclei": True,
+        "run_ffuf": True,
+        "ffuf_wordlist": "api",
+        "run_nikto": False,
+        "run_tls": True,
+        "run_ssh": False,
+        "run_network_audits": False,
     },
     "full": {
-        "use_amass": True, "run_osint": True, "run_waf": True,
-        "run_crawl": True, "run_headers": True, "run_exposure": True,
-        "run_graphql": True, "run_auth_diff": True,
-        "run_nuclei": True, "targeted_nuclei": False,
-        "run_ffuf": True, "ffuf_wordlist": "common", "run_nikto": True,
-        "run_tls": True, "run_ssh": True, "run_network_audits": True,
+        "use_amass": True,
+        "run_osint": True,
+        "run_waf": True,
+        "run_crawl": True,
+        "run_headers": True,
+        "run_exposure": True,
+        "run_graphql": True,
+        "run_auth_diff": True,
+        "run_nuclei": True,
+        "targeted_nuclei": False,
+        "run_ffuf": True,
+        "ffuf_wordlist": "common",
+        "run_nikto": True,
+        "run_tls": True,
+        "run_ssh": True,
+        "run_network_audits": True,
     },
 }
 
@@ -124,10 +172,20 @@ class NexusConfig(BaseModel):
             dest.parent.mkdir(parents=True, exist_ok=True)
         data = self.model_dump(mode="json")
         # Convert Path objects to strings for YAML
-        for key in ("data_dir", "db_path", "scope_file", "openapi_spec", "ignore_file", "output_dir", "knowledge_dir"):
+        for key in (
+            "data_dir",
+            "db_path",
+            "scope_file",
+            "openapi_spec",
+            "ignore_file",
+            "output_dir",
+            "knowledge_dir",
+        ):
             if data.get(key) is not None:
                 data[key] = str(data[key])
-        dest.write_text(yaml.dump(data, default_flow_style=False, sort_keys=False), encoding="utf-8")
+        dest.write_text(
+            yaml.dump(data, default_flow_style=False, sort_keys=False), encoding="utf-8"
+        )
         try:
             os.chmod(dest, 0o600)
         except OSError:
@@ -135,7 +193,7 @@ class NexusConfig(BaseModel):
         return dest
 
     @classmethod
-    def load(cls, path: Path | None = None) -> "NexusConfig":
+    def load(cls, path: Path | None = None) -> NexusConfig:
         """Load config from YAML file, then overlay environment variables."""
         default_path = Path.home() / ".nexus" / "config.yaml"
         cfg_path = path or default_path

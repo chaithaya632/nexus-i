@@ -1,8 +1,8 @@
 """Tests for the report generator — markdown, HTML, and data builder."""
 
-import tempfile
-import pytest
 from pathlib import Path
+
+import pytest
 
 from nexus.db.models import (
     Engagement,
@@ -10,12 +10,11 @@ from nexus.db.models import (
     Finding,
     Severity,
     Target,
-    ReportMeta,
 )
 from nexus.db.store import EngagementStore
-from nexus.reporter.generator import build_report_data, generate_report, ReportData
-from nexus.reporter.markdown import render_markdown
+from nexus.reporter.generator import ReportData, build_report_data, generate_report
 from nexus.reporter.html import render_html
+from nexus.reporter.markdown import render_markdown
 
 
 @pytest.fixture
@@ -25,17 +24,27 @@ def db_with_data(tmp_path):
     eng = Engagement(name="Test Engagement", target="example.com", phase=EngagementPhase.REPORT)
     db.create_engagement(eng)
 
-    t = Target(host="example.com", ip="93.184.216.34", is_live=True, tech_stack=["nginx", "PHP"],
-               engagement_id=eng.id)
+    t = Target(
+        host="example.com",
+        ip="93.184.216.34",
+        is_live=True,
+        tech_stack=["nginx", "PHP"],
+        engagement_id=eng.id,
+    )
     db.add_target(t)
 
     findings = [
         Finding(
             engagement_id=eng.id,
-            host="example.com", port=80, protocol="http",
-            title="SQL Injection in login", severity=Severity.CRITICAL,
-            cwe_id="CWE-89", cve_ids=["CVE-2024-1234"],
-            cvss_score=9.8, tool_source="sqlmap",
+            host="example.com",
+            port=80,
+            protocol="http",
+            title="SQL Injection in login",
+            severity=Severity.CRITICAL,
+            cwe_id="CWE-89",
+            cve_ids=["CVE-2024-1234"],
+            cvss_score=9.8,
+            tool_source="sqlmap",
             description="SQL injection via username parameter.",
             evidence="Parameter: username\nPayload: ' OR 1=1--",
             remediation="Use parameterized queries.",
@@ -43,16 +52,23 @@ def db_with_data(tmp_path):
         ),
         Finding(
             engagement_id=eng.id,
-            host="example.com", port=443, protocol="https",
-            title="Missing HSTS Header", severity=Severity.MEDIUM,
-            cwe_id="CWE-311", tool_source="nikto",
+            host="example.com",
+            port=443,
+            protocol="https",
+            title="Missing HSTS Header",
+            severity=Severity.MEDIUM,
+            cwe_id="CWE-311",
+            tool_source="nikto",
             description="Strict-Transport-Security header is not set.",
             remediation="Add HSTS header with max-age of at least 1 year.",
         ),
         Finding(
             engagement_id=eng.id,
-            host="example.com", port=80, protocol="http",
-            title="Open port 80/tcp — http", severity=Severity.INFO,
+            host="example.com",
+            port=80,
+            protocol="http",
+            title="Open port 80/tcp — http",
+            severity=Severity.INFO,
             tool_source="nmap",
             description="HTTP service detected.",
         ),
@@ -133,6 +149,7 @@ def test_generate_report_pdf_missing_dep(db_with_data, tmp_path):
 
 def test_severity_badge():
     from nexus.reporter.markdown import _severity_badge
+
     assert "CRITICAL" in _severity_badge("critical")
     assert "HIGH" in _severity_badge("high")
     assert "INFO" in _severity_badge("info")
@@ -140,11 +157,17 @@ def test_severity_badge():
 
 def test_html_escaping():
     from nexus.reporter.html import _esc
-    assert _esc("<script>alert('xss')</script>") == "&lt;script&gt;alert(&#x27;xss&#x27;)&lt;/script&gt;" or "&lt;script&gt;" in _esc("<script>")
+
+    assert _esc(
+        "<script>alert('xss')</script>"
+    ) == "&lt;script&gt;alert(&#x27;xss&#x27;)&lt;/script&gt;" or "&lt;script&gt;" in _esc(
+        "<script>"
+    )
 
 
 def test_reporter_package_imports():
-    from nexus.reporter import generate_report, build_report_data, ReportData
+    from nexus.reporter import generate_report
+
     assert callable(generate_report)
 
 
@@ -152,7 +175,10 @@ def test_generate_report_prepends_ai_summary(db_with_data, tmp_path):
     db, eng_id = db_with_data
     out = tmp_path / "reports_ai"
     generated = generate_report(
-        db, eng_id, out, formats=["md"],
+        db,
+        eng_id,
+        out,
+        formats=["md"],
         ai_summary="Custom AI insight: Prioritize SQLi remediation immediately.",
     )
     assert len(generated) == 1
@@ -163,35 +189,74 @@ def test_generate_report_prepends_ai_summary(db_with_data, tmp_path):
 
 def test_reporter_redacts_secrets_and_parity_across_md_html_docx(tmp_path):
     import json
+
     from nexus.db.models import AttackChain, ChainStep, Credential
     from nexus.reporter.sarif import render_sarif
 
     db = EngagementStore(tmp_path / "full_rep.db")
     eng = Engagement(name="Full", target="app.local", phase=EngagementPhase.REPORT)
     db.create_engagement(eng)
-    db.add_target(Target(engagement_id=eng.id, host="app.local", ip="10.0.0.5", is_live=True, os_guess="Linux"))
-    db.add_credential(Credential(
-        engagement_id=eng.id, host="app.local", port=22, service="ssh",
-        username="deploy", password="TopSecretPassword!", hash_value="hashSecret!", source="hydra",
-    ))
-    db.add_chain(AttackChain(
-        engagement_id=eng.id, name="Web to RCE", impact=Severity.CRITICAL,
-        steps=[ChainStep(order=1, action="sqli", tool="sqlmap")],
-    ))
-    db.add_finding(Finding(
-        engagement_id=eng.id, host="app.local", port=None, protocol="http",
-        title="SQL Injection | 'union' select\nin /login", cwe_id="CWE-89",
-        severity=Severity.HIGH, tool_source="sqlmap",
-    ))
-    db.add_finding(Finding(
-        engagement_id=eng.id, host="app.local", port=443, protocol="https",
-        title="Second CWE-89 finding", cwe_id="CWE-89",
-        severity=Severity.MEDIUM, tool_source="sqlmap", cvss_score="invalid_float",  # type: ignore[arg-type]
-    ) if False else Finding(
-        engagement_id=eng.id, host="app.local", port=443, protocol="https",
-        title="Second CWE-89 finding", cwe_id="CWE-89",
-        severity=Severity.MEDIUM, tool_source="sqlmap",
-    ))
+    db.add_target(
+        Target(
+            engagement_id=eng.id, host="app.local", ip="10.0.0.5", is_live=True, os_guess="Linux"
+        )
+    )
+    db.add_credential(
+        Credential(
+            engagement_id=eng.id,
+            host="app.local",
+            port=22,
+            service="ssh",
+            username="deploy",
+            password="TopSecretPassword!",
+            hash_value="hashSecret!",
+            source="hydra",
+        )
+    )
+    db.add_chain(
+        AttackChain(
+            engagement_id=eng.id,
+            name="Web to RCE",
+            impact=Severity.CRITICAL,
+            steps=[ChainStep(order=1, action="sqli", tool="sqlmap")],
+        )
+    )
+    db.add_finding(
+        Finding(
+            engagement_id=eng.id,
+            host="app.local",
+            port=None,
+            protocol="http",
+            title="SQL Injection | 'union' select\nin /login",
+            cwe_id="CWE-89",
+            severity=Severity.HIGH,
+            tool_source="sqlmap",
+        )
+    )
+    db.add_finding(
+        Finding(
+            engagement_id=eng.id,
+            host="app.local",
+            port=443,
+            protocol="https",
+            title="Second CWE-89 finding",
+            cwe_id="CWE-89",
+            severity=Severity.MEDIUM,
+            tool_source="sqlmap",
+            cvss_score="invalid_float",  # type: ignore[arg-type]
+        )
+        if False
+        else Finding(
+            engagement_id=eng.id,
+            host="app.local",
+            port=443,
+            protocol="https",
+            title="Second CWE-89 finding",
+            cwe_id="CWE-89",
+            severity=Severity.MEDIUM,
+            tool_source="sqlmap",
+        )
+    )
 
     data = build_report_data(db, eng.id)
     assert data.credentials[0]["password"] == "***REDACTED***"
@@ -216,6 +281,7 @@ def test_reporter_redacts_secrets_and_parity_across_md_html_docx(tmp_path):
     assert "max-height:300px" not in html_txt
 
     from docx import Document
+
     doc = Document(str(out / f"nexus_report_{eng.id}.docx"))
     doc_text = "\n".join(p.text for p in doc.paragraphs)
     assert "Discovered Credentials" in doc_text
@@ -228,11 +294,13 @@ def test_reporter_redacts_secrets_and_parity_across_md_html_docx(tmp_path):
     assert len(rules) == 2  # Distinct titles with same CWE-89 get distinct ruleIds
 
     from nexus.reporter.html import _esc
+
     assert _esc(None) == ""
     assert _esc("a'b") == "a&#x27;b"
 
     # Guard invalid float cvss_score in SARIF dict inputs
-    data.findings.append({"title": "Bad CVSS", "host": "app.local", "severity": "low", "cvss_score": "bad"})
+    data.findings.append(
+        {"title": "Bad CVSS", "host": "app.local", "severity": "low", "cvss_score": "bad"}
+    )
     sarif_raw = json.loads(render_sarif(data))
     assert len(sarif_raw["runs"][0]["results"]) == 3
-

@@ -48,8 +48,16 @@ _SECRET_RULES: list[tuple[str, Severity, re.Pattern[str]]] = [
     ("Google API Key", Severity.MEDIUM, re.compile(r"\bAIza[0-9A-Za-z\-_]{35}\b")),
     ("Stripe Live Secret Key", Severity.CRITICAL, re.compile(r"\bsk_live_[0-9A-Za-z]{20,}\b")),
     ("Slack API Token", Severity.HIGH, re.compile(r"\bxox[baprs]-[0-9A-Za-z\-]{10,48}\b")),
-    ("PEM Private Key Material", Severity.CRITICAL, re.compile(r"-----BEGIN (?:RSA |EC |OPENSSH )?PRIVATE KEY-----")),
-    ("Hardcoded JWT Token", Severity.MEDIUM, re.compile(r"\beyJ[A-Za-z0-9_-]{12,}\.eyJ[A-Za-z0-9_-]{12,}\.[A-Za-z0-9_-]{12,}\b")),
+    (
+        "PEM Private Key Material",
+        Severity.CRITICAL,
+        re.compile(r"-----BEGIN (?:RSA |EC |OPENSSH )?PRIVATE KEY-----"),
+    ),
+    (
+        "Hardcoded JWT Token",
+        Severity.MEDIUM,
+        re.compile(r"\beyJ[A-Za-z0-9_-]{12,}\.eyJ[A-Za-z0-9_-]{12,}\.[A-Za-z0-9_-]{12,}\b"),
+    ),
     (
         "Hardcoded Secret/API Credential",
         Severity.MEDIUM,
@@ -100,7 +108,11 @@ def extract_js_endpoints_and_secrets(
     host, port, proto = parse_url_target(source_url)
     scope_host = (allowed_host or host).lower()
     scope_scheme = (allowed_scheme or proto).lower()
-    scope_port = int(allowed_port if allowed_port is not None else (port or (443 if scope_scheme == "https" else 80)))
+    scope_port = int(
+        allowed_port
+        if allowed_port is not None
+        else (port or (443 if scope_scheme == "https" else 80))
+    )
     bounded = (content or "")[:_MAX_CRAWL_BODY_BYTES]
 
     endpoints: list[str] = []
@@ -133,20 +145,22 @@ def extract_js_endpoints_and_secrets(
             if key in seen_secrets:
                 continue
             seen_secrets.add(key)
-            findings.append(Finding(
-                host=host,
-                port=port,
-                protocol=proto,
-                title=f"Client-Side Secret Exposed: {label}",
-                description=(
-                    f"Passive analysis detected a potential {label} embedded in response from {source_url}."
-                ),
-                severity=sev,
-                cwe_id="CWE-798",
-                tool_source="crawler",
-                evidence=f"Source: {source_url}\nMatch (masked): {masked}",
-                confirmed=True,
-            ))
+            findings.append(
+                Finding(
+                    host=host,
+                    port=port,
+                    protocol=proto,
+                    title=f"Client-Side Secret Exposed: {label}",
+                    description=(
+                        f"Passive analysis detected a potential {label} embedded in response from {source_url}."
+                    ),
+                    severity=sev,
+                    cwe_id="CWE-798",
+                    tool_source="crawler",
+                    evidence=f"Source: {source_url}\nMatch (masked): {masked}",
+                    confirmed=True,
+                )
+            )
 
     return endpoints, findings
 
@@ -164,15 +178,21 @@ async def _katana_crawl(
     clean_headers = validate_headers(headers)
     conc, rate, _ = _STEALTH_CRAWL.get(stealth, _STEALTH_CRAWL["normal"])
     args = [
-        "-u", clean_target,
-        "-d", str(max_depth),
+        "-u",
+        clean_target,
+        "-d",
+        str(max_depth),
         "-jc",
-        "-kf", "all",
-        "-fs", "fqdn",
+        "-kf",
+        "all",
+        "-fs",
+        "fqdn",
         "-jsonl",
         "-silent",
-        "-c", str(conc),
-        "-rl", str(rate),
+        "-c",
+        str(conc),
+        "-rl",
+        str(rate),
     ]
     if clean_headers:
         for k, v in clean_headers.items():
@@ -195,15 +215,17 @@ async def _katana_crawl(
     return urls
 
 
-_DEFAULT_SENSITIVE_HEADERS = frozenset({
-    "authorization",
-    "proxy-authorization",
-    "cookie",
-    "x-api-key",
-    "x-auth-token",
-    "x-access-token",
-    "api-key",
-})
+_DEFAULT_SENSITIVE_HEADERS = frozenset(
+    {
+        "authorization",
+        "proxy-authorization",
+        "cookie",
+        "x-api-key",
+        "x-auth-token",
+        "x-access-token",
+        "api-key",
+    }
+)
 
 
 def _protected_header_names(headers: dict[str, str] | None) -> set[str]:
@@ -235,7 +257,9 @@ def _make_url_keeper(base_host: str, base_scheme: str = "http", base_port: int =
     eff_port = int(base_port or (443 if eff_scheme == "https" else 80))
 
     def _keep(u: str) -> bool:
-        if not _is_same_target_origin(u, base_scheme=eff_scheme, base_host=base_host, base_port=eff_port):
+        if not _is_same_target_origin(
+            u, base_scheme=eff_scheme, base_host=base_host, base_port=eff_port
+        ):
             return False
         p = urlparse(u)
         if p.path == "/favicon.ico":
@@ -303,7 +327,10 @@ def _find_chromium_binary() -> str | None:
     else:
         for pat in (
             str(Path.home() / ".cache/ms-playwright/chromium-*/chrome-linux*/chrome"),
-            str(Path.home() / ".cache/ms-playwright/chromium_headless_shell-*/chrome-headless-shell*/chrome-headless-shell"),
+            str(
+                Path.home()
+                / ".cache/ms-playwright/chromium_headless_shell-*/chrome-headless-shell*/chrome-headless-shell"
+            ),
         ):
             for match in sorted(glob.glob(pat)):
                 p = Path(match)
@@ -373,7 +400,9 @@ async def _playwright_browser_crawl(
                             await route.abort()
                             return
                         safe_hdrs = {
-                            k: v for k, v in req.headers.items() if k.lower() not in protected_hdr_names
+                            k: v
+                            for k, v in req.headers.items()
+                            if k.lower() not in protected_hdr_names
                         }
                         await route.continue_(headers=safe_hdrs)
                         return
@@ -385,17 +414,28 @@ async def _playwright_browser_crawl(
                             return
                         if 300 <= resp.status < 400:
                             loc = next(
-                                (hv.strip() for hk, hv in (resp.headers or {}).items() if hk.lower() == "location"),
+                                (
+                                    hv.strip()
+                                    for hk, hv in (resp.headers or {}).items()
+                                    if hk.lower() == "location"
+                                ),
                                 "",
                             )
                             if loc:
                                 resolved = urljoin(req.url, loc)
                                 if not _is_same_target_origin(
-                                    resolved, base_scheme=base_proto, base_host=base_host, base_port=base_port
+                                    resolved,
+                                    base_scheme=base_proto,
+                                    base_host=base_host,
+                                    base_port=base_port,
                                 ):
                                     await route.abort()
                                     return
-                                if req.resource_type == "document" and _keep(resolved) and resolved not in visited:
+                                if (
+                                    req.resource_type == "document"
+                                    and _keep(resolved)
+                                    and resolved not in visited
+                                ):
                                     queue.append(resolved)
                         await route.fulfill(response=resp)
                         return
@@ -425,9 +465,16 @@ async def _playwright_browser_crawl(
                     except Exception:
                         dom_links = []
                     _process_dom_snapshot(
-                        cur, html, dom_links,
-                        base_host=base_host, base_scheme=base_proto, base_port=base_port,
-                        findings=findings, keep_fn=_keep, visited=visited, queue=queue,
+                        cur,
+                        html,
+                        dom_links,
+                        base_host=base_host,
+                        base_scheme=base_proto,
+                        base_port=base_port,
+                        findings=findings,
+                        keep_fn=_keep,
+                        visited=visited,
+                        queue=queue,
                     )
             finally:
                 await browser.close()
@@ -492,10 +539,14 @@ async def _cdp_browser_crawl(
         ]
         if os.name != "nt" and hasattr(os, "geteuid") and os.geteuid() == 0:
             if os.environ.get("NEXUS_ALLOW_NO_SANDBOX") == "1":
-                log.warning("Running headless Chromium with --no-sandbox as root (NEXUS_ALLOW_NO_SANDBOX=1)")
+                log.warning(
+                    "Running headless Chromium with --no-sandbox as root (NEXUS_ALLOW_NO_SANDBOX=1)"
+                )
                 cmd.append("--no-sandbox")
             else:
-                log.warning("Running as root without NEXUS_ALLOW_NO_SANDBOX=1; keeping Chromium sandbox enabled")
+                log.warning(
+                    "Running as root without NEXUS_ALLOW_NO_SANDBOX=1; keeping Chromium sandbox enabled"
+                )
         cmd.append("about:blank")
 
         proc = await asyncio.create_subprocess_exec(
@@ -545,7 +596,9 @@ async def _cdp_browser_crawl(
             main_frame_id = ""
             bg_tasks: set[asyncio.Task] = set()
 
-            async def _send_cdp(method: str, params: dict | None = None, *, wait: bool = True) -> dict:
+            async def _send_cdp(
+                method: str, params: dict | None = None, *, wait: bool = True
+            ) -> dict:
                 nonlocal msg_seq
                 async with send_lock:
                     msg_seq += 1
@@ -594,7 +647,10 @@ async def _cdp_browser_crawl(
                             if loc:
                                 resolved = urljoin(req_url, loc)
                                 if not _is_same_target_origin(
-                                    resolved, base_scheme=base_proto, base_host=base_host, base_port=base_port
+                                    resolved,
+                                    base_scheme=base_proto,
+                                    base_host=base_host,
+                                    base_port=base_port,
                                 ):
                                     await _send_cdp(
                                         "Fetch.failRequest",
@@ -603,7 +659,11 @@ async def _cdp_browser_crawl(
                                     )
                                     responded = True
                                     return
-                                if rtype == "Document" and _keep(resolved) and resolved not in visited:
+                                if (
+                                    rtype == "Document"
+                                    and _keep(resolved)
+                                    and resolved not in visited
+                                ):
                                     queue.append(resolved)
                         await _send_cdp("Fetch.continueResponse", {"requestId": req_id}, wait=False)
                         responded = True
@@ -636,12 +696,16 @@ async def _cdp_browser_crawl(
                                 "Fetch.continueRequest",
                                 {
                                     "requestId": req_id,
-                                    "headers": [{"name": str(k), "value": str(v)} for k, v in merged.items()],
+                                    "headers": [
+                                        {"name": str(k), "value": str(v)} for k, v in merged.items()
+                                    ],
                                 },
                                 wait=False,
                             )
                         else:
-                            await _send_cdp("Fetch.continueRequest", {"requestId": req_id}, wait=False)
+                            await _send_cdp(
+                                "Fetch.continueRequest", {"requestId": req_id}, wait=False
+                            )
                         responded = True
                         return
 
@@ -769,20 +833,27 @@ async def _cdp_browser_crawl(
                     if not isinstance(snap, dict):
                         continue
                     actual_href = str(snap.get("href") or "")
-                    if (
-                        actual_href.startswith("chrome-error://")
-                        or not _is_same_target_origin(
-                            actual_href, base_scheme=base_proto, base_host=base_host, base_port=base_port
-                        )
+                    if actual_href.startswith("chrome-error://") or not _is_same_target_origin(
+                        actual_href,
+                        base_scheme=base_proto,
+                        base_host=base_host,
+                        base_port=base_port,
                     ):
                         continue
                     html = str(snap.get("html") or "")
                     raw_links = snap.get("links")
                     dom_links = list(raw_links) if isinstance(raw_links, list) else []
                     _process_dom_snapshot(
-                        cur, html, dom_links,
-                        base_host=base_host, base_scheme=base_proto, base_port=base_port,
-                        findings=findings, keep_fn=_keep, visited=visited, queue=queue,
+                        cur,
+                        html,
+                        dom_links,
+                        base_host=base_host,
+                        base_scheme=base_proto,
+                        base_port=base_port,
+                        findings=findings,
+                        keep_fn=_keep,
+                        visited=visited,
+                        queue=queue,
                     )
             finally:
                 for t in list(bg_tasks):
@@ -877,13 +948,20 @@ async def crawl_web(
         if not _url_allowed(u):
             return
         norm = u.split("#", 1)[0]
-        if norm.lower().split("?", 1)[0].endswith(".js") and norm not in seen_js and len(js_to_scan) < 20:
+        if (
+            norm.lower().split("?", 1)[0].endswith(".js")
+            and norm not in seen_js
+            and len(js_to_scan) < 20
+        ):
             seen_js.add(norm)
             js_to_scan.append(norm)
 
     if use_browser:
         bw_urls, bw_findings = await _browser_crawl(
-            clean_url, max_pages=min(max_pages, 8), headers=clean_headers or None, timeout=min(timeout, 30)
+            clean_url,
+            max_pages=min(max_pages, 8),
+            headers=clean_headers or None,
+            timeout=min(timeout, 30),
         )
         for bu in bw_urls:
             _add_url(bu)
@@ -893,7 +971,11 @@ async def crawl_web(
     kat_added: list[str] = []
     if ToolRunner.is_available("katana"):
         kat_urls = await _katana_crawl(
-            clean_url, max_depth=max_depth, stealth=stealth, headers=clean_headers or None, timeout=timeout
+            clean_url,
+            max_depth=max_depth,
+            stealth=stealth,
+            headers=clean_headers or None,
+            timeout=timeout,
         )
         for ku in kat_urls:
             if _add_url(ku):
@@ -910,9 +992,11 @@ async def crawl_web(
                 seed = list(js_to_scan) + [u for u in kat_added if u not in seen_js]
                 queue: deque[tuple[str, int]] = deque((u, max_depth) for u in seed[:max_pages])
             else:
-                seed = [clean_url] + [u for u in discovered if u != clean_url] + [
-                    u for u in js_to_scan if u != clean_url and u not in discovered
-                ]
+                seed = (
+                    [clean_url]
+                    + [u for u in discovered if u != clean_url]
+                    + [u for u in js_to_scan if u != clean_url and u not in discovered]
+                )
                 queue = deque((u, 0) for u in seed[:max_pages])
 
             visited: set[str] = set()
@@ -947,7 +1031,11 @@ async def crawl_web(
                 if not text:
                     continue
 
-                if "javascript" in ctype or cur_url.lower().split("?", 1)[0].endswith(".js") or "html" in ctype:
+                if (
+                    "javascript" in ctype
+                    or cur_url.lower().split("?", 1)[0].endswith(".js")
+                    or "html" in ctype
+                ):
                     js_eps, sec_findings = extract_js_endpoints_and_secrets(
                         text,
                         cur_url,
@@ -988,6 +1076,8 @@ async def crawl_web(
 
     log.info(
         "Web crawl for %s: %d endpoint(s), %d JS secret finding(s)",
-        target_url, len(discovered), len(deduped_findings),
+        target_url,
+        len(discovered),
+        len(deduped_findings),
     )
     return discovered, deduped_findings

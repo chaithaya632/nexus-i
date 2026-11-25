@@ -63,7 +63,7 @@ def _read_meminfo() -> tuple[int, int]:
     total_kb = 0
     free_kb = 0
     try:
-        with open("/proc/meminfo", "r", encoding="utf-8") as f:
+        with open("/proc/meminfo", encoding="utf-8") as f:
             mem_free_fallback = 0
             for line in f:
                 if line.startswith("MemTotal:"):
@@ -93,7 +93,9 @@ def _read_meminfo() -> tuple[int, int]:
             phys_pages = int(os.sysconf("SC_PHYS_PAGES"))
             avail_pages = int(os.sysconf("SC_AVPHYS_PAGES"))
             if page_size > 0 and phys_pages > 0 and avail_pages >= 0:
-                return (phys_pages * page_size) // (1024 * 1024), (avail_pages * page_size) // (1024 * 1024)
+                return (phys_pages * page_size) // (1024 * 1024), (avail_pages * page_size) // (
+                    1024 * 1024
+                )
         except (ValueError, OSError):
             pass
 

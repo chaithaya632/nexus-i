@@ -20,7 +20,6 @@ from nexus.scanner.network_services import (
     audit_docker_api,
     audit_elasticsearch,
     audit_ftp,
-    audit_memcached,
     audit_network_service,
     audit_redis,
     audit_smb,
@@ -77,11 +76,15 @@ class TestRedisAndElasticsearchProbes:
                 self.send_response(200)
                 self.send_header("Content-Type", "application/json")
                 self.end_headers()
-                self.wfile.write(json.dumps({
-                    "name": "node-1",
-                    "cluster_name": "nexus-lab",
-                    "tagline": "You Know, for Search",
-                }).encode())
+                self.wfile.write(
+                    json.dumps(
+                        {
+                            "name": "node-1",
+                            "cluster_name": "nexus-lab",
+                            "tagline": "You Know, for Search",
+                        }
+                    ).encode()
+                )
 
             def log_message(self, format, *args):
                 pass
@@ -162,8 +165,13 @@ class TestFtpAndSmbAuditors:
             return ToolOutput(tool=tool, args=args, returncode=0, stdout="", stderr="")
 
         with (
-            patch("nexus.scanner.network_services.ToolRunner.is_available", side_effect=lambda name: name == "nmap"),
-            patch("nexus.scanner.network_services.ToolRunner.run", AsyncMock(side_effect=_fake_run)),
+            patch(
+                "nexus.scanner.network_services.ToolRunner.is_available",
+                side_effect=lambda name: name == "nmap",
+            ),
+            patch(
+                "nexus.scanner.network_services.ToolRunner.run", AsyncMock(side_effect=_fake_run)
+            ),
         ):
             findings = await audit_network_service("smb.local", 445, "microsoft-ds")
 
@@ -195,7 +203,10 @@ class TestFtpAndSmbAuditors:
             m_srv.close()
 
         assert len(d_findings) == 1
-        assert d_findings[0].severity == Severity.CRITICAL and d_findings[0].tool_source == "docker_probe"
+        assert (
+            d_findings[0].severity == Severity.CRITICAL
+            and d_findings[0].tool_source == "docker_probe"
+        )
         assert len(m_findings) == 1
         assert m_findings[0].tool_source == "memcached_probe"
 
@@ -240,7 +251,9 @@ class TestFtpAndSmbAuditors:
 
         # Clean SMB from nxc (signing:True, SMBv1:False) must NOT re-run nmap
         nxc_clean = ToolOutput(
-            tool="nxc", args=[], returncode=0,
+            tool="nxc",
+            args=[],
+            returncode=0,
             stdout="SMB 127.0.0.1 445 SRV [*] Windows (signing:True) (SMBv1:False)\n",
             stderr="",
         )

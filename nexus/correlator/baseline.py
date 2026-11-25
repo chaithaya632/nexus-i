@@ -6,9 +6,10 @@ import fnmatch
 import logging
 import os
 import shlex
+from collections.abc import Iterable
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Iterable
+from typing import Any
 
 import yaml
 
@@ -76,7 +77,9 @@ class IgnoreRule:
 
     def matches(self, finding: Finding) -> bool:
         """Return True iff every non-empty constraint in this rule matches the finding."""
-        if not any((self.cves, self.cwes, self.hosts, self.ports, self.tools, self.titles, self.severities)):
+        if not any(
+            (self.cves, self.cwes, self.hosts, self.ports, self.tools, self.titles, self.severities)
+        ):
             return False
 
         f_cves = {c.upper() for c in finding.cve_ids}
@@ -101,7 +104,9 @@ class IgnoreRule:
         if self.tools and finding.tool_source.lower() not in {t.lower() for t in self.tools}:
             return False
 
-        if self.severities and finding.severity.value.lower() not in {s.lower() for s in self.severities}:
+        if self.severities and finding.severity.value.lower() not in {
+            s.lower() for s in self.severities
+        }:
             return False
 
         if self.titles:

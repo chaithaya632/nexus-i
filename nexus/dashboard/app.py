@@ -28,9 +28,10 @@ from typing import Any
 
 try:
     from fastapi import FastAPI, Request, WebSocket, WebSocketDisconnect
+    from fastapi.middleware.cors import CORSMiddleware
     from fastapi.responses import HTMLResponse, JSONResponse, Response
     from fastapi.staticfiles import StaticFiles
-    from fastapi.middleware.cors import CORSMiddleware
+
     HAS_FASTAPI = True
 except ImportError:
     HAS_FASTAPI = False
@@ -103,7 +104,9 @@ class DashboardApp:
                 auth_hdr = request.headers.get("authorization", "")
                 bearer = auth_hdr[7:].strip() if auth_hdr.lower().startswith("bearer ") else ""
                 supplied = bearer or request.headers.get("x-nexus-token", "").strip()
-                if not supplied or not hmac.compare_digest(supplied.encode("utf-8"), self.api_token.encode("utf-8")):
+                if not supplied or not hmac.compare_digest(
+                    supplied.encode("utf-8"), self.api_token.encode("utf-8")
+                ):
                     return JSONResponse({"error": "Unauthorized"}, status_code=401)
             return await call_next(request)
 
@@ -200,10 +203,7 @@ class DashboardApp:
             if not db.get_engagement(eng_id):
                 return JSONResponse({"error": "not found"}, status_code=404)
             chains = db.get_chains(eng_id)
-            return [
-                c.model_dump() if hasattr(c, "model_dump") else c
-                for c in chains
-            ]
+            return [c.model_dump() if hasattr(c, "model_dump") else c for c in chains]
 
         @app.get("/api/engagements/{eng_id}/targets")
         async def get_targets(eng_id: str):
@@ -211,10 +211,7 @@ class DashboardApp:
             if not db.get_engagement(eng_id):
                 return JSONResponse({"error": "not found"}, status_code=404)
             targets = db.get_targets(eng_id)
-            return [
-                t.model_dump() if hasattr(t, "model_dump") else t
-                for t in targets
-            ]
+            return [t.model_dump() if hasattr(t, "model_dump") else t for t in targets]
 
         # ── WebSocket ─────────────────────────────────────────────
 
@@ -225,7 +222,9 @@ class DashboardApp:
                 bearer = auth_hdr[7:].strip() if auth_hdr.lower().startswith("bearer ") else ""
                 hdr_tok = bearer or websocket.headers.get("x-nexus-token", "").strip()
                 if hdr_tok:
-                    if not hmac.compare_digest(hdr_tok.encode("utf-8"), self.api_token.encode("utf-8")):
+                    if not hmac.compare_digest(
+                        hdr_tok.encode("utf-8"), self.api_token.encode("utf-8")
+                    ):
                         await websocket.close(code=1008)
                         return
                     await websocket.accept()
@@ -236,14 +235,20 @@ class DashboardApp:
                     try:
                         first_msg = await asyncio.wait_for(websocket.receive_text(), timeout=5.0)
                         payload = json.loads(first_msg)
-                        frame_tok = str(payload.get("token", "")).strip() if isinstance(payload, dict) and payload.get("type") == "auth" else ""
-                    except (asyncio.TimeoutError, WebSocketDisconnect, ValueError, TypeError):
+                        frame_tok = (
+                            str(payload.get("token", "")).strip()
+                            if isinstance(payload, dict) and payload.get("type") == "auth"
+                            else ""
+                        )
+                    except (TimeoutError, WebSocketDisconnect, ValueError, TypeError):
                         try:
                             await websocket.close(code=1008)
                         except Exception:
                             pass
                         return
-                    if not frame_tok or not hmac.compare_digest(frame_tok.encode("utf-8"), self.api_token.encode("utf-8")):
+                    if not frame_tok or not hmac.compare_digest(
+                        frame_tok.encode("utf-8"), self.api_token.encode("utf-8")
+                    ):
                         await websocket.close(code=1008)
                         return
                     await websocket.send_text(json.dumps({"event": "auth", "status": "ok"}))

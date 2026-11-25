@@ -13,7 +13,6 @@ import io
 import logging
 import xml.etree.ElementTree as ET
 from pathlib import Path
-from typing import Any
 
 from nexus.db.models import Finding, Severity
 from nexus.recon.runner import safe_parse_xml
@@ -23,11 +22,17 @@ log = logging.getLogger("nexus.scanner.importer")
 MAX_IMPORT_BYTES = 50 * 1024 * 1024  # 50 MiB guard against oversized import files
 
 _SEV_MAP: dict[str, Severity] = {
-    "critical": Severity.CRITICAL, "4": Severity.CRITICAL,
-    "high": Severity.HIGH, "3": Severity.HIGH,
-    "medium": Severity.MEDIUM, "2": Severity.MEDIUM,
-    "low": Severity.LOW, "1": Severity.LOW,
-    "info": Severity.INFO, "informational": Severity.INFO, "0": Severity.INFO,
+    "critical": Severity.CRITICAL,
+    "4": Severity.CRITICAL,
+    "high": Severity.HIGH,
+    "3": Severity.HIGH,
+    "medium": Severity.MEDIUM,
+    "2": Severity.MEDIUM,
+    "low": Severity.LOW,
+    "1": Severity.LOW,
+    "info": Severity.INFO,
+    "informational": Severity.INFO,
+    "0": Severity.INFO,
     "none": Severity.INFO,
 }
 
@@ -97,20 +102,22 @@ def import_nessus(xml_content: str) -> list[Finding]:
             cwe_el = item.find("cwe")
             cwe_id = f"CWE-{cwe_el.text}" if cwe_el is not None and cwe_el.text else ""
 
-            findings.append(Finding(
-                host=host,
-                port=port if port else None,
-                protocol=protocol,
-                title=f"[Nessus] {plugin_name}",
-                description=description[:2000],
-                severity=severity,
-                cvss_score=cvss_score,
-                cve_ids=cve_ids,
-                cwe_id=cwe_id,
-                tool_source="nessus",
-                remediation=solution[:1000] if solution else "",
-                evidence=_text(item, "plugin_output")[:2000],
-            ))
+            findings.append(
+                Finding(
+                    host=host,
+                    port=port if port else None,
+                    protocol=protocol,
+                    title=f"[Nessus] {plugin_name}",
+                    description=description[:2000],
+                    severity=severity,
+                    cvss_score=cvss_score,
+                    cve_ids=cve_ids,
+                    cwe_id=cwe_id,
+                    tool_source="nessus",
+                    remediation=solution[:1000] if solution else "",
+                    evidence=_text(item, "plugin_output")[:2000],
+                )
+            )
 
     log.info("Imported %d findings from Nessus", len(findings))
     return findings
@@ -154,16 +161,18 @@ def import_burp_xml(xml_content: str) -> list[Finding]:
             rem_el = issue.find("remediationBackground")
         rem = rem_el.text if rem_el is not None and rem_el.text else ""
 
-        findings.append(Finding(
-            host=host,
-            protocol="http",
-            title=f"[Burp] {name}",
-            description=desc[:2000],
-            severity=severity,
-            tool_source="burp",
-            remediation=rem[:1000],
-            evidence=f"Path: {path}",
-        ))
+        findings.append(
+            Finding(
+                host=host,
+                protocol="http",
+                title=f"[Burp] {name}",
+                description=desc[:2000],
+                severity=severity,
+                tool_source="burp",
+                remediation=rem[:1000],
+                evidence=f"Path: {path}",
+            )
+        )
 
     log.info("Imported %d findings from Burp XML", len(findings))
     return findings
@@ -185,14 +194,16 @@ def import_csv(csv_content: str) -> list[Finding]:
         title = row.get("title", row.get("name", row.get("vulnerability", "Imported finding")))
         desc = row.get("description", row.get("details", ""))
 
-        findings.append(Finding(
-            host=host,
-            port=port,
-            title=title,
-            description=desc[:2000],
-            severity=severity,
-            tool_source="csv_import",
-        ))
+        findings.append(
+            Finding(
+                host=host,
+                port=port,
+                title=title,
+                description=desc[:2000],
+                severity=severity,
+                tool_source="csv_import",
+            )
+        )
 
     log.info("Imported %d findings from CSV", len(findings))
     return findings

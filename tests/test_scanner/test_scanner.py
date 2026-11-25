@@ -1,36 +1,37 @@
 """Tests for scanner wrappers and result importer."""
 
 import json
-import pytest
 from unittest.mock import patch
 
-from nexus.db.models import Finding, Severity
+import pytest
+
+from nexus.db.models import Severity
 from nexus.recon.runner import ToolRunner
 
-
 # ── Nuclei parser tests ──────────────────────────────────────────
-
 from nexus.scanner.nuclei import _parse_nuclei_line
 
-SAMPLE_NUCLEI_JSON = json.dumps({
-    "template-id": "cve-2021-44228",
-    "info": {
-        "name": "Apache Log4j RCE",
-        "severity": "critical",
-        "description": "Remote code execution via Log4j JNDI lookup.",
-        "classification": {
-            "cve-id": ["CVE-2021-44228"],
-            "cwe-id": ["CWE-502"],
-            "cvss-score": 10.0,
+SAMPLE_NUCLEI_JSON = json.dumps(
+    {
+        "template-id": "cve-2021-44228",
+        "info": {
+            "name": "Apache Log4j RCE",
+            "severity": "critical",
+            "description": "Remote code execution via Log4j JNDI lookup.",
+            "classification": {
+                "cve-id": ["CVE-2021-44228"],
+                "cwe-id": ["CWE-502"],
+                "cvss-score": 10.0,
+            },
         },
-    },
-    "host": "example.com",
-    "port": 8080,
-    "type": "http",
-    "matched-at": "http://example.com:8080/api",
-    "request": "GET /api HTTP/1.1",
-    "response": "HTTP/1.1 200 OK",
-})
+        "host": "example.com",
+        "port": 8080,
+        "type": "http",
+        "matched-at": "http://example.com:8080/api",
+        "request": "GET /api HTTP/1.1",
+        "response": "HTTP/1.1 200 OK",
+    }
+)
 
 
 def test_parse_nuclei_line_valid():
@@ -46,12 +47,14 @@ def test_parse_nuclei_line_valid():
 
 
 def test_parse_nuclei_line_minimal():
-    line = json.dumps({
-        "template-id": "tech-detect",
-        "info": {"name": "Nginx detected", "severity": "info"},
-        "host": "test.com",
-        "type": "http",
-    })
+    line = json.dumps(
+        {
+            "template-id": "tech-detect",
+            "info": {"name": "Nginx detected", "severity": "info"},
+            "host": "test.com",
+            "type": "http",
+        }
+    )
     f = _parse_nuclei_line(line)
     assert f is not None
     assert f.severity == Severity.INFO
@@ -64,16 +67,18 @@ def test_parse_nuclei_line_bad_json():
 
 
 def test_parse_nuclei_cwe_normalization():
-    line = json.dumps({
-        "template-id": "test",
-        "info": {
-            "name": "Test",
-            "severity": "high",
-            "classification": {"cwe-id": "79"},
-        },
-        "host": "x.com",
-        "type": "http",
-    })
+    line = json.dumps(
+        {
+            "template-id": "test",
+            "info": {
+                "name": "Test",
+                "severity": "high",
+                "classification": {"cwe-id": "79"},
+            },
+            "host": "x.com",
+            "type": "http",
+        }
+    )
     f = _parse_nuclei_line(line)
     assert f is not None
     assert f.cwe_id == "CWE-79"
@@ -81,7 +86,7 @@ def test_parse_nuclei_cwe_normalization():
 
 # ── Nikto parser tests ───────────────────────────────────────────
 
-from nexus.scanner.nikto import _parse_csv_line, _classify_severity
+from nexus.scanner.nikto import _classify_severity, _parse_csv_line
 
 
 def test_parse_csv_line():
@@ -116,15 +121,19 @@ from nexus.scanner.web import ffuf_scan
 async def test_ffuf_no_tool():
     """ffuf should raise ToolNotFoundError when binary is missing."""
     from unittest.mock import patch
+
     from nexus.recon.runner import ToolNotFoundError
-    with patch("nexus.recon.runner.asyncio.create_subprocess_exec", side_effect=FileNotFoundError("ffuf")):
+
+    with patch(
+        "nexus.recon.runner.asyncio.create_subprocess_exec", side_effect=FileNotFoundError("ffuf")
+    ):
         with pytest.raises(ToolNotFoundError):
             await ffuf_scan("http://example.com")
 
 
 # ── Importer tests ───────────────────────────────────────────────
 
-from nexus.scanner.importer import import_csv, import_nessus, import_burp_xml
+from nexus.scanner.importer import import_burp_xml, import_csv, import_nessus
 
 SAMPLE_CSV = """host,port,severity,title,description
 example.com,80,high,XSS in search,Reflected XSS via q param
@@ -205,8 +214,10 @@ def test_import_nessus_bad_xml():
 
 # ── Module import smoke test ─────────────────────────────────────
 
+
 def test_scanner_package_imports():
-    from nexus.scanner import nuclei_scan, ffuf_scan, nikto_scan, import_file
+    from nexus.scanner import import_file, nuclei_scan
+
     assert callable(nuclei_scan)
     assert callable(import_file)
 
@@ -229,14 +240,24 @@ def test_parse_nikto_csv_real_kali_format():
 
 
 def test_nuclei_string_and_empty_ports():
-    str_port = json.dumps({
-        "template-id": "test-str", "info": {"name": "StrPort", "severity": "low"},
-        "host": "x.com", "port": "8443", "type": "https",
-    })
-    empty_port = json.dumps({
-        "template-id": "test-empty", "info": {"name": "EmptyPort", "severity": "info"},
-        "host": "x.com", "port": "", "type": "http",
-    })
+    str_port = json.dumps(
+        {
+            "template-id": "test-str",
+            "info": {"name": "StrPort", "severity": "low"},
+            "host": "x.com",
+            "port": "8443",
+            "type": "https",
+        }
+    )
+    empty_port = json.dumps(
+        {
+            "template-id": "test-empty",
+            "info": {"name": "EmptyPort", "severity": "info"},
+            "host": "x.com",
+            "port": "",
+            "type": "http",
+        }
+    )
     assert _parse_nuclei_line(str_port).port == 8443
     assert _parse_nuclei_line(empty_port).port is None
 
@@ -245,13 +266,26 @@ def test_nuclei_string_and_empty_ports():
 async def test_ffuf_reads_clean_json_ignoring_stdout_prefix():
     from pathlib import Path
     from unittest.mock import AsyncMock
+
     from nexus.recon.runner import ToolOutput
 
     async def fake_run(tool, args, **kw):
         out_path = Path(args[args.index("-o") + 1])
-        out_path.write_text(json.dumps({
-            "results": [{"url": "http://app.local:8080/admin", "status": 200, "length": 42, "words": 5}]
-        }), encoding="utf-8")
+        out_path.write_text(
+            json.dumps(
+                {
+                    "results": [
+                        {
+                            "url": "http://app.local:8080/admin",
+                            "status": 200,
+                            "length": 42,
+                            "words": 5,
+                        }
+                    ]
+                }
+            ),
+            encoding="utf-8",
+        )
         return ToolOutput(tool="ffuf", args=args, returncode=0, stdout="admin\n", stderr="")
 
     with patch.object(ToolRunner, "run", AsyncMock(side_effect=fake_run)):
@@ -284,9 +318,12 @@ def test_import_file_autodetects_all_formats(tmp_path):
 @pytest.mark.asyncio
 async def test_ffuf_adds_ac_and_stealth_rate_limits():
     from unittest.mock import AsyncMock
+
     from nexus.recon.runner import ToolOutput
 
-    mock_run = AsyncMock(return_value=ToolOutput(tool="ffuf", args=[], returncode=0, stdout="", stderr=""))
+    mock_run = AsyncMock(
+        return_value=ToolOutput(tool="ffuf", args=[], returncode=0, stdout="", stderr="")
+    )
     with patch.object(ToolRunner, "run", mock_run):
         await ffuf_scan("https://app.local", wordlist="dummy.txt", stealth="ghost")
 
@@ -312,21 +349,26 @@ def test_importer_size_guard_and_xxe_rejection(tmp_path):
 @pytest.mark.asyncio
 async def test_sqli_per_parameter_reset_risk_cap_and_credential_hardening(tmp_path):
     from unittest.mock import AsyncMock
+
     from nexus.exploit.credential import hydra_attack, test_default_creds
     from nexus.exploit.sqli import sqlmap_scan
     from nexus.recon.runner import ToolOutput
 
     # 1. sqlmap resets injectable per Parameter:, ignores 'not injectable', caps risk <= 2
-    stdout = "\n".join([
-        "Parameter: id (GET)",
-        "Parameter 'id' is vulnerable.",
-        "Type: error-based",
-        "Payload: id=1'",
-        "Parameter: page (GET)",
-        "Parameter 'page' does not seem to be injectable",
-        "Payload: should_not_trigger",
-    ])
-    mock_sql = AsyncMock(return_value=ToolOutput(tool="sqlmap", args=[], returncode=0, stdout=stdout, stderr=""))
+    stdout = "\n".join(
+        [
+            "Parameter: id (GET)",
+            "Parameter 'id' is vulnerable.",
+            "Type: error-based",
+            "Payload: id=1'",
+            "Parameter: page (GET)",
+            "Parameter 'page' does not seem to be injectable",
+            "Payload: should_not_trigger",
+        ]
+    )
+    mock_sql = AsyncMock(
+        return_value=ToolOutput(tool="sqlmap", args=[], returncode=0, stdout=stdout, stderr="")
+    )
     with patch("nexus.exploit.sqli.ToolRunner.run", mock_sql):
         findings = await sqlmap_scan("http://app.local/items?id=1&page=2", risk=3)
 
@@ -351,7 +393,9 @@ async def test_sqli_per_parameter_reset_risk_cap_and_credential_hardening(tmp_pa
     pl = tmp_path / "p.txt"
     ul.write_text("admin\n", encoding="utf-8")
     pl.write_text("secret\n", encoding="utf-8")
-    mock_hydra = AsyncMock(return_value=ToolOutput(tool="hydra", args=[], returncode=0, stdout="", stderr=""))
+    mock_hydra = AsyncMock(
+        return_value=ToolOutput(tool="hydra", args=[], returncode=0, stdout="", stderr="")
+    )
     with patch("nexus.exploit.credential.ToolRunner.run", mock_hydra):
         await hydra_attack("127.0.0.1", "ssh", user_list=str(ul), pass_list=str(pl))
     assert "-f" in mock_hydra.await_args.args[1]
@@ -363,7 +407,12 @@ async def test_sqli_per_parameter_reset_risk_cap_and_credential_hardening(tmp_pa
         sleep_calls.append(d)
 
     with (
-        patch("nexus.exploit.credential.ToolRunner.run", AsyncMock(return_value=ToolOutput(tool="hydra", args=[], returncode=0, stdout="", stderr=""))),
+        patch(
+            "nexus.exploit.credential.ToolRunner.run",
+            AsyncMock(
+                return_value=ToolOutput(tool="hydra", args=[], returncode=0, stdout="", stderr="")
+            ),
+        ),
         patch("nexus.exploit.credential.asyncio.sleep", side_effect=_fake_sleep),
     ):
         await test_default_creds("127.0.0.1", 22, "ssh", [("u1", "p1"), ("u2", "p2")], delay_s=0.25)

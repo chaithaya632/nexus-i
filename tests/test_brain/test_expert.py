@@ -1,8 +1,6 @@
 """Tests for nexus.brain.expert."""
 
-import pytest
-
-from nexus.brain.expert import RuleEngine, Rule, Fact, build_service_rules
+from nexus.brain.expert import Rule, RuleEngine, build_service_rules
 
 
 class TestRuleEngine:
@@ -41,10 +39,12 @@ class TestRuleEngine:
         engine = RuleEngine()
         engine.add_fact("x", True)
 
-        engine.add_rule(Rule(name="low_pri", priority=50,
-                             conditions=[lambda f: "x" in f], actions=["low"]))
-        engine.add_rule(Rule(name="high_pri", priority=5,
-                             conditions=[lambda f: "x" in f], actions=["high"]))
+        engine.add_rule(
+            Rule(name="low_pri", priority=50, conditions=[lambda f: "x" in f], actions=["low"])
+        )
+        engine.add_rule(
+            Rule(name="high_pri", priority=5, conditions=[lambda f: "x" in f], actions=["high"])
+        )
 
         fired = engine.evaluate()
         assert fired[0][0] == "high_pri"

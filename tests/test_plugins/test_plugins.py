@@ -7,7 +7,7 @@ from pathlib import Path
 
 import pytest
 
-from nexus.plugins import PluginRegistry, PluginLoader
+from nexus.plugins import PluginLoader, PluginRegistry
 
 
 class TestPluginRegistry:
@@ -23,37 +23,50 @@ class TestPluginRegistry:
 
     def test_add_scanner(self) -> None:
         reg = PluginRegistry()
+
         async def dummy(target: str) -> list:
             return []
+
         reg.add_scanner("test-scan", dummy)
         assert "test-scan" in reg.scanners
         assert reg.scanners["test-scan"] is dummy
 
     def test_add_recon(self) -> None:
         reg = PluginRegistry()
+
         async def dummy(target: str) -> list:
             return []
+
         reg.add_recon("test-recon", dummy)
         assert "test-recon" in reg.recon_modules
 
     def test_add_reporter(self) -> None:
         reg = PluginRegistry()
+
         def dummy(data):
             return "report"
+
         reg.add_reporter("test-fmt", dummy)
         assert "test-fmt" in reg.reporters
 
     def test_add_post_hook(self) -> None:
         reg = PluginRegistry()
+
         def hook(findings):
             return findings
+
         reg.add_post_hook(hook)
         assert len(reg.post_hooks) == 1
 
     def test_stats(self) -> None:
         reg = PluginRegistry()
-        async def s(t): return []
-        async def r(t): return []
+
+        async def s(t):
+            return []
+
+        async def r(t):
+            return []
+
         reg.add_scanner("s1", s)
         reg.add_recon("r1", r)
         stats = reg.stats()
@@ -165,7 +178,8 @@ class TestPluginLoader:
         dir_b = tmp_path / "b"
         dir_a.mkdir()
         dir_b.mkdir()
-        (dir_a / "scanner.py").write_text(textwrap.dedent("""\
+        (dir_a / "scanner.py").write_text(
+            textwrap.dedent("""\
             from dataclasses import dataclass
             PLUGIN_NAME = "plug-a"
             PLUGIN_VERSION = "1.0.0"
@@ -177,14 +191,17 @@ class TestPluginLoader:
 
             async def _run(t, **kw): return []
             def register(reg): reg.add_scanner("plug-a", _run)
-        """))
-        (dir_b / "scanner.py").write_text(textwrap.dedent("""\
+        """)
+        )
+        (dir_b / "scanner.py").write_text(
+            textwrap.dedent("""\
             PLUGIN_NAME = "plug-b"
             PLUGIN_VERSION = "2.0.0"
             PLUGIN_TYPE = "scanner"
             async def _run(t, **kw): return []
             def register(reg): reg.add_scanner("plug-b", _run)
-        """))
+        """)
+        )
 
         loader = PluginLoader()
         assert loader.load_directory(dir_a) == 1
@@ -193,21 +210,25 @@ class TestPluginLoader:
         assert "plug-b" in loader.registry.scanners
 
     def test_disabled_plugin_not_returned_in_active_hooks(self, tmp_path: Path) -> None:
-        (tmp_path / "en.py").write_text(textwrap.dedent("""\
+        (tmp_path / "en.py").write_text(
+            textwrap.dedent("""\
             PLUGIN_NAME = "toggle-plug"
             PLUGIN_VERSION = "1.0.0"
             PLUGIN_TYPE = "scanner"
             async def _run(t, **kw): return []
             def register(reg): reg.add_scanner("toggle-plug", _run)
-        """))
-        (tmp_path / "dis.py").write_text(textwrap.dedent("""\
+        """)
+        )
+        (tmp_path / "dis.py").write_text(
+            textwrap.dedent("""\
             PLUGIN_NAME = "off-plug"
             PLUGIN_VERSION = "1.0.0"
             PLUGIN_TYPE = "scanner"
             PLUGIN_ENABLED = False
             async def _run(t, **kw): return []
             def register(reg): reg.add_scanner("off-plug", _run)
-        """))
+        """)
+        )
 
         loader = PluginLoader()
         assert loader.load_directory(tmp_path) == 2

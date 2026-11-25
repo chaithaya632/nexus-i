@@ -3,9 +3,8 @@
 from __future__ import annotations
 
 import uuid
-from datetime import datetime, timezone
-from enum import Enum
-from typing import Any
+from datetime import UTC, datetime
+from enum import StrEnum
 
 from pydantic import BaseModel, Field
 
@@ -15,10 +14,10 @@ def _new_id() -> str:
 
 
 def _now() -> datetime:
-    return datetime.now(timezone.utc)
+    return datetime.now(UTC)
 
 
-class Severity(str, Enum):
+class Severity(StrEnum):
     CRITICAL = "critical"
     HIGH = "high"
     MEDIUM = "medium"
@@ -26,7 +25,7 @@ class Severity(str, Enum):
     INFO = "info"
 
 
-class EngagementPhase(str, Enum):
+class EngagementPhase(StrEnum):
     INIT = "init"
     RECON = "recon"
     SCAN = "scan"

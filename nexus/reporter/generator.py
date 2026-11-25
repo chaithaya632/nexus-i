@@ -34,6 +34,7 @@ def strip_markdown(text: str) -> str:
 @dataclass
 class ReportData:
     """All data needed to render a report."""
+
     meta: ReportMeta
     engagement: dict[str, Any]
     targets: list[dict[str, Any]]
@@ -58,7 +59,9 @@ def _to_dict(obj: Any) -> dict[str, Any]:
 
 def _redact_credential(cred: Any) -> dict[str, Any]:
     raw_pw = cred.get("password", "") if isinstance(cred, dict) else getattr(cred, "password", "")
-    raw_hash = cred.get("hash_value", "") if isinstance(cred, dict) else getattr(cred, "hash_value", "")
+    raw_hash = (
+        cred.get("hash_value", "") if isinstance(cred, dict) else getattr(cred, "hash_value", "")
+    )
     d = _to_dict(cred)
     d["password"] = "***REDACTED***" if raw_pw else ""
     d["hash_value"] = "***REDACTED***" if raw_hash else ""
@@ -81,12 +84,22 @@ def build_report_data(
 
     all_raw = db.get_findings(eng_id)
     active = [
-        f for f in all_raw
-        if not (f.get("false_positive", False) if isinstance(f, dict) else getattr(f, "false_positive", False))
+        f
+        for f in all_raw
+        if not (
+            f.get("false_positive", False)
+            if isinstance(f, dict)
+            else getattr(f, "false_positive", False)
+        )
     ]
     suppressed = [
-        f for f in all_raw
-        if (f.get("false_positive", False) if isinstance(f, dict) else getattr(f, "false_positive", False))
+        f
+        for f in all_raw
+        if (
+            f.get("false_positive", False)
+            if isinstance(f, dict)
+            else getattr(f, "false_positive", False)
+        )
     ]
     targets = db.get_targets(eng_id)
     chains = db.get_chains(eng_id)
@@ -94,7 +107,11 @@ def build_report_data(
     severity_counts = db.count_findings_by_severity(eng_id)
 
     def _sev_sort_key(item: Any) -> int:
-        sev = item.get("severity", "info") if isinstance(item, dict) else getattr(item, "severity", "info")
+        sev = (
+            item.get("severity", "info")
+            if isinstance(item, dict)
+            else getattr(item, "severity", "info")
+        )
         return -severity_rank(sev)
 
     active.sort(key=_sev_sort_key)
@@ -161,30 +178,35 @@ def generate_report(
         try:
             if fmt == "md":
                 from nexus.reporter.markdown import render_markdown
+
                 path = out_dir / f"nexus_report_{eng_id}.md"
                 path.write_text(render_markdown(data), encoding="utf-8")
                 generated.append(str(path))
 
             elif fmt == "html":
                 from nexus.reporter.html import render_html
+
                 path = out_dir / f"nexus_report_{eng_id}.html"
                 path.write_text(render_html(data), encoding="utf-8")
                 generated.append(str(path))
 
             elif fmt == "pdf":
                 from nexus.reporter.pdf import render_pdf
+
                 path = out_dir / f"nexus_report_{eng_id}.pdf"
                 render_pdf(data, str(path))
                 generated.append(str(path))
 
             elif fmt == "docx":
                 from nexus.reporter.docx import render_docx
+
                 path = out_dir / f"nexus_report_{eng_id}.docx"
                 render_docx(data, str(path))
                 generated.append(str(path))
 
             elif fmt == "sarif":
                 from nexus.reporter.sarif import render_sarif
+
                 path = out_dir / f"nexus_report_{eng_id}.sarif"
                 path.write_text(render_sarif(data, include_suppressed=True), encoding="utf-8")
                 generated.append(str(path))

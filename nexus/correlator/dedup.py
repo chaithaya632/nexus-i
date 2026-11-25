@@ -22,7 +22,9 @@ SEVERITY_RANK: dict[Severity, int] = {
 _SEV_RANK = SEVERITY_RANK
 
 _URL_RE = re.compile(r"https?://[^\s\"'<>]+", re.IGNORECASE)
-_HTTP_REQ_RE = re.compile(r"\b(?:GET|POST|PUT|DELETE|PATCH|HEAD|OPTIONS)\s+(/[^\s\"'<>?]*)", re.IGNORECASE)
+_HTTP_REQ_RE = re.compile(
+    r"\b(?:GET|POST|PUT|DELETE|PATCH|HEAD|OPTIONS)\s+(/[^\s\"'<>?]*)", re.IGNORECASE
+)
 _PATH_RE = re.compile(r"(?:^|[\s\"'(=])(/[a-zA-Z0-9._-]+(?:/[a-zA-Z0-9._-]+)*)")
 
 
@@ -98,7 +100,7 @@ def _normalize_title(title: str) -> str:
     title = title.strip()
     for prefix in ("[nuclei]", "[Nessus]", "[Burp]", "[Nikto]", "Nikto:", "Nmap script:"):
         if title.startswith(prefix):
-            title = title[len(prefix):].strip()
+            title = title[len(prefix) :].strip()
     return title.lower()
 
 

@@ -17,7 +17,7 @@ import subprocess
 import tempfile
 import xml.etree.ElementTree as _StdlibET
 from collections.abc import Mapping
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
@@ -33,40 +33,42 @@ _UNSAFE_XML_RE = re.compile(
     re.IGNORECASE,
 )
 
-_DEFAULT_DENIED_EXTRA_FLAGS = frozenset({
-    "-o",
-    "-ox",
-    "-on",
-    "-og",
-    "-oa",
-    "-oj",
-    "-il",
-    "-x",
-    "--output",
-    "--output-dir",
-    "--list",
-    "--datadir",
-    "--stylesheet",
-    "--webxml",
-    "--resume",
-    "--interactive",
-    "--shell",
-    "--exec",
-    "--command",
-    "--eval",
-    "--os-shell",
-    "--os-cmd",
-    "--os-pwn",
-    "--os-smbrelay",
-    "--os-bof",
-    "--sql-shell",
-    "--file-read",
-    "--file-write",
-    "--file-dest",
-    "--reg-read",
-    "--reg-add",
-    "--reg-del",
-})
+_DEFAULT_DENIED_EXTRA_FLAGS = frozenset(
+    {
+        "-o",
+        "-ox",
+        "-on",
+        "-og",
+        "-oa",
+        "-oj",
+        "-il",
+        "-x",
+        "--output",
+        "--output-dir",
+        "--list",
+        "--datadir",
+        "--stylesheet",
+        "--webxml",
+        "--resume",
+        "--interactive",
+        "--shell",
+        "--exec",
+        "--command",
+        "--eval",
+        "--os-shell",
+        "--os-cmd",
+        "--os-pwn",
+        "--os-smbrelay",
+        "--os-bof",
+        "--sql-shell",
+        "--file-read",
+        "--file-write",
+        "--file-dest",
+        "--reg-read",
+        "--reg-add",
+        "--reg-del",
+    }
+)
 
 
 def safe_parse_xml(xml_text: str) -> _StdlibET.Element:
@@ -203,20 +205,22 @@ class ToolOutput:
 
     @property
     def lines(self) -> list[str]:
-        return [l for l in self.stdout.splitlines() if l.strip()]
+        return [line for line in self.stdout.splitlines() if line.strip()]
 
 
-_SECRET_NEXT_FLAGS = frozenset({
-    "--api-token",
-    "--enterprise-db-token",
-    "--cookie-string",
-    "--cookie",
-    "--wp-auth",
-    "-p",
-    "--data",
-    "--password",
-    "--passwd",
-})
+_SECRET_NEXT_FLAGS = frozenset(
+    {
+        "--api-token",
+        "--enterprise-db-token",
+        "--cookie-string",
+        "--cookie",
+        "--wp-auth",
+        "-p",
+        "--data",
+        "--password",
+        "--passwd",
+    }
+)
 _HEADER_NEXT_FLAGS = frozenset({"--header", "-add-header", "--add-header"})
 
 
@@ -269,8 +273,7 @@ class ToolRunner:
         path = shutil.which(tool_name)
         if not path:
             raise ToolNotFoundError(
-                f"'{tool_name}' not found in $PATH.  Install it with: "
-                f"sudo apt install {tool_name}"
+                f"'{tool_name}' not found in $PATH.  Install it with: sudo apt install {tool_name}"
             )
         return path
 
@@ -320,7 +323,7 @@ class ToolRunner:
                 proc.communicate(input=stdin_data.encode() if stdin_data else None),
                 timeout=timeout,
             )
-        except (asyncio.TimeoutError, asyncio.CancelledError) as exc:
+        except (TimeoutError, asyncio.CancelledError) as exc:
             await _terminate_process_tree(proc, use_pg=use_pg)
             if isinstance(exc, asyncio.CancelledError):
                 raise
@@ -335,9 +338,7 @@ class ToolRunner:
                 duration_s=round(duration, 2),
             )
         except FileNotFoundError:
-            raise ToolNotFoundError(
-                f"'{tool}' not found in $PATH.  Install it first."
-            )
+            raise ToolNotFoundError(f"'{tool}' not found in $PATH.  Install it first.")
 
         duration = time.monotonic() - start
         stdout = stdout_bytes.decode("utf-8", errors="replace")
@@ -396,12 +397,12 @@ async def _terminate_process_tree(
                 )
                 await asyncio.wait_for(tk.wait(), timeout=5)
                 killed_tree = tk.returncode == 0
-            except (OSError, asyncio.TimeoutError):
+            except (TimeoutError, OSError):
                 killed_tree = False
             if not killed_tree and proc.returncode is None:
                 proc.kill()
         else:
             proc.kill()
         await asyncio.wait_for(proc.wait(), timeout=5)
-    except (ProcessLookupError, asyncio.TimeoutError, OSError):
+    except (TimeoutError, ProcessLookupError, OSError):
         pass

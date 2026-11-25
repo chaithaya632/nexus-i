@@ -1,8 +1,6 @@
 """Tests for nexus.brain.payloads and nexus.brain.remediation."""
 
-import pytest
-
-from nexus.brain.payloads import PayloadDB, Payload, encode_base64, encode_url, encode_hex
+from nexus.brain.payloads import Payload, PayloadDB, encode_base64, encode_hex, encode_url
 from nexus.brain.remediation import RemediationDB
 
 
@@ -29,27 +27,35 @@ class TestPayloadDB:
 
     def test_add_and_search(self):
         db = PayloadDB()
-        db.add_payload(Payload(
-            name="test_payload", category="sqli", platform="universal",
-            language="sql", template="' OR 1=1--", description="test bypass",
-        ))
+        db.add_payload(
+            Payload(
+                name="test_payload",
+                category="sqli",
+                platform="universal",
+                language="sql",
+                template="' OR 1=1--",
+                description="test bypass",
+            )
+        )
         results = db.search(category="sqli")
         assert any(p.name == "test_payload" for p in results)
 
     def test_search_by_keyword(self):
         db = PayloadDB()
-        db.add_payload(Payload(
-            name="custom_bypass", category="auth_bypass",
-            description="special bypass technique",
-            tags=["waf-bypass"],
-        ))
+        db.add_payload(
+            Payload(
+                name="custom_bypass",
+                category="auth_bypass",
+                description="special bypass technique",
+                tags=["waf-bypass"],
+            )
+        )
         results = db.search(keyword="bypass")
         assert len(results) > 0
 
     def test_render(self):
         db = PayloadDB()
-        p = Payload(name="test", category="revshell",
-                    template="connect {LHOST} {LPORT}")
+        p = Payload(name="test", category="revshell", template="connect {LHOST} {LPORT}")
         rendered = db.render(p, {"LHOST": "10.0.0.1", "LPORT": "4444"})
         assert "10.0.0.1" in rendered
         assert "4444" in rendered

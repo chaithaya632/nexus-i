@@ -124,9 +124,7 @@ class ServiceRouter:
             return copy.deepcopy(self._routing[key])
         # Partial match — prefer longest matching service key (e.g. 'https' over 'http')
         candidates = [
-            (svc, data)
-            for svc, data in self._routing.items()
-            if svc in key or key in svc
+            (svc, data) for svc, data in self._routing.items() if svc in key or key in svc
         ]
         if candidates:
             _, best_data = max(candidates, key=lambda item: len(item[0]))

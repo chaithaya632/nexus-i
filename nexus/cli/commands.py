@@ -13,10 +13,10 @@ from rich.console import Console
 from rich.panel import Panel
 from rich.table import Table
 
-from nexus import __version__, __codename__
-from nexus.core.config import NexusConfig, ScanProfile, Tier, StealthLevel
+from nexus import __codename__, __version__
+from nexus.core.config import NexusConfig, ScanProfile, StealthLevel, Tier
 from nexus.core.engine import NexusEngine
-from nexus.core.hardware import detect_hardware, auto_select_tier, tier_description
+from nexus.core.hardware import auto_select_tier, detect_hardware, tier_description
 from nexus.db.store import EngagementStore
 from nexus.scanner._http import redact_headers
 
@@ -73,6 +73,7 @@ def _run_async(coro):
         loop = None
     if loop and loop.is_running():
         import concurrent.futures
+
         with concurrent.futures.ThreadPoolExecutor() as pool:
             return pool.submit(asyncio.run, coro).result()
     return asyncio.run(coro)
@@ -96,18 +97,64 @@ def _run_async(coro):
     help="Scan profile (quick, web, network, api, full).",
 )
 @click.option("--resume", default=None, help="Resume an existing engagement by ID.")
-@click.option("--header", "-H", "headers", multiple=True, help="Custom HTTP header ('Name: Value'); repeatable.")
-@click.option("--cookie", default="", help="Session Cookie header value for authenticated web scans.")
+@click.option(
+    "--header",
+    "-H",
+    "headers",
+    multiple=True,
+    help="Custom HTTP header ('Name: Value'); repeatable.",
+)
+@click.option(
+    "--cookie", default="", help="Session Cookie header value for authenticated web scans."
+)
 @click.option("--auth-bearer", default="", help="Bearer token for Authorization header.")
-@click.option("--openapi", type=click.Path(exists=True), default=None, help="Path to OpenAPI/Swagger JSON or YAML spec.")
-@click.option("--ignore", type=click.Path(exists=True), default=None, help="Path to .nexusignore baseline suppression file.")
-@click.option("--ssh-user", default="", help="Optional authorized SSH username for OS package/patch audit.")
-@click.option("--ssh-key", type=click.Path(exists=True), default=None, help="SSH private key path for package audit.")
-@click.option("--local-audit", is_flag=True, help="Run read-only local dpkg/rpm package vulnerability audit.")
+@click.option(
+    "--openapi",
+    type=click.Path(exists=True),
+    default=None,
+    help="Path to OpenAPI/Swagger JSON or YAML spec.",
+)
+@click.option(
+    "--ignore",
+    type=click.Path(exists=True),
+    default=None,
+    help="Path to .nexusignore baseline suppression file.",
+)
+@click.option(
+    "--ssh-user", default="", help="Optional authorized SSH username for OS package/patch audit."
+)
+@click.option(
+    "--ssh-key",
+    type=click.Path(exists=True),
+    default=None,
+    help="SSH private key path for package audit.",
+)
+@click.option(
+    "--local-audit", is_flag=True, help="Run read-only local dpkg/rpm package vulnerability audit."
+)
 @click.option("--no-exploit", is_flag=True, help="Skip exploitation phase.")
 @click.option("--yes", "-y", is_flag=True, help="Confirm active exploitation without prompting.")
 @click.pass_context
-def engage(ctx, target, name, scope, stealth, tier, profile, resume, headers, cookie, auth_bearer, openapi, ignore, ssh_user, ssh_key, local_audit, no_exploit, yes):
+def engage(
+    ctx,
+    target,
+    name,
+    scope,
+    stealth,
+    tier,
+    profile,
+    resume,
+    headers,
+    cookie,
+    auth_bearer,
+    openapi,
+    ignore,
+    ssh_user,
+    ssh_key,
+    local_audit,
+    no_exploit,
+    yes,
+):
     """Start or resume a penetration test engagement against TARGET."""
     if not target and not resume:
         raise click.UsageError("Provide TARGET or pass --resume <engagement_id>.")
@@ -145,26 +192,30 @@ def engage(ctx, target, name, scope, stealth, tier, profile, resume, headers, co
 
     display_target = target or f"resume:{resume}"
     auth_summary = ", ".join(redact_headers(auth_hdrs).keys()) or "none"
-    console.print(Panel(
-        f"[bold green]NEXUS Engagement[/]\n"
-        f"Target: [cyan]{display_target}[/]\n"
-        f"Profile: {engine.config.profile.value}\n"
-        f"Stealth: {engine.config.stealth.value}\n"
-        f"Tier: {engine.config.tier.value}\n"
-        f"Scope: {scope or 'target-scoped'}\n"
-        f"Auth Headers: {auth_summary}\n"
-        f"OpenAPI: {openapi or 'none'}",
-        title="🎯 Resuming Engagement" if resume else "🎯 New Engagement",
-    ))
+    console.print(
+        Panel(
+            f"[bold green]NEXUS Engagement[/]\n"
+            f"Target: [cyan]{display_target}[/]\n"
+            f"Profile: {engine.config.profile.value}\n"
+            f"Stealth: {engine.config.stealth.value}\n"
+            f"Tier: {engine.config.tier.value}\n"
+            f"Scope: {scope or 'target-scoped'}\n"
+            f"Auth Headers: {auth_summary}\n"
+            f"OpenAPI: {openapi or 'none'}",
+            title="🎯 Resuming Engagement" if resume else "🎯 New Engagement",
+        )
+    )
 
-    eng_id = _run_async(engine.engage(
-        target,
-        name=name,
-        scope_file=scope,
-        skip_exploit=no_exploit,
-        profile=profile,
-        resume_id=resume,
-    ))
+    eng_id = _run_async(
+        engine.engage(
+            target,
+            name=name,
+            scope_file=scope,
+            skip_exploit=no_exploit,
+            profile=profile,
+            resume_id=resume,
+        )
+    )
     console.print(f"\n[bold green]✓[/] Engagement complete — ID: [cyan]{eng_id}[/]")
 
 
@@ -202,15 +253,49 @@ def recon(ctx, target, scope, engagement):
 @click.argument("target")
 @click.option("--engagement", "-e", required=True, help="Engagement ID.")
 @click.option("--profile", "-p", type=click.Choice([p.value for p in ScanProfile]), default=None)
-@click.option("--header", "-H", "headers", multiple=True, help="Custom HTTP header ('Name: Value'); repeatable.")
-@click.option("--cookie", default="", help="Session Cookie header value for authenticated web scans.")
+@click.option(
+    "--header",
+    "-H",
+    "headers",
+    multiple=True,
+    help="Custom HTTP header ('Name: Value'); repeatable.",
+)
+@click.option(
+    "--cookie", default="", help="Session Cookie header value for authenticated web scans."
+)
 @click.option("--auth-bearer", default="", help="Bearer token for Authorization header.")
-@click.option("--openapi", type=click.Path(exists=True), default=None, help="Path to OpenAPI/Swagger JSON or YAML spec.")
-@click.option("--ssh-user", default="", help="Optional authorized SSH username for OS package/patch audit.")
-@click.option("--ssh-key", type=click.Path(exists=True), default=None, help="SSH private key path for package audit.")
-@click.option("--local-audit", is_flag=True, help="Run read-only local dpkg/rpm package vulnerability audit.")
+@click.option(
+    "--openapi",
+    type=click.Path(exists=True),
+    default=None,
+    help="Path to OpenAPI/Swagger JSON or YAML spec.",
+)
+@click.option(
+    "--ssh-user", default="", help="Optional authorized SSH username for OS package/patch audit."
+)
+@click.option(
+    "--ssh-key",
+    type=click.Path(exists=True),
+    default=None,
+    help="SSH private key path for package audit.",
+)
+@click.option(
+    "--local-audit", is_flag=True, help="Run read-only local dpkg/rpm package vulnerability audit."
+)
 @click.pass_context
-def scan(ctx, target, engagement, profile, headers, cookie, auth_bearer, openapi, ssh_user, ssh_key, local_audit):
+def scan(
+    ctx,
+    target,
+    engagement,
+    profile,
+    headers,
+    cookie,
+    auth_bearer,
+    openapi,
+    ssh_user,
+    ssh_key,
+    local_audit,
+):
     """Run vulnerability scanning against TARGET within an engagement."""
     auth_hdrs = _build_auth_headers(headers, cookie, auth_bearer)
     config = NexusConfig.load()
@@ -270,8 +355,16 @@ def exploit(ctx, engagement, yes):
 
 @click.command()
 @click.option("--engagement", "-e", required=True, help="Engagement ID.")
-@click.option("--format", "-f", "fmt", type=click.Choice(["pdf", "html", "md", "docx", "json", "sarif"]), default="md")
-@click.option("--output", "-o", type=click.Path(), default=None, help="Output file path or directory.")
+@click.option(
+    "--format",
+    "-f",
+    "fmt",
+    type=click.Choice(["pdf", "html", "md", "docx", "json", "sarif"]),
+    default="md",
+)
+@click.option(
+    "--output", "-o", type=click.Path(), default=None, help="Output file path or directory."
+)
 def report(engagement, fmt, output):
     """Generate a penetration test report for an engagement."""
     config, db = _get_store()
@@ -315,8 +408,11 @@ def report(engagement, fmt, output):
         console.print(f"[green]✓[/] SARIF report saved to [cyan]{target_path}[/]")
     else:
         from nexus.reporter.generator import generate_report
+
         generated = generate_report(
-            db, engagement, target_path.parent,
+            db,
+            engagement,
+            target_path.parent,
             formats=[fmt],
         )
         if generated:
@@ -360,11 +456,16 @@ def engagements_list():
 
     for e in engs:
         phase_color = {
-            "complete": "green", "exploit": "red", "scan": "yellow",
-            "recon": "cyan", "init": "dim",
+            "complete": "green",
+            "exploit": "red",
+            "scan": "yellow",
+            "recon": "cyan",
+            "init": "dim",
         }.get(e.phase.value, "white")
         table.add_row(
-            e.id, e.name, e.target,
+            e.id,
+            e.name,
+            e.target,
             f"[{phase_color}]{e.phase.value}[/]",
             e.created_at.strftime("%Y-%m-%d %H:%M"),
         )
@@ -393,18 +494,20 @@ def engagements_show(eng_id):
         "severity_counts": db.count_findings_by_severity(eng_id),
     }
 
-    console.print(Panel(
-        f"ID:          {summary['id']}\n"
-        f"Name:        {summary['name']}\n"
-        f"Target:      {summary['target']}\n"
-        f"Phase:       {summary['phase']}\n"
-        f"Created:     {summary['created']}\n"
-        f"Targets:     {summary['targets_found']}\n"
-        f"Chains:      {summary['chains_found']}\n"
-        f"Credentials: {summary['credentials_found']}\n"
-        f"Findings:    {summary['severity_counts']}",
-        title="📋 Engagement Summary",
-    ))
+    console.print(
+        Panel(
+            f"ID:          {summary['id']}\n"
+            f"Name:        {summary['name']}\n"
+            f"Target:      {summary['target']}\n"
+            f"Phase:       {summary['phase']}\n"
+            f"Created:     {summary['created']}\n"
+            f"Targets:     {summary['targets_found']}\n"
+            f"Chains:      {summary['chains_found']}\n"
+            f"Credentials: {summary['credentials_found']}\n"
+            f"Findings:    {summary['severity_counts']}",
+            title="📋 Engagement Summary",
+        )
+    )
 
 
 @engagements.command("delete")
@@ -562,7 +665,9 @@ def ai_status():
             return
 
     if not shutil.which("ollama"):
-        console.print(f"[yellow]⚠ Ollama is not reachable at {config.ollama_host} and CLI is not installed.[/]")
+        console.print(
+            f"[yellow]⚠ Ollama is not reachable at {config.ollama_host} and CLI is not installed.[/]"
+        )
         console.print("  Install: curl -fsSL https://ollama.com/install.sh | sh")
     else:
         console.print(f"[yellow]⚠ Could not connect to Ollama at {config.ollama_host}.[/]")
@@ -570,11 +675,16 @@ def ai_status():
 
 
 @ai.command("setup")
-@click.option("--model", "-m", default="dolphin-mistral",
-              help="Model to pull (dolphin-mistral, whiterabbitneo, qwen2.5:0.5b).")
+@click.option(
+    "--model",
+    "-m",
+    default="dolphin-mistral",
+    help="Model to pull (dolphin-mistral, whiterabbitneo, qwen2.5:0.5b).",
+)
 def ai_setup(model):
     """Pull a recommended AI model for NEXUS."""
     import subprocess
+
     from nexus.ai.ollama_client import OllamaClient
 
     config = NexusConfig.load()
@@ -586,10 +696,14 @@ def ai_setup(model):
             if client.pull_model(model):
                 console.print(f"[green]✓[/] Model '{model}' pulled successfully.")
                 return
-            console.print(f"[yellow]⚠ HTTP pull failed for '{model}', checking local ollama CLI...[/]")
+            console.print(
+                f"[yellow]⚠ HTTP pull failed for '{model}', checking local ollama CLI...[/]"
+            )
 
     if not shutil.which("ollama"):
-        console.print(f"[red]✗ Ollama is not reachable at {config.ollama_host} and CLI is not installed.[/]")
+        console.print(
+            f"[red]✗ Ollama is not reachable at {config.ollama_host} and CLI is not installed.[/]"
+        )
         console.print("  Install: curl -fsSL https://ollama.com/install.sh | sh")
         raise SystemExit(1)
 
@@ -641,16 +755,18 @@ def init_cmd():
     hw = detect_hardware()
     tier = auto_select_tier(hw)
 
-    console.print(Panel(
-        f"[bold]System Detection[/]\n"
-        f"RAM Total:  {hw.ram_total_mb} MB\n"
-        f"RAM Free:   {hw.ram_free_mb} MB\n"
-        f"CPU Cores:  {hw.cpu_cores}\n"
-        f"GPU:        {hw.gpu_name}\n"
-        f"\n[bold]Selected Tier:[/] [cyan]{tier.value}[/]\n"
-        f"  {tier_description(tier)}",
-        title="🚀 NEXUS Init",
-    ))
+    console.print(
+        Panel(
+            f"[bold]System Detection[/]\n"
+            f"RAM Total:  {hw.ram_total_mb} MB\n"
+            f"RAM Free:   {hw.ram_free_mb} MB\n"
+            f"CPU Cores:  {hw.cpu_cores}\n"
+            f"GPU:        {hw.gpu_name}\n"
+            f"\n[bold]Selected Tier:[/] [cyan]{tier.value}[/]\n"
+            f"  {tier_description(tier)}",
+            title="🚀 NEXUS Init",
+        )
+    )
 
     config = NexusConfig(tier=tier)
     saved = config.save()
@@ -671,6 +787,7 @@ def audit_cmd():
 def audit_verify():
     """Verify the integrity of the audit log chain."""
     from nexus.core.audit import AuditLogger
+
     config = NexusConfig.load()
     audit = AuditLogger(config.data_dir / "audit.jsonl")
     valid, count = audit.verify_chain()
@@ -678,7 +795,9 @@ def audit_verify():
     if valid:
         console.print(f"[green]✓ Audit chain is VALID[/] — {count} entries verified.")
     else:
-        console.print(f"[red]✗ Audit chain is BROKEN[/] — integrity compromised at entry {count + 1}.")
+        console.print(
+            f"[red]✗ Audit chain is BROKEN[/] — integrity compromised at entry {count + 1}."
+        )
         raise SystemExit(1)
 
 
@@ -691,14 +810,27 @@ def version():
     hw = detect_hardware()
     tier = auto_select_tier(hw)
     console.print(f"[bold cyan]{__codename__}[/] v{__version__}")
-    console.print(f"  Tier: {tier.value} | RAM: {hw.ram_total_mb}MB | CPUs: {hw.cpu_cores} | GPU: {hw.gpu_name}")
+    console.print(
+        f"  Tier: {tier.value} | RAM: {hw.ram_total_mb}MB | CPUs: {hw.cpu_cores} | GPU: {hw.gpu_name}"
+    )
 
 
 @click.command()
 @click.argument("old_id")
 @click.argument("new_id")
-@click.option("--format", "-f", "fmt", type=click.Choice(["table", "json"]), default="table", show_default=True)
-@click.option("--fail-on-new", default="", help="Exit code 2 if new findings match comma-separated severities (e.g. critical,high or any).")
+@click.option(
+    "--format",
+    "-f",
+    "fmt",
+    type=click.Choice(["table", "json"]),
+    default="table",
+    show_default=True,
+)
+@click.option(
+    "--fail-on-new",
+    default="",
+    help="Exit code 2 if new findings match comma-separated severities (e.g. critical,high or any).",
+)
 def diff(old_id, new_id, fmt, fail_on_new):
     """Compare two engagements and report new, resolved, and persistent findings."""
     from nexus.correlator.diff import diff_engagements
@@ -714,15 +846,17 @@ def diff(old_id, new_id, fmt, fail_on_new):
         click.echo(json.dumps(result, indent=2, default=str))
     else:
         c = result["counts"]
-        console.print(Panel(
-            f"Baseline:   [cyan]{old_id}[/] ({result['old_target']})\n"
-            f"Current:    [cyan]{new_id}[/] ({result['new_target']})\n"
-            f"New:        [red]{c['new']}[/]\n"
-            f"Resolved:   [green]{c['resolved']}[/]\n"
-            f"Persistent: [yellow]{c['persistent']}[/]\n"
-            f"Suppressed: [dim]{c['suppressed']}[/]",
-            title="🔀 Engagement Diff",
-        ))
+        console.print(
+            Panel(
+                f"Baseline:   [cyan]{old_id}[/] ({result['old_target']})\n"
+                f"Current:    [cyan]{new_id}[/] ({result['new_target']})\n"
+                f"New:        [red]{c['new']}[/]\n"
+                f"Resolved:   [green]{c['resolved']}[/]\n"
+                f"Persistent: [yellow]{c['persistent']}[/]\n"
+                f"Suppressed: [dim]{c['suppressed']}[/]",
+                title="🔀 Engagement Diff",
+            )
+        )
         if result["new"]:
             tbl = Table(title="New Findings (Regressions)", show_lines=True)
             tbl.add_column("Severity")

@@ -51,31 +51,41 @@ def _parse_ssh_audit_json(raw_json: str, host: str, port: int) -> list[Finding]:
                     weak_notes.append(f"{section}:{algo}")
 
     if weak_notes:
-        findings.append(Finding(
-            host=host, port=port, protocol="ssh",
-            title=f"SSH: {len(weak_notes)} Weak/Deprecated Cryptographic Algorithms",
-            description=f"SSH service on {host}:{port} supports weak KEX, cipher, key, or MAC algorithms.",
-            severity=Severity.MEDIUM,
-            cwe_id="CWE-326",
-            tool_source="ssh-audit",
-            evidence=(f"Banner: {banner}\n" if banner else "") + "Weak: " + ", ".join(weak_notes[:20]),
-        ))
+        findings.append(
+            Finding(
+                host=host,
+                port=port,
+                protocol="ssh",
+                title=f"SSH: {len(weak_notes)} Weak/Deprecated Cryptographic Algorithms",
+                description=f"SSH service on {host}:{port} supports weak KEX, cipher, key, or MAC algorithms.",
+                severity=Severity.MEDIUM,
+                cwe_id="CWE-326",
+                tool_source="ssh-audit",
+                evidence=(f"Banner: {banner}\n" if banner else "")
+                + "Weak: "
+                + ", ".join(weak_notes[:20]),
+            )
+        )
 
     for cve in data.get("cves", []) or []:
         if not isinstance(cve, dict):
             continue
         cve_name = cve.get("name", "")
         cvss = float(cve.get("cvssv2", 0.0) or 0.0)
-        findings.append(Finding(
-            host=host, port=port, protocol="ssh",
-            title=f"SSH: {cve_name} — {cve.get('description', '')[:60]}",
-            description=cve.get("description", ""),
-            severity=Severity.HIGH if cvss >= 7.0 else Severity.MEDIUM,
-            cvss_score=cvss or None,
-            cve_ids=[cve_name] if cve_name else [],
-            cwe_id="CWE-326",
-            tool_source="ssh-audit",
-        ))
+        findings.append(
+            Finding(
+                host=host,
+                port=port,
+                protocol="ssh",
+                title=f"SSH: {cve_name} — {cve.get('description', '')[:60]}",
+                description=cve.get("description", ""),
+                severity=Severity.HIGH if cvss >= 7.0 else Severity.MEDIUM,
+                cvss_score=cvss or None,
+                cve_ids=[cve_name] if cve_name else [],
+                cwe_id="CWE-326",
+                tool_source="ssh-audit",
+            )
+        )
 
     return findings
 
@@ -103,26 +113,34 @@ def _parse_nmap_ssh_xml(xml_text: str, host: str, port: int) -> list[Finding]:
                 auth_methods.append("password")
 
     if weak_found:
-        findings.append(Finding(
-            host=host, port=port, protocol="ssh",
-            title=f"SSH: Weak Cryptographic Algorithms ({len(weak_found)})",
-            description=f"SSH service on {host}:{port} offers deprecated algorithms: {', '.join(weak_found)}.",
-            severity=Severity.MEDIUM,
-            cwe_id="CWE-326",
-            tool_source="nmap_ssh",
-            evidence="\n".join(weak_found),
-        ))
+        findings.append(
+            Finding(
+                host=host,
+                port=port,
+                protocol="ssh",
+                title=f"SSH: Weak Cryptographic Algorithms ({len(weak_found)})",
+                description=f"SSH service on {host}:{port} offers deprecated algorithms: {', '.join(weak_found)}.",
+                severity=Severity.MEDIUM,
+                cwe_id="CWE-326",
+                tool_source="nmap_ssh",
+                evidence="\n".join(weak_found),
+            )
+        )
 
     if "password" in auth_methods:
-        findings.append(Finding(
-            host=host, port=port, protocol="ssh",
-            title="SSH: Password Authentication Enabled",
-            description=f"SSH on {host}:{port} permits password authentication instead of key-only auth.",
-            severity=Severity.LOW,
-            cwe_id="CWE-287",
-            tool_source="nmap_ssh",
-            evidence="Supported auth method: password",
-        ))
+        findings.append(
+            Finding(
+                host=host,
+                port=port,
+                protocol="ssh",
+                title="SSH: Password Authentication Enabled",
+                description=f"SSH on {host}:{port} permits password authentication instead of key-only auth.",
+                severity=Severity.LOW,
+                cwe_id="CWE-287",
+                tool_source="nmap_ssh",
+                evidence="Supported auth method: password",
+            )
+        )
 
     return findings
 
@@ -137,7 +155,9 @@ async def audit_ssh(
     clean_host = validate_cli_target(host, label="host")
     port_num = validate_port(port)
     if ToolRunner.is_available("ssh-audit"):
-        out = await ToolRunner.run("ssh-audit", ["-j", "-p", str(port_num), clean_host], timeout=timeout)
+        out = await ToolRunner.run(
+            "ssh-audit", ["-j", "-p", str(port_num), clean_host], timeout=timeout
+        )
         if out.stdout.strip():
             findings = _parse_ssh_audit_json(out.stdout, clean_host, port_num)
             log.info("ssh-audit found %d issues on %s:%d", len(findings), clean_host, port_num)
@@ -147,9 +167,12 @@ async def audit_ssh(
         xml_path = ToolRunner.make_temp_path(".xml")
         try:
             args = [
-                "-p", str(port_num),
-                "--script", "ssh2-enum-algos,ssh-auth-methods",
-                "-oX", xml_path,
+                "-p",
+                str(port_num),
+                "--script",
+                "ssh2-enum-algos,ssh-auth-methods",
+                "-oX",
+                xml_path,
                 clean_host,
             ]
             await ToolRunner.run("nmap", args, timeout=timeout)

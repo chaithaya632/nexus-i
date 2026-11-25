@@ -99,15 +99,21 @@ async def nmap_scan(
 
         # Fallback if non-root container lacks raw-socket capabilities for -O / -sS
         if not out.ok and "requires root privileges" in out.stderr.lower():
-            fallback_profile = [
-                ("-sT" if a == "-sS" else a)
-                for a in profile
-                if a != "-O"
-            ]
+            fallback_profile = [("-sT" if a == "-sS" else a) for a in profile if a != "-O"]
             if not any(a.startswith("-s") for a in fallback_profile):
                 fallback_profile.insert(0, "-sT")
-            log.info("nmap lacks root caps; retrying with unprivileged profile: %s", fallback_profile)
-            retry_args = [*fallback_profile, "-p", clean_ports, "-oX", xml_path, *safe_extra, clean_target]
+            log.info(
+                "nmap lacks root caps; retrying with unprivileged profile: %s", fallback_profile
+            )
+            retry_args = [
+                *fallback_profile,
+                "-p",
+                clean_ports,
+                "-oX",
+                xml_path,
+                *safe_extra,
+                clean_target,
+            ]
             out = await ToolRunner.run("nmap", retry_args, timeout=timeout)
 
         if out.returncode == -1:
@@ -203,45 +209,55 @@ def _parse_nmap_xml(xml_text: str, default_host: str = "") -> dict[str, Any]:
             ports.append(p)
 
             # Create an INFO finding for every open port
-            findings.append(Finding(
-                host=tgt.host or ip,
-                port=portnum,
-                protocol=proto,
-                title=f"Open port {portnum}/{proto} — {service}" if service else f"Open port {portnum}/{proto}",
-                description=f"Service: {version}" if version else f"Open {service or proto} port detected.",
-                severity=Severity.INFO,
-                tool_source="nmap",
-            ))
+            findings.append(
+                Finding(
+                    host=tgt.host or ip,
+                    port=portnum,
+                    protocol=proto,
+                    title=f"Open port {portnum}/{proto} — {service}"
+                    if service
+                    else f"Open port {portnum}/{proto}",
+                    description=f"Service: {version}"
+                    if version
+                    else f"Open {service or proto} port detected.",
+                    severity=Severity.INFO,
+                    tool_source="nmap",
+                )
+            )
 
             # Port-level NSE script output findings (preserve port/protocol context)
             for script_el in port_el.findall("script"):
                 script_id = script_el.get("id", "")
                 script_output = script_el.get("output", "")
                 if "VULNERABLE" in script_output.upper() or "vuln" in script_id.lower():
-                    findings.append(Finding(
-                        host=tgt.host or ip,
-                        port=portnum,
-                        protocol=proto,
-                        title=f"Nmap script: {script_id}",
-                        description=script_output[:500],
-                        severity=Severity.MEDIUM,
-                        tool_source="nmap",
-                        evidence=script_output[:2000],
-                    ))
+                    findings.append(
+                        Finding(
+                            host=tgt.host or ip,
+                            port=portnum,
+                            protocol=proto,
+                            title=f"Nmap script: {script_id}",
+                            description=script_output[:500],
+                            severity=Severity.MEDIUM,
+                            tool_source="nmap",
+                            evidence=script_output[:2000],
+                        )
+                    )
 
         # Host-level NSE script output findings (<hostscript><script .../></hostscript>)
         for script_el in host_el.findall("hostscript/script"):
             script_id = script_el.get("id", "")
             script_output = script_el.get("output", "")
             if "VULNERABLE" in script_output.upper() or "vuln" in script_id.lower():
-                findings.append(Finding(
-                    host=tgt.host or ip,
-                    title=f"Nmap script: {script_id}",
-                    description=script_output[:500],
-                    severity=Severity.MEDIUM,
-                    tool_source="nmap",
-                    evidence=script_output[:2000],
-                ))
+                findings.append(
+                    Finding(
+                        host=tgt.host or ip,
+                        title=f"Nmap script: {script_id}",
+                        description=script_output[:500],
+                        severity=Severity.MEDIUM,
+                        tool_source="nmap",
+                        evidence=script_output[:2000],
+                    )
+                )
 
     return {
         "targets": targets,

@@ -27,18 +27,20 @@ def _probe_redis_sync(host: str, port: int, timeout: float = 5.0) -> list[Findin
             sock.sendall(b"*1\r\n$4\r\nPING\r\n")
             resp = sock.recv(256).decode("utf-8", errors="replace").strip()
             if resp.startswith("+PONG"):
-                findings.append(Finding(
-                    host=host,
-                    port=port,
-                    protocol="redis",
-                    title="Redis: Unauthenticated Access Enabled",
-                    description=f"Redis service on {host}:{port} responds to PING (+PONG) without AUTH.",
-                    severity=Severity.HIGH,
-                    cwe_id="CWE-306",
-                    tool_source="redis_probe",
-                    evidence="Command: PING -> Response: +PONG",
-                    confirmed=True,
-                ))
+                findings.append(
+                    Finding(
+                        host=host,
+                        port=port,
+                        protocol="redis",
+                        title="Redis: Unauthenticated Access Enabled",
+                        description=f"Redis service on {host}:{port} responds to PING (+PONG) without AUTH.",
+                        severity=Severity.HIGH,
+                        cwe_id="CWE-306",
+                        tool_source="redis_probe",
+                        evidence="Command: PING -> Response: +PONG",
+                        confirmed=True,
+                    )
+                )
     except OSError as exc:
         log.debug("Redis probe failed for %s:%d: %s", host, port, exc)
     return findings
@@ -59,18 +61,20 @@ def _probe_ftp_anon_sync(host: str, port: int, timeout: float = 6.0) -> tuple[li
         checked = True
         resp = ftp.login("anonymous", "nexus-audit@local.invalid")
         if resp.startswith("230"):
-            findings.append(Finding(
-                host=host,
-                port=port,
-                protocol="ftp",
-                title="FTP: Anonymous Login Allowed",
-                description=f"FTP service on {host}:{port} accepts anonymous authentication.",
-                severity=Severity.MEDIUM,
-                cwe_id="CWE-287",
-                tool_source="ftp_probe",
-                evidence=f"Banner: {banner[:200]}\nLogin response: {resp[:200]}",
-                confirmed=True,
-            ))
+            findings.append(
+                Finding(
+                    host=host,
+                    port=port,
+                    protocol="ftp",
+                    title="FTP: Anonymous Login Allowed",
+                    description=f"FTP service on {host}:{port} accepts anonymous authentication.",
+                    severity=Severity.MEDIUM,
+                    cwe_id="CWE-287",
+                    tool_source="ftp_probe",
+                    evidence=f"Banner: {banner[:200]}\nLogin response: {resp[:200]}",
+                    confirmed=True,
+                )
+            )
     except ftplib.error_perm as exc:
         checked = True
         log.debug("FTP anonymous login denied for %s:%d: %s", host, port, exc)
@@ -94,18 +98,20 @@ def _parse_nmap_ftp_xml(xml_text: str, host: str, port: int) -> list[Finding]:
         if script.get("id") == "ftp-anon":
             out = script.get("output", "")
             if "anonymous ftp login allowed" in out.lower():
-                findings.append(Finding(
-                    host=host,
-                    port=port,
-                    protocol="ftp",
-                    title="FTP: Anonymous Login Allowed",
-                    description=f"FTP service on {host}:{port} permits anonymous access.",
-                    severity=Severity.MEDIUM,
-                    cwe_id="CWE-287",
-                    tool_source="nmap_ftp",
-                    evidence=out[:500],
-                    confirmed=True,
-                ))
+                findings.append(
+                    Finding(
+                        host=host,
+                        port=port,
+                        protocol="ftp",
+                        title="FTP: Anonymous Login Allowed",
+                        description=f"FTP service on {host}:{port} permits anonymous access.",
+                        severity=Severity.MEDIUM,
+                        cwe_id="CWE-287",
+                        tool_source="nmap_ftp",
+                        evidence=out[:500],
+                        confirmed=True,
+                    )
+                )
     return findings
 
 
@@ -122,11 +128,15 @@ async def audit_ftp(host: str, port: int = 21, *, timeout: int = 30) -> list[Fin
         xml_path = ToolRunner.make_temp_path(".xml")
         try:
             await ToolRunner.run(
-                "nmap", ["-p", str(port_num), "--script", "ftp-anon", "-oX", xml_path, clean_host], timeout=timeout
+                "nmap",
+                ["-p", str(port_num), "--script", "ftp-anon", "-oX", xml_path, clean_host],
+                timeout=timeout,
             )
             p = Path(xml_path)
             if p.is_file():
-                return _parse_nmap_ftp_xml(p.read_text(encoding="utf-8", errors="replace"), clean_host, port_num)
+                return _parse_nmap_ftp_xml(
+                    p.read_text(encoding="utf-8", errors="replace"), clean_host, port_num
+                )
         finally:
             Path(xml_path).unlink(missing_ok=True)
     return []
@@ -145,33 +155,40 @@ def _parse_nmap_smb_xml(xml_text: str, host: str, port: int) -> list[Finding]:
         out = script.get("output", "")
         lower = out.lower()
         if sid in ("smb2-security-mode", "smb-security-mode"):
-            if "message signing enabled but not required" in lower or "message signing disabled" in lower:
-                findings.append(Finding(
-                    host=host,
-                    port=port,
-                    protocol="smb",
-                    title="SMB: Message Signing Disabled or Not Required",
-                    description=f"SMB service on {host}:{port} does not enforce SMB packet signing (enables relay attacks).",
-                    severity=Severity.MEDIUM,
-                    cwe_id="CWE-300",
-                    tool_source="nmap_smb",
-                    evidence=out.strip()[:500],
-                    confirmed=True,
-                ))
+            if (
+                "message signing enabled but not required" in lower
+                or "message signing disabled" in lower
+            ):
+                findings.append(
+                    Finding(
+                        host=host,
+                        port=port,
+                        protocol="smb",
+                        title="SMB: Message Signing Disabled or Not Required",
+                        description=f"SMB service on {host}:{port} does not enforce SMB packet signing (enables relay attacks).",
+                        severity=Severity.MEDIUM,
+                        cwe_id="CWE-300",
+                        tool_source="nmap_smb",
+                        evidence=out.strip()[:500],
+                        confirmed=True,
+                    )
+                )
         elif sid == "smb-protocols":
             if "nt lm 0.12" in lower or "smbv1" in lower:
-                findings.append(Finding(
-                    host=host,
-                    port=port,
-                    protocol="smb",
-                    title="SMB: Legacy SMBv1 Dialect Enabled",
-                    description=f"SMB service on {host}:{port} negotiates deprecated SMBv1 (NT LM 0.12).",
-                    severity=Severity.HIGH,
-                    cwe_id="CWE-326",
-                    tool_source="nmap_smb",
-                    evidence=out.strip()[:500],
-                    confirmed=True,
-                ))
+                findings.append(
+                    Finding(
+                        host=host,
+                        port=port,
+                        protocol="smb",
+                        title="SMB: Legacy SMBv1 Dialect Enabled",
+                        description=f"SMB service on {host}:{port} negotiates deprecated SMBv1 (NT LM 0.12).",
+                        severity=Severity.HIGH,
+                        cwe_id="CWE-326",
+                        tool_source="nmap_smb",
+                        evidence=out.strip()[:500],
+                        confirmed=True,
+                    )
+                )
     return findings
 
 
@@ -180,31 +197,35 @@ def _parse_nxc_smb_output(output: str, host: str, port: int) -> list[Finding]:
     findings: list[Finding] = []
     lower = output.lower()
     if "signing:false" in lower:
-        findings.append(Finding(
-            host=host,
-            port=port,
-            protocol="smb",
-            title="SMB: Message Signing Disabled or Not Required",
-            description=f"SMB service on {host}:{port} does not require SMB signing.",
-            severity=Severity.MEDIUM,
-            cwe_id="CWE-300",
-            tool_source="netexec",
-            evidence=output.strip()[:500],
-            confirmed=True,
-        ))
+        findings.append(
+            Finding(
+                host=host,
+                port=port,
+                protocol="smb",
+                title="SMB: Message Signing Disabled or Not Required",
+                description=f"SMB service on {host}:{port} does not require SMB signing.",
+                severity=Severity.MEDIUM,
+                cwe_id="CWE-300",
+                tool_source="netexec",
+                evidence=output.strip()[:500],
+                confirmed=True,
+            )
+        )
     if "smbv1:true" in lower:
-        findings.append(Finding(
-            host=host,
-            port=port,
-            protocol="smb",
-            title="SMB: Legacy SMBv1 Dialect Enabled",
-            description=f"SMB service on {host}:{port} enables SMBv1.",
-            severity=Severity.HIGH,
-            cwe_id="CWE-326",
-            tool_source="netexec",
-            evidence=output.strip()[:500],
-            confirmed=True,
-        ))
+        findings.append(
+            Finding(
+                host=host,
+                port=port,
+                protocol="smb",
+                title="SMB: Legacy SMBv1 Dialect Enabled",
+                description=f"SMB service on {host}:{port} enables SMBv1.",
+                severity=Severity.HIGH,
+                cwe_id="CWE-326",
+                tool_source="netexec",
+                evidence=output.strip()[:500],
+                confirmed=True,
+            )
+        )
     return findings
 
 
@@ -212,9 +233,15 @@ async def audit_smb(host: str, port: int = 445, *, timeout: int = 45) -> list[Fi
     """Audit SMB signing enforcement & SMBv1 dialect via NetExec or nmap NSE."""
     clean_host = validate_cli_target(host, label="host")
     port_num = validate_port(port)
-    nxc_bin = "nxc" if ToolRunner.is_available("nxc") else ("netexec" if ToolRunner.is_available("netexec") else None)
+    nxc_bin = (
+        "nxc"
+        if ToolRunner.is_available("nxc")
+        else ("netexec" if ToolRunner.is_available("netexec") else None)
+    )
     if nxc_bin:
-        out = await ToolRunner.run(nxc_bin, ["smb", clean_host, "--port", str(port_num)], timeout=timeout)
+        out = await ToolRunner.run(
+            nxc_bin, ["smb", clean_host, "--port", str(port_num)], timeout=timeout
+        )
         combined = out.stdout + "\n" + out.stderr
         findings = _parse_nxc_smb_output(combined, clean_host, port_num)
         if findings or out.ok or "signing:" in combined.lower():
@@ -225,12 +252,22 @@ async def audit_smb(host: str, port: int = 445, *, timeout: int = 45) -> list[Fi
         try:
             await ToolRunner.run(
                 "nmap",
-                ["-p", str(port_num), "--script", "smb2-security-mode,smb-protocols", "-oX", xml_path, clean_host],
+                [
+                    "-p",
+                    str(port_num),
+                    "--script",
+                    "smb2-security-mode,smb-protocols",
+                    "-oX",
+                    xml_path,
+                    clean_host,
+                ],
                 timeout=timeout,
             )
             p = Path(xml_path)
             if p.is_file():
-                return _parse_nmap_smb_xml(p.read_text(encoding="utf-8", errors="replace"), clean_host, port_num)
+                return _parse_nmap_smb_xml(
+                    p.read_text(encoding="utf-8", errors="replace"), clean_host, port_num
+                )
         finally:
             Path(xml_path).unlink(missing_ok=True)
     return []
@@ -240,7 +277,9 @@ def _url_host(host: str) -> str:
     return f"[{host}]" if ":" in host and not host.startswith("[") else host
 
 
-async def audit_elasticsearch(host: str, port: int = 9200, *, timeout: float = 6.0) -> list[Finding]:
+async def audit_elasticsearch(
+    host: str, port: int = 9200, *, timeout: float = 6.0
+) -> list[Finding]:
     """Read-only HTTP check for unauthenticated Elasticsearch cluster API exposure."""
     url = f"http://{_url_host(host)}:{port}/"
     try:
@@ -272,7 +311,11 @@ async def audit_docker_api(host: str, port: int = 2375, *, timeout: float = 6.0)
     try:
         async with make_http_client(timeout=timeout) as client:
             resp = await client.get(url, follow_redirects=False)
-            if resp.status_code == 200 and "ApiVersion" in resp.text and ("Os" in resp.text or "Components" in resp.text):
+            if (
+                resp.status_code == 200
+                and "ApiVersion" in resp.text
+                and ("Os" in resp.text or "Components" in resp.text)
+            ):
                 return [
                     Finding(
                         host=host,
@@ -301,18 +344,20 @@ def _probe_memcached_sync(host: str, port: int, timeout: float = 5.0) -> list[Fi
             sock.sendall(b"version\r\n")
             resp = sock.recv(256).decode("utf-8", errors="replace").strip()
             if resp.startswith("VERSION "):
-                findings.append(Finding(
-                    host=host,
-                    port=port,
-                    protocol="memcached",
-                    title="Memcached: Unauthenticated Cache Exposed",
-                    description=f"Memcached on {host}:{port} discloses version and accepts unauthenticated commands.",
-                    severity=Severity.MEDIUM,
-                    cwe_id="CWE-306",
-                    tool_source="memcached_probe",
-                    evidence=f"Command: version -> {resp[:200]}",
-                    confirmed=True,
-                ))
+                findings.append(
+                    Finding(
+                        host=host,
+                        port=port,
+                        protocol="memcached",
+                        title="Memcached: Unauthenticated Cache Exposed",
+                        description=f"Memcached on {host}:{port} discloses version and accepts unauthenticated commands.",
+                        severity=Severity.MEDIUM,
+                        cwe_id="CWE-306",
+                        tool_source="memcached_probe",
+                        evidence=f"Command: version -> {resp[:200]}",
+                        confirmed=True,
+                    )
+                )
     except OSError as exc:
         log.debug("Memcached probe failed for %s:%d: %s", host, port, exc)
     return findings
@@ -327,8 +372,11 @@ def _probe_mongodb_sync(host: str, port: int, timeout: float = 5.0) -> list[Find
     """Send read-only BSON OP_MSG (2013) (`isMaster: 1`) to test unauthenticated MongoDB exposure."""
     # BSON doc: {"isMaster": 1, "$db": "admin"}
     doc_body = (
-        b"\x10isMaster\x00" + struct.pack("<i", 1)
-        + b"\x02$db\x00" + struct.pack("<i", 6) + b"admin\x00"
+        b"\x10isMaster\x00"
+        + struct.pack("<i", 1)
+        + b"\x02$db\x00"
+        + struct.pack("<i", 6)
+        + b"admin\x00"
     )
     bson_doc = struct.pack("<i", 4 + len(doc_body) + 1) + doc_body + b"\x00"
     # OP_MSG (2013): flagBits(uint32=0) + section kind 0 (\x00) + BSON body
@@ -345,14 +393,20 @@ def _probe_mongodb_sync(host: str, port: int, timeout: float = 5.0) -> list[Find
                 and (b"ismaster" in low or b"iswritableprimary" in low)
                 and (b"maxbsonobjectsize" in low or b"ok" in low)
             ):
-                return [Finding(
-                    host=host, port=port, protocol="mongodb",
-                    title="MongoDB: Unauthenticated Instance Exposed",
-                    description=f"MongoDB on {host}:{port} responds to OP_MSG isMaster metadata queries without authentication.",
-                    severity=Severity.HIGH, cwe_id="CWE-306",
-                    tool_source="mongodb_probe", confirmed=True,
-                    evidence="OP_MSG (2013) admin.$cmd isMaster succeeded without auth",
-                )]
+                return [
+                    Finding(
+                        host=host,
+                        port=port,
+                        protocol="mongodb",
+                        title="MongoDB: Unauthenticated Instance Exposed",
+                        description=f"MongoDB on {host}:{port} responds to OP_MSG isMaster metadata queries without authentication.",
+                        severity=Severity.HIGH,
+                        cwe_id="CWE-306",
+                        tool_source="mongodb_probe",
+                        confirmed=True,
+                        evidence="OP_MSG (2013) admin.$cmd isMaster succeeded without auth",
+                    )
+                ]
     except OSError as exc:
         log.debug("MongoDB probe failed for %s:%d: %s", host, port, exc)
     return []
@@ -368,23 +422,35 @@ def _inspect_pg_auth_response(resp: bytes, host: str, port: int) -> list[Finding
     if len(resp) >= 9 and resp[:1] == b"R":
         auth_type = struct.unpack("!i", resp[5:9])[0]
         if auth_type == 0:
-            return [Finding(
-                host=host, port=port, protocol="postgresql",
-                title="PostgreSQL: Passwordless Trust Authentication Enabled",
-                description=f"PostgreSQL on {host}:{port} returned AuthenticationOk (0) without credentials.",
-                severity=Severity.CRITICAL, cwe_id="CWE-306",
-                tool_source="postgres_probe", confirmed=True,
-                evidence="StartupMessage(user=postgres) -> AuthenticationOk (code=0)",
-            )]
+            return [
+                Finding(
+                    host=host,
+                    port=port,
+                    protocol="postgresql",
+                    title="PostgreSQL: Passwordless Trust Authentication Enabled",
+                    description=f"PostgreSQL on {host}:{port} returned AuthenticationOk (0) without credentials.",
+                    severity=Severity.CRITICAL,
+                    cwe_id="CWE-306",
+                    tool_source="postgres_probe",
+                    confirmed=True,
+                    evidence="StartupMessage(user=postgres) -> AuthenticationOk (code=0)",
+                )
+            ]
         if auth_type == 3:
-            return [Finding(
-                host=host, port=port, protocol="postgresql",
-                title="PostgreSQL: Cleartext Password Authentication Advertised",
-                description=f"PostgreSQL on {host}:{port} requests AuthenticationCleartextPassword (3).",
-                severity=Severity.MEDIUM, cwe_id="CWE-523",
-                tool_source="postgres_probe", confirmed=True,
-                evidence="StartupMessage -> AuthenticationCleartextPassword (code=3)",
-            )]
+            return [
+                Finding(
+                    host=host,
+                    port=port,
+                    protocol="postgresql",
+                    title="PostgreSQL: Cleartext Password Authentication Advertised",
+                    description=f"PostgreSQL on {host}:{port} requests AuthenticationCleartextPassword (3).",
+                    severity=Severity.MEDIUM,
+                    cwe_id="CWE-523",
+                    tool_source="postgres_probe",
+                    confirmed=True,
+                    evidence="StartupMessage -> AuthenticationCleartextPassword (code=3)",
+                )
+            ]
     return []
 
 
@@ -401,14 +467,20 @@ def _probe_postgresql_sync(host: str, port: int, timeout: float = 5.0) -> list[F
             sock.sendall(struct.pack("!II", 8, 80877103))  # SSLRequest
             ssl_resp = sock.recv(8)
             if ssl_resp == b"N":
-                findings.append(Finding(
-                    host=host, port=port, protocol="postgresql",
-                    title="PostgreSQL: SSL/TLS Negotiation Declined",
-                    description=f"PostgreSQL on {host}:{port} rejected SSLRequest ('N'), allowing plaintext connections.",
-                    severity=Severity.MEDIUM, cwe_id="CWE-319",
-                    tool_source="postgres_probe", confirmed=True,
-                    evidence="PostgreSQL SSLRequest response: N",
-                ))
+                findings.append(
+                    Finding(
+                        host=host,
+                        port=port,
+                        protocol="postgresql",
+                        title="PostgreSQL: SSL/TLS Negotiation Declined",
+                        description=f"PostgreSQL on {host}:{port} rejected SSLRequest ('N'), allowing plaintext connections.",
+                        severity=Severity.MEDIUM,
+                        cwe_id="CWE-319",
+                        tool_source="postgres_probe",
+                        confirmed=True,
+                        evidence="PostgreSQL SSLRequest response: N",
+                    )
+                )
             elif ssl_resp == b"S":
                 # Server accepted SSL: upgrade this socket to TLS so SSL-required pg_hba configs still probe auth mode
                 ctx = ssl.create_default_context()
@@ -455,16 +527,22 @@ def _probe_mysql_sync(host: str, port: int, timeout: float = 5.0) -> list[Findin
             # Initial handshake: seq(4) + proto(1) + ver\0 + conn_id(4) + scramble1(8) + filler(1) + cap_low(2)
             cap_offset = nul_idx + 1 + 4 + 8 + 1
             if cap_offset + 2 <= len(pkt):
-                cap_low = struct.unpack("<H", pkt[cap_offset:cap_offset + 2])[0]
+                cap_low = struct.unpack("<H", pkt[cap_offset : cap_offset + 2])[0]
                 if not (cap_low & 0x0800):  # CLIENT_SSL
-                    findings.append(Finding(
-                        host=host, port=port, protocol="mysql",
-                        title="MySQL: Server TLS (CLIENT_SSL) Capability Disabled",
-                        description=f"MySQL ({ver}) on {host}:{port} does not advertise CLIENT_SSL support.",
-                        severity=Severity.MEDIUM, cwe_id="CWE-319",
-                        tool_source="mysql_probe", confirmed=True,
-                        evidence=f"Server version: {ver}, cap_low=0x{cap_low:04x}",
-                    ))
+                    findings.append(
+                        Finding(
+                            host=host,
+                            port=port,
+                            protocol="mysql",
+                            title="MySQL: Server TLS (CLIENT_SSL) Capability Disabled",
+                            description=f"MySQL ({ver}) on {host}:{port} does not advertise CLIENT_SSL support.",
+                            severity=Severity.MEDIUM,
+                            cwe_id="CWE-319",
+                            tool_source="mysql_probe",
+                            confirmed=True,
+                            evidence=f"Server version: {ver}, cap_low=0x{cap_low:04x}",
+                        )
+                    )
     except OSError as exc:
         log.debug("MySQL probe failed for %s:%d: %s", host, port, exc)
     return findings
@@ -492,23 +570,35 @@ def _probe_smtp_sync(host: str, port: int, timeout: float = 5.0) -> list[Finding
                 pass
             up = ehlo.upper()
             if "250" in up and "STARTTLS" not in up:
-                findings.append(Finding(
-                    host=host, port=port, protocol="smtp",
-                    title="SMTP: STARTTLS Not Advertised",
-                    description=f"SMTP service on {host}:{port} did not advertise STARTTLS in EHLO capabilities.",
-                    severity=Severity.MEDIUM, cwe_id="CWE-319",
-                    tool_source="smtp_probe", confirmed=True,
-                    evidence=ehlo.strip()[:300],
-                ))
+                findings.append(
+                    Finding(
+                        host=host,
+                        port=port,
+                        protocol="smtp",
+                        title="SMTP: STARTTLS Not Advertised",
+                        description=f"SMTP service on {host}:{port} did not advertise STARTTLS in EHLO capabilities.",
+                        severity=Severity.MEDIUM,
+                        cwe_id="CWE-319",
+                        tool_source="smtp_probe",
+                        confirmed=True,
+                        evidence=ehlo.strip()[:300],
+                    )
+                )
             if "250-VRFY" in up or "250 VRFY" in up:
-                findings.append(Finding(
-                    host=host, port=port, protocol="smtp",
-                    title="SMTP: VRFY Command Enabled",
-                    description=f"SMTP service on {host}:{port} advertises the VRFY command.",
-                    severity=Severity.LOW, cwe_id="CWE-200",
-                    tool_source="smtp_probe", confirmed=True,
-                    evidence=ehlo.strip()[:300],
-                ))
+                findings.append(
+                    Finding(
+                        host=host,
+                        port=port,
+                        protocol="smtp",
+                        title="SMTP: VRFY Command Enabled",
+                        description=f"SMTP service on {host}:{port} advertises the VRFY command.",
+                        severity=Severity.LOW,
+                        cwe_id="CWE-200",
+                        tool_source="smtp_probe",
+                        confirmed=True,
+                        evidence=ehlo.strip()[:300],
+                    )
+                )
     except OSError as exc:
         log.debug("SMTP probe failed for %s:%d: %s", host, port, exc)
     return findings
@@ -519,24 +609,46 @@ async def audit_smtp(host: str, port: int = 25, *, timeout: float = 5.0) -> list
     return await asyncio.to_thread(_probe_smtp_sync, host, port, timeout)
 
 
-async def audit_cloud_control_plane(host: str, port: int, service: str = "", *, timeout: float = 6.0) -> list[Finding]:
+async def audit_cloud_control_plane(
+    host: str, port: int, service: str = "", *, timeout: float = 6.0
+) -> list[Finding]:
     """Read-only HTTP checks for unauthenticated Etcd, Consul, and Kubelet APIs."""
     uhost = _url_host(host)
     svc = service.lower().strip()
     is_consul = False
     if port == 2379 or "etcd" in svc:
         url = f"http://{uhost}:{port}/version"
-        title, sev, src, sig = "Etcd: Unauthenticated Version/API Exposed", Severity.CRITICAL, "etcd_probe", ("etcdserver",)
+        title, sev, src, sig = (
+            "Etcd: Unauthenticated Version/API Exposed",
+            Severity.CRITICAL,
+            "etcd_probe",
+            ("etcdserver",),
+        )
     elif port == 8500 or "consul" in svc:
         url = f"http://{uhost}:{port}/v1/status/leader"
-        title, sev, src, sig = "HashiCorp Consul: Unauthenticated HTTP API Exposed", Severity.HIGH, "consul_probe", (":",)
+        title, sev, src, sig = (
+            "HashiCorp Consul: Unauthenticated HTTP API Exposed",
+            Severity.HIGH,
+            "consul_probe",
+            (":",),
+        )
         is_consul = True
     elif port == 10255:
         url = f"http://{uhost}:{port}/pods"
-        title, sev, src, sig = "Kubernetes: Unauthenticated Kubelet Read-Only Port (10255)", Severity.HIGH, "kubelet_probe", ('"kind"', '"PodList"')
+        title, sev, src, sig = (
+            "Kubernetes: Unauthenticated Kubelet Read-Only Port (10255)",
+            Severity.HIGH,
+            "kubelet_probe",
+            ('"kind"', '"PodList"'),
+        )
     elif port == 10250 or "kubelet" in svc:
         url = f"https://{uhost}:{port}/runningpods/"
-        title, sev, src, sig = "Kubernetes: Unauthenticated Kubelet API (10250)", Severity.CRITICAL, "kubelet_probe", ('"kind"', '"PodList"')
+        title, sev, src, sig = (
+            "Kubernetes: Unauthenticated Kubelet API (10250)",
+            Severity.CRITICAL,
+            "kubelet_probe",
+            ('"kind"', '"PodList"'),
+        )
     else:
         return []
 
@@ -546,14 +658,32 @@ async def audit_cloud_control_plane(host: str, port: int, service: str = "", *, 
             ctype = (resp.headers.get("content-type") or "").lower()
             txt = resp.text or ""
             stripped = txt.strip()
-            consul_ok = (not is_consul) or (stripped.startswith('"') and stripped.endswith('"') and len(stripped) <= 64 and ":" in stripped)
-            if resp.status_code == 200 and "text/html" not in ctype and consul_ok and all(s in txt for s in sig):
-                return [Finding(
-                    host=host, port=port, protocol="https" if port == 10250 else "http",
-                    title=title, description=f"Control-plane endpoint {url} responded without authentication.",
-                    severity=sev, cwe_id="CWE-306", tool_source=src, confirmed=True,
-                    evidence=txt[:300],
-                )]
+            consul_ok = (not is_consul) or (
+                stripped.startswith('"')
+                and stripped.endswith('"')
+                and len(stripped) <= 64
+                and ":" in stripped
+            )
+            if (
+                resp.status_code == 200
+                and "text/html" not in ctype
+                and consul_ok
+                and all(s in txt for s in sig)
+            ):
+                return [
+                    Finding(
+                        host=host,
+                        port=port,
+                        protocol="https" if port == 10250 else "http",
+                        title=title,
+                        description=f"Control-plane endpoint {url} responded without authentication.",
+                        severity=sev,
+                        cwe_id="CWE-306",
+                        tool_source=src,
+                        confirmed=True,
+                        evidence=txt[:300],
+                    )
+                ]
     except Exception as exc:
         log.debug("Cloud control-plane probe skipped/failed for %s:%d: %s", host, port, exc)
     return []

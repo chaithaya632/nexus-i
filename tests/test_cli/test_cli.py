@@ -29,7 +29,19 @@ def test_cli_help():
     runner = CliRunner()
     res = runner.invoke(cli, ["--help"])
     assert res.exit_code == 0
-    for cmd in ("engage", "recon", "scan", "exploit", "report", "engagements", "kb", "ai", "init", "audit", "version"):
+    for cmd in (
+        "engage",
+        "recon",
+        "scan",
+        "exploit",
+        "report",
+        "engagements",
+        "kb",
+        "ai",
+        "init",
+        "audit",
+        "version",
+    ):
         assert cmd in res.output
 
 
@@ -79,10 +91,16 @@ def test_cli_report_generation(cli_env, tmp_path: Path):
     eng = NexusEngine(cfg)
     eng.boot()
     e = eng.create_engagement("target.local", name="cli_rep")
-    eng.db.add_finding(Finding(
-        engagement_id=e.id, host="target.local", port=80,
-        title="SQLi", severity=Severity.CRITICAL, cwe_id="CWE-89",
-    ))
+    eng.db.add_finding(
+        Finding(
+            engagement_id=e.id,
+            host="target.local",
+            port=80,
+            title="SQLi",
+            severity=Severity.CRITICAL,
+            cwe_id="CWE-89",
+        )
+    )
     eng.shutdown()
 
     runner = CliRunner()
@@ -116,13 +134,16 @@ def test_cli_engage_help_and_validation(cli_env):
 
 def test_cli_engage_passes_profile_and_resume(cli_env, monkeypatch):
     from unittest.mock import AsyncMock
+
     from nexus.core.engine import NexusEngine
 
     mock_engage = AsyncMock(return_value="eng_resumed_01")
     monkeypatch.setattr(NexusEngine, "engage", mock_engage)
 
     runner = CliRunner()
-    res = runner.invoke(cli, ["engage", "--profile", "quick", "--resume", "eng_resumed_01", "--no-exploit"])
+    res = runner.invoke(
+        cli, ["engage", "--profile", "quick", "--resume", "eng_resumed_01", "--no-exploit"]
+    )
     assert res.exit_code == 0
     assert "eng_resumed_01" in res.output
     mock_engage.assert_awaited_once_with(
@@ -136,11 +157,13 @@ def test_cli_engage_passes_profile_and_resume(cli_env, monkeypatch):
 
 
 def test_cli_wave2_auth_and_openapi_flags(cli_env, tmp_path: Path, monkeypatch):
-    from nexus.core.engine import NexusEngine
     from nexus.core.config import ScanProfile
+    from nexus.core.engine import NexusEngine
 
     spec = tmp_path / "spec.yaml"
-    spec.write_text("openapi: 3.0.0\ninfo:\n  title: t\n  version: '1'\npaths: {}\n", encoding="utf-8")
+    spec.write_text(
+        "openapi: 3.0.0\ninfo:\n  title: t\n  version: '1'\npaths: {}\n", encoding="utf-8"
+    )
 
     runner = CliRunner()
     res_eng_help = runner.invoke(cli, ["engage", "--help"])
@@ -173,22 +196,35 @@ def test_cli_wave2_auth_and_openapi_flags(cli_env, tmp_path: Path, monkeypatch):
     res_ok = runner.invoke(
         cli,
         [
-            "scan", "app.local", "-e", created.id,
-            "-p", "api",
-            "-H", "X-Org: lab",
-            "--cookie", "sess=abc",
-            "--auth-bearer", "jwt_tok",
-            "--openapi", str(spec),
+            "scan",
+            "app.local",
+            "-e",
+            created.id,
+            "-p",
+            "api",
+            "-H",
+            "X-Org: lab",
+            "--cookie",
+            "sess=abc",
+            "--auth-bearer",
+            "jwt_tok",
+            "--openapi",
+            str(spec),
         ],
     )
     assert res_ok.exit_code == 0
     assert captured_cfg["profile"] == ScanProfile.API
-    assert captured_cfg["headers"] == {"X-Org": "lab", "Cookie": "sess=abc", "Authorization": "Bearer jwt_tok"}
+    assert captured_cfg["headers"] == {
+        "X-Org": "lab",
+        "Cookie": "sess=abc",
+        "Authorization": "Bearer jwt_tok",
+    }
     assert captured_cfg["openapi"] == str(spec)
 
 
 def test_cli_wave3_sarif_diff_and_ignore(cli_env, tmp_path: Path):
     import json
+
     from nexus.core.config import NexusConfig
     from nexus.core.engine import NexusEngine
     from nexus.db.models import Finding, Severity
@@ -197,19 +233,41 @@ def test_cli_wave3_sarif_diff_and_ignore(cli_env, tmp_path: Path):
     eng = NexusEngine(cfg)
     eng.boot()
     e1 = eng.create_engagement("ci.local", name="baseline")
-    eng.db.add_finding(Finding(
-        engagement_id=e1.id, host="ci.local", port=443, protocol="https",
-        title="Missing HSTS", cwe_id="CWE-523", severity=Severity.LOW,
-    ))
+    eng.db.add_finding(
+        Finding(
+            engagement_id=e1.id,
+            host="ci.local",
+            port=443,
+            protocol="https",
+            title="Missing HSTS",
+            cwe_id="CWE-523",
+            severity=Severity.LOW,
+        )
+    )
     e2 = eng.create_engagement("ci.local", name="pr-build")
-    eng.db.add_finding(Finding(
-        engagement_id=e2.id, host="ci.local", port=443, protocol="https",
-        title="Missing HSTS", cwe_id="CWE-523", severity=Severity.LOW,
-    ))
-    eng.db.add_finding(Finding(
-        engagement_id=e2.id, host="ci.local", port=443, protocol="https",
-        title="Spring4Shell RCE", cve_ids=["CVE-2022-22965"], cwe_id="CWE-94", severity=Severity.CRITICAL,
-    ))
+    eng.db.add_finding(
+        Finding(
+            engagement_id=e2.id,
+            host="ci.local",
+            port=443,
+            protocol="https",
+            title="Missing HSTS",
+            cwe_id="CWE-523",
+            severity=Severity.LOW,
+        )
+    )
+    eng.db.add_finding(
+        Finding(
+            engagement_id=e2.id,
+            host="ci.local",
+            port=443,
+            protocol="https",
+            title="Spring4Shell RCE",
+            cve_ids=["CVE-2022-22965"],
+            cwe_id="CWE-94",
+            severity=Severity.CRITICAL,
+        )
+    )
     eng.shutdown()
 
     runner = CliRunner()
@@ -239,7 +297,8 @@ def test_cli_wave3_sarif_diff_and_ignore(cli_env, tmp_path: Path):
 
 def test_cli_applies_stealth_tier_profile_before_boot(cli_env, monkeypatch):
     from unittest.mock import AsyncMock
-    from nexus.core.config import StealthLevel, Tier, ScanProfile
+
+    from nexus.core.config import ScanProfile, StealthLevel, Tier
     from nexus.core.engine import NexusEngine
 
     booted_states = {}
@@ -256,10 +315,20 @@ def test_cli_applies_stealth_tier_profile_before_boot(cli_env, monkeypatch):
     monkeypatch.setattr(NexusEngine, "engage", AsyncMock(return_value="eng_preboot"))
 
     runner = CliRunner()
-    res = runner.invoke(cli, [
-        "engage", "app.local", "--stealth", "paranoid", "--tier", "light",
-        "--profile", "api", "--no-exploit",
-    ])
+    res = runner.invoke(
+        cli,
+        [
+            "engage",
+            "app.local",
+            "--stealth",
+            "paranoid",
+            "--tier",
+            "light",
+            "--profile",
+            "api",
+            "--no-exploit",
+        ],
+    )
     assert res.exit_code == 0
     assert booted_states["stealth"] == StealthLevel.PARANOID
     assert booted_states["tier"] == Tier.LIGHT
@@ -268,6 +337,7 @@ def test_cli_applies_stealth_tier_profile_before_boot(cli_env, monkeypatch):
 
 def test_cli_kb_search_vector_and_ai_client(cli_env, monkeypatch):
     from unittest.mock import patch
+
     from nexus.ai.ollama_client import OllamaClient
 
     runner = CliRunner()
@@ -292,15 +362,24 @@ def test_tui_severity_casing_and_none_port():
     assert txt.plain == "HIGH"
     assert txt.style == "red"
 
-    tbl = make_findings_table([
-        {"severity": "CRITICAL", "host": "h.local", "port": None, "title": "T", "tool_source": "x"}
-    ])
+    tbl = make_findings_table(
+        [
+            {
+                "severity": "CRITICAL",
+                "host": "h.local",
+                "port": None,
+                "title": "T",
+                "tool_source": "x",
+            }
+        ]
+    )
     assert tbl.row_count == 1
     assert tbl.columns[3]._cells[0] == "-"
 
 
 def test_cli_exploit_requires_confirmation(cli_env, monkeypatch):
     from unittest.mock import AsyncMock
+
     from nexus.core.config import NexusConfig
     from nexus.core.engine import NexusEngine
 

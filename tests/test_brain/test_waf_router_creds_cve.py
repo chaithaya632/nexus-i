@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import json
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -100,20 +99,24 @@ class TestCVESync:
         import yaml
 
         kev1 = {
-            "vulnerabilities": [{
-                "cveID": "CVE-2024-11111",
-                "vendorProject": "VendorA",
-                "product": "ProdA",
-                "shortDescription": "First",
-            }]
+            "vulnerabilities": [
+                {
+                    "cveID": "CVE-2024-11111",
+                    "vendorProject": "VendorA",
+                    "product": "ProdA",
+                    "shortDescription": "First",
+                }
+            ]
         }
         kev2 = {
-            "vulnerabilities": [{
-                "cveID": "CVE-2024-22222",
-                "vendorProject": "VendorB",
-                "product": "ProdB",
-                "shortDescription": "Second",
-            }]
+            "vulnerabilities": [
+                {
+                    "cveID": "CVE-2024-22222",
+                    "vendorProject": "VendorB",
+                    "product": "ProdB",
+                    "shortDescription": "Second",
+                }
+            ]
         }
         import_cisa_kev_data(kev1, tmp_path)
         _, dest = import_cisa_kev_data(kev2, tmp_path)
@@ -121,8 +124,16 @@ class TestCVESync:
         assert "CVE-2024-11111" in merged
         assert "CVE-2024-22222" in merged
 
-        nvd1 = {"vulnerabilities": [{"cve": {"id": "CVE-2024-33333", "descriptions": [{"lang": "en", "value": "A"}]}}]}
-        nvd2 = {"vulnerabilities": [{"cve": {"id": "CVE-2024-44444", "descriptions": [{"lang": "en", "value": "B"}]}}]}
+        nvd1 = {
+            "vulnerabilities": [
+                {"cve": {"id": "CVE-2024-33333", "descriptions": [{"lang": "en", "value": "A"}]}}
+            ]
+        }
+        nvd2 = {
+            "vulnerabilities": [
+                {"cve": {"id": "CVE-2024-44444", "descriptions": [{"lang": "en", "value": "B"}]}}
+            ]
+        }
         import_nvd_json_data(nvd1, tmp_path)
         _, ndest = import_nvd_json_data(nvd2, tmp_path)
         nmerged = yaml.safe_load(ndest.read_text(encoding="utf-8"))["cves"]
@@ -163,10 +174,14 @@ class TestBrainPrecisionFixes:
         assert _version_in_range("OpenSSL 1.1.1t", ">=1.1.1,<1.1.1w") is True
 
         kg = KnowledgeGraph()
-        kg.load_from_directory(Path(__file__).resolve().parents[2] / "nexus" / "brain" / "knowledge")
+        kg.load_from_directory(
+            Path(__file__).resolve().parents[2] / "nexus" / "brain" / "knowledge"
+        )
         # Should group under family 'apache-httpd' and NOT match loose substring '2.4'
         assert kg.get_vulns_for_service("apache-httpd", "2.4") == []
-        assert any(v.cve == "CVE-2021-41773" for v in kg.get_vulns_for_service("apache-httpd", "2.4.49"))
+        assert any(
+            v.cve == "CVE-2021-41773" for v in kg.get_vulns_for_service("apache-httpd", "2.4.49")
+        )
 
     def test_remediation_case_insensitive_and_safe_cwe22(self) -> None:
         rem = RemediationDB()
@@ -187,11 +202,22 @@ class TestBrainPrecisionFixes:
     def test_payloads_single_pass_case_insensitive_and_non_bmp_unicode(self) -> None:
         db = PayloadDB()
         p = Payload(
-            name="test_p", category="SQLi", platform="Linux", language="Python",
-            template="{LHOST}:{LPORT}", tags=["WAF-Bypass"],
+            name="test_p",
+            category="SQLi",
+            platform="Linux",
+            language="Python",
+            template="{LHOST}:{LPORT}",
+            tags=["WAF-Bypass"],
         )
         db.add_payload(p)
-        assert len(db.search(category="sqli", platform="linux", language="python", keyword="waf-bypass")) == 1
+        assert (
+            len(
+                db.search(
+                    category="sqli", platform="linux", language="python", keyword="waf-bypass"
+                )
+            )
+            == 1
+        )
         assert db.render(p, {"LHOST": "{LPORT}", "LPORT": "4444"}) == "{LPORT}:4444"
         assert encode_unicode("😀") == "\\ud83d\\ude00"
 

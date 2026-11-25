@@ -41,9 +41,7 @@ class Scope:
 
     allowed_domains: list[str] = field(default_factory=list)
     allowed_ips: list[str] = field(default_factory=list)
-    allowed_cidrs: list[ipaddress.IPv4Network | ipaddress.IPv6Network] = field(
-        default_factory=list
-    )
+    allowed_cidrs: list[ipaddress.IPv4Network | ipaddress.IPv6Network] = field(default_factory=list)
     excluded_targets: list[str] = field(default_factory=list)
     allowed_ports: list[int] | None = None  # None means all ports allowed
     notes: str = ""
@@ -82,9 +80,7 @@ class ScopeEnforcer:
             ex_clean = ex.strip()
             if "/" in ex_clean:
                 try:
-                    self._excluded_networks.append(
-                        ipaddress.ip_network(ex_clean, strict=False)
-                    )
+                    self._excluded_networks.append(ipaddress.ip_network(ex_clean, strict=False))
                     continue
                 except ValueError:
                     pass
@@ -98,7 +94,7 @@ class ScopeEnforcer:
                     self._excluded_domain_patterns.append(_compile_domain_pattern(dom))
 
     @classmethod
-    def from_file(cls, path: str | Path) -> "ScopeEnforcer":
+    def from_file(cls, path: str | Path) -> ScopeEnforcer:
         p = Path(path)
         if not p.is_file():
             raise FileNotFoundError(f"Scope file not found: {p}")
@@ -122,7 +118,7 @@ class ScopeEnforcer:
         return cls(scope)
 
     @classmethod
-    def for_target(cls, target: str) -> "ScopeEnforcer":
+    def for_target(cls, target: str) -> ScopeEnforcer:
         """Build a strict single-target ScopeEnforcer from a URL, IP, CIDR, or domain."""
         raw = target.strip()
         if not raw:
@@ -135,9 +131,7 @@ class ScopeEnforcer:
             try:
                 net = ipaddress.ip_network(raw, strict=False)
                 if net.prefixlen == 0:
-                    raise ValueError(
-                        f"Overbroad CIDR {target!r} is not allowed in for_target()"
-                    )
+                    raise ValueError(f"Overbroad CIDR {target!r} is not allowed in for_target()")
                 return cls(Scope(allowed_cidrs=[net]))
             except ValueError as exc:
                 if "Overbroad CIDR" in str(exc):
@@ -163,17 +157,21 @@ class ScopeEnforcer:
         return cls(Scope(allowed_domains=[f"*.{host}"]))
 
     @classmethod
-    def allow_all(cls) -> "ScopeEnforcer":
+    def allow_all(cls) -> ScopeEnforcer:
         """Create a permissive enforcer (for testing / unrestricted mode)."""
-        return cls(Scope(
-            allowed_domains=["*"],
-            allowed_cidrs=[
-                ipaddress.ip_network("0.0.0.0/0"),
-                ipaddress.ip_network("::/0"),
-            ],
-        ))
+        return cls(
+            Scope(
+                allowed_domains=["*"],
+                allowed_cidrs=[
+                    ipaddress.ip_network("0.0.0.0/0"),
+                    ipaddress.ip_network("::/0"),
+                ],
+            )
+        )
 
-    def _is_excluded(self, raw_target: str, addr: ipaddress.IPv4Address | ipaddress.IPv6Address | None) -> bool:
+    def _is_excluded(
+        self, raw_target: str, addr: ipaddress.IPv4Address | ipaddress.IPv6Address | None
+    ) -> bool:
         if addr is not None:
             if str(addr) in self._excluded:
                 return True
@@ -206,7 +204,9 @@ class ScopeEnforcer:
             if any(addr in net for net in self._networks):
                 return True
             # Allow explicit wildcard domain ("*") only if configured
-            return any(pat.pattern == r"^.+$" and pat.match(str(addr)) for pat in self._domain_patterns)
+            return any(
+                pat.pattern == r"^.+$" and pat.match(str(addr)) for pat in self._domain_patterns
+            )
 
         target_domain = raw_target.rstrip(".").lower()
         if not target_domain:

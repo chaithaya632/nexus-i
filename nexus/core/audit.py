@@ -6,7 +6,7 @@ import hashlib
 import json
 import logging
 import threading
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -44,7 +44,7 @@ class AuditLogger:
         if not self._path.is_file():
             return _GENESIS_HASH
         try:
-            with open(self._path, "r", encoding="utf-8") as f:
+            with open(self._path, encoding="utf-8") as f:
                 last_line = ""
                 for line in f:
                     stripped = line.strip()
@@ -53,7 +53,7 @@ class AuditLogger:
         except OSError as exc:
             self._corrupted = True
             log.warning("Failed reading existing audit log %s: %s", self._path, exc)
-            return hashlib.sha256(f"corrupt-io:{exc}".encode("utf-8")).hexdigest()
+            return hashlib.sha256(f"corrupt-io:{exc}".encode()).hexdigest()
 
         if not last_line:
             return _GENESIS_HASH
@@ -65,7 +65,11 @@ class AuditLogger:
             log.warning("Corrupted JSON tail in audit log %s: %s", self._path, exc)
             return hashlib.sha256(last_line.encode("utf-8", errors="replace")).hexdigest()
 
-        if not isinstance(parsed, dict) or not isinstance(parsed.get("hash"), str) or not parsed["hash"]:
+        if (
+            not isinstance(parsed, dict)
+            or not isinstance(parsed.get("hash"), str)
+            or not parsed["hash"]
+        ):
             self._corrupted = True
             log.warning("Missing or invalid hash in audit log tail %s", self._path)
             return hashlib.sha256(last_line.encode("utf-8", errors="replace")).hexdigest()
@@ -84,7 +88,7 @@ class AuditLogger:
         """Append an immutable audit entry."""
         with self._lock:
             entry: dict[str, Any] = {
-                "timestamp": datetime.now(timezone.utc).isoformat(),
+                "timestamp": datetime.now(UTC).isoformat(),
                 "action": action,
                 "target": target,
                 "tool": tool,
@@ -118,7 +122,7 @@ class AuditLogger:
             prev_hash = _GENESIS_HASH
             count = 0
 
-            with open(self._path, "r", encoding="utf-8") as f:
+            with open(self._path, encoding="utf-8") as f:
                 for line in f:
                     line = line.strip()
                     if not line:

@@ -4,8 +4,8 @@ from __future__ import annotations
 
 import logging
 import re
+from collections.abc import Iterable
 from pathlib import Path
-from typing import Iterable
 
 from nexus.brain.knowledge_graph import KnowledgeGraph
 from nexus.db.models import Finding, Severity
@@ -70,7 +70,9 @@ def normalize_pkg_version(raw: str) -> str:
     base = re.split(r"[-+~]", s, maxsplit=1)[0]
     # Strip trailing distro/portable build tags like 'p2' in OpenSSH '10.6p2',
     # while preserving OpenSSL patch letters such as '1.1.1t' or '1.0.2zf'.
-    base = re.sub(r"(?<=\d)(?:p\d+|(?:ubuntu|deb|el|fc|dfsg|ds)\d*)$", "", base, flags=re.IGNORECASE)
+    base = re.sub(
+        r"(?<=\d)(?:p\d+|(?:ubuntu|deb|el|fc|dfsg|ds)\d*)$", "", base, flags=re.IGNORECASE
+    )
     return base.strip()
 
 
@@ -128,24 +130,26 @@ def correlate_installed_packages(
             if dedup_key in seen_pkg_cves:
                 continue
             seen_pkg_cves.add(dedup_key)
-            findings.append(Finding(
-                host=host,
-                port=None,
-                protocol="ssh" if host not in ("localhost", "127.0.0.1", "::1") else "local",
-                title=f"{entry.cve}: Vulnerable Installed Package ({pkg_name} {raw_ver})",
-                description=(
-                    f"Credentialed package check found {pkg_name} ({raw_ver}) on {host}, "
-                    f"matching {entry.cve} ({entry.description or svc_name}; affected: {entry.affected_versions})."
-                ),
-                severity=_SEV_STR.get(entry.severity.lower(), Severity.MEDIUM),
-                cvss_score=float(entry.cvss or 0.0),
-                cve_ids=[entry.cve],
-                cwe_id=entry.vuln_type if entry.vuln_type.startswith("CWE-") else "CWE-1104",
-                tool_source="host_pkg_audit",
-                evidence=f"Package: {pkg_name}\nInstalled: {raw_ver}\nNormalized: {banner}",
-                remediation=entry.remediation,
-                confirmed=True,
-            ))
+            findings.append(
+                Finding(
+                    host=host,
+                    port=None,
+                    protocol="ssh" if host not in ("localhost", "127.0.0.1", "::1") else "local",
+                    title=f"{entry.cve}: Vulnerable Installed Package ({pkg_name} {raw_ver})",
+                    description=(
+                        f"Credentialed package check found {pkg_name} ({raw_ver}) on {host}, "
+                        f"matching {entry.cve} ({entry.description or svc_name}; affected: {entry.affected_versions})."
+                    ),
+                    severity=_SEV_STR.get(entry.severity.lower(), Severity.MEDIUM),
+                    cvss_score=float(entry.cvss or 0.0),
+                    cve_ids=[entry.cve],
+                    cwe_id=entry.vuln_type if entry.vuln_type.startswith("CWE-") else "CWE-1104",
+                    tool_source="host_pkg_audit",
+                    evidence=f"Package: {pkg_name}\nInstalled: {raw_ver}\nNormalized: {banner}",
+                    remediation=entry.remediation,
+                    confirmed=True,
+                )
+            )
     return findings
 
 
@@ -166,10 +170,14 @@ async def audit_host_packages(
     raw_output = ""
     if local:
         if ToolRunner.is_available("dpkg-query"):
-            out = await ToolRunner.run("dpkg-query", ["-W", "-f", "${Package}\t${Version}\n"], timeout=timeout)
+            out = await ToolRunner.run(
+                "dpkg-query", ["-W", "-f", "${Package}\t${Version}\n"], timeout=timeout
+            )
             raw_output = out.stdout
         elif ToolRunner.is_available("rpm"):
-            out = await ToolRunner.run("rpm", ["-qa", "--qf", "%{NAME}\t%{VERSION}-%{RELEASE}\n"], timeout=timeout)
+            out = await ToolRunner.run(
+                "rpm", ["-qa", "--qf", "%{NAME}\t%{VERSION}-%{RELEASE}\n"], timeout=timeout
+            )
             raw_output = out.stdout
     elif ssh_user and ssh_key_path:
         clean_host = (host or "").strip()
@@ -189,18 +197,25 @@ async def audit_host_packages(
             return []
         key = Path(ssh_key_path)
         if not key.is_file() or not ToolRunner.is_available("ssh"):
-            log.warning("SSH key %s or 'ssh' client unavailable; skipping credentialed host audit", key)
+            log.warning(
+                "SSH key %s or 'ssh' client unavailable; skipping credentialed host audit", key
+            )
             return []
         remote_cmd = (
             "dpkg-query -W -f='${Package}\\t${Version}\\n' 2>/dev/null || "
             "rpm -qa --qf '%{NAME}\\t%{VERSION}-%{RELEASE}\\n' 2>/dev/null"
         )
         args = [
-            "-i", str(key),
-            "-p", str(port_num),
-            "-o", "BatchMode=yes",
-            "-o", "StrictHostKeyChecking=accept-new",
-            "-o", "ConnectTimeout=10",
+            "-i",
+            str(key),
+            "-p",
+            str(port_num),
+            "-o",
+            "BatchMode=yes",
+            "-o",
+            "StrictHostKeyChecking=accept-new",
+            "-o",
+            "ConnectTimeout=10",
             "--",
             f"{ssh_user.strip()}@{clean_host}",
             remote_cmd,
@@ -213,5 +228,10 @@ async def audit_host_packages(
 
     packages = parse_package_lines(raw_output)
     findings = correlate_installed_packages(packages, knowledge, host=host)
-    log.info("Host package audit on %s: inspected %d packages -> %d CVE match(es)", host, len(packages), len(findings))
+    log.info(
+        "Host package audit on %s: inspected %d packages -> %d CVE match(es)",
+        host,
+        len(packages),
+        len(findings),
+    )
     return findings

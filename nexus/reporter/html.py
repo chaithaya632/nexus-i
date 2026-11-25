@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Any, TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from nexus.reporter.generator import strip_markdown
 
@@ -41,10 +41,10 @@ def render_html(data: ReportData) -> str:
         <tr>
             <td>{i}</td>
             <td><span class="sev-badge" style="background:{color}">{_esc(sev.upper())}</span></td>
-            <td>{_esc(f.get('title', ''))}</td>
-            <td>{_esc(f.get('host', ''))}</td>
+            <td>{_esc(f.get("title", ""))}</td>
+            <td>{_esc(f.get("host", ""))}</td>
             <td>{_esc(port_val)}</td>
-            <td>{_esc(f.get('cwe_id', ''))}</td>
+            <td>{_esc(f.get("cwe_id", ""))}</td>
             <td>{_esc(cves)}</td>
         </tr>"""
 
@@ -56,22 +56,24 @@ def render_html(data: ReportData) -> str:
         remediation = str(f.get("remediation") or "")
         port_html = f"<span>Port: {_esc(f['port'])}</span>" if f.get("port") is not None else ""
         cwe_html = f"<span>CWE: {_esc(f.get('cwe_id', ''))}</span>" if f.get("cwe_id") else ""
-        cvss_html = f"<span>CVSS: {_esc(f['cvss_score'])}</span>" if f.get("cvss_score") is not None else ""
+        cvss_html = (
+            f"<span>CVSS: {_esc(f['cvss_score'])}</span>" if f.get("cvss_score") is not None else ""
+        )
 
         finding_details += f"""
         <div class="finding-card">
-            <h3>{i}. {_esc(f.get('title', ''))}</h3>
+            <h3>{i}. {_esc(f.get("title", ""))}</h3>
             <div class="finding-meta">
                 <span class="sev-badge" style="background:{color}">{_esc(sev.upper())}</span>
-                <span>Host: {_esc(f.get('host', ''))}</span>
+                <span>Host: {_esc(f.get("host", ""))}</span>
                 {port_html}
                 {cwe_html}
                 {cvss_html}
-                <span>Tool: {_esc(f.get('tool_source', ''))}</span>
+                <span>Tool: {_esc(f.get("tool_source", ""))}</span>
             </div>
-            <p>{_esc(f.get('description', ''))}</p>
-            {f'<div class="evidence"><h4>Evidence</h4><pre>{_esc(evidence[:2000])}</pre></div>' if evidence else ''}
-            {f'<div class="remediation"><h4>Remediation</h4><p>{_esc(remediation)}</p></div>' if remediation else ''}
+            <p>{_esc(f.get("description", ""))}</p>
+            {f'<div class="evidence"><h4>Evidence</h4><pre>{_esc(evidence[:2000])}</pre></div>' if evidence else ""}
+            {f'<div class="remediation"><h4>Remediation</h4><p>{_esc(remediation)}</p></div>' if remediation else ""}
         </div>"""
 
     chains_html = ""
@@ -83,9 +85,9 @@ def render_html(data: ReportData) -> str:
                 steps_html += f"<li><strong>{_esc(s.get('action', ''))}</strong> (via {_esc(s.get('tool', ''))})</li>"
             chains_html += f"""
             <div class="chain-card">
-                <h3>Chain {i}: {_esc(c.get('name', ''))}</h3>
-                <p>Confidence: {c.get('confidence', 0):.0%} | Impact: {_esc(impact)}</p>
-                <p>{_esc(c.get('description', ''))}</p>
+                <h3>Chain {i}: {_esc(c.get("name", ""))}</h3>
+                <p>Confidence: {c.get("confidence", 0):.0%} | Impact: {_esc(impact)}</p>
+                <p>{_esc(c.get("description", ""))}</p>
                 <ol>{steps_html}</ol>
             </div>"""
     else:
@@ -98,11 +100,11 @@ def render_html(data: ReportData) -> str:
             port_val = "" if c.get("port") is None else c.get("port")
             cred_rows += f"""
             <tr>
-                <td>{_esc(c.get('host', ''))}</td>
+                <td>{_esc(c.get("host", ""))}</td>
                 <td>{_esc(port_val)}</td>
-                <td>{_esc(c.get('service', ''))}</td>
-                <td>{_esc(c.get('username', ''))}</td>
-                <td>{_esc(c.get('source', ''))}</td>
+                <td>{_esc(c.get("service", ""))}</td>
+                <td>{_esc(c.get("username", ""))}</td>
+                <td>{_esc(c.get("source", ""))}</td>
             </tr>"""
         creds_html = f"""
         <table>
@@ -122,12 +124,12 @@ def render_html(data: ReportData) -> str:
                 tech = ", ".join(str(x) for x in tech[:5])
             target_rows += f"""
             <tr>
-                <td>{_esc(t.get('host', ''))}</td>
-                <td>{_esc(t.get('ip', ''))}</td>
-                <td>{_esc(t.get('is_live', ''))}</td>
-                <td>{_esc(t.get('os_guess', ''))}</td>
+                <td>{_esc(t.get("host", ""))}</td>
+                <td>{_esc(t.get("ip", ""))}</td>
+                <td>{_esc(t.get("is_live", ""))}</td>
+                <td>{_esc(t.get("os_guess", ""))}</td>
                 <td>{_esc(tech)}</td>
-                <td>{_esc(t.get('waf_detected', ''))}</td>
+                <td>{_esc(t.get("waf_detected", ""))}</td>
             </tr>"""
         targets_html = f"""
         <table>
@@ -182,13 +184,13 @@ footer{{margin-top:3rem;padding-top:1rem;border-top:1px solid #e5e7eb;text-align
 <h1>{_esc(meta.title)}</h1>
 <div class="meta-info">
     <span><strong>Author:</strong> {_esc(meta.author)}</span>
-    <span><strong>Client:</strong> {_esc(meta.client or 'N/A')}</span>
-    <span><strong>Date:</strong> {meta.date.strftime('%Y-%m-%d')}</span>
+    <span><strong>Client:</strong> {_esc(meta.client or "N/A")}</span>
+    <span><strong>Date:</strong> {meta.date.strftime("%Y-%m-%d")}</span>
     <span><strong>Engagement:</strong> {_esc(meta.engagement_id)}</span>
 </div>
 
 <h2>Executive Summary</h2>
-<p>{_esc(exec_summary_plain).replace(chr(10), '<br>')}</p>
+<p>{_esc(exec_summary_plain).replace(chr(10), "<br>")}</p>
 
 <div class="risk-grid">
     <div class="risk-box" style="background:#dc2626">Critical<br>{meta.critical_count}</div>
@@ -199,7 +201,7 @@ footer{{margin-top:3rem;padding-top:1rem;border-top:1px solid #e5e7eb;text-align
 </div>
 
 <h2>Methodology</h2>
-<p>{_esc(methodology_plain).replace(chr(10), '<br>')}</p>
+<p>{_esc(methodology_plain).replace(chr(10), "<br>")}</p>
 
 <h2>Findings Summary</h2>
 <table>
@@ -221,7 +223,7 @@ footer{{margin-top:3rem;padding-top:1rem;border-top:1px solid #e5e7eb;text-align
 
 <footer>
     <p>Report generated by <strong>NEXUS</strong> — Network EXploration &amp; Unified Security</p>
-    <p>{meta.date.strftime('%Y-%m-%d %H:%M UTC')}</p>
+    <p>{meta.date.strftime("%Y-%m-%d %H:%M UTC")}</p>
 </footer>
 </body>
 </html>"""

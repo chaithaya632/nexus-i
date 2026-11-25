@@ -44,8 +44,18 @@ BUILTIN_CREDENTIALS: list[dict[str, str]] = [
     {"service": "mssql", "product": "mssql", "username": "sa", "password": ""},
     {"service": "mssql", "product": "mssql", "username": "sa", "password": "sa"},
     {"service": "mssql", "product": "mssql", "username": "sa", "password": "Password123"},
-    {"service": "postgresql", "product": "postgresql", "username": "postgres", "password": "postgres"},
-    {"service": "postgresql", "product": "postgresql", "username": "postgres", "password": "password"},
+    {
+        "service": "postgresql",
+        "product": "postgresql",
+        "username": "postgres",
+        "password": "postgres",
+    },
+    {
+        "service": "postgresql",
+        "product": "postgresql",
+        "username": "postgres",
+        "password": "password",
+    },
     {"service": "mongodb", "product": "mongodb", "username": "admin", "password": "admin"},
     {"service": "redis", "product": "redis", "username": "", "password": ""},
     # SSH/FTP
@@ -84,8 +94,12 @@ class CredentialDB:
         return {
             "service": str(raw_entry.get("service") or "").strip(),
             "product": str(raw_entry.get("product") or default_product).strip(),
-            "username": str(raw_entry.get("username") if raw_entry.get("username") is not None else ""),
-            "password": str(raw_entry.get("password") if raw_entry.get("password") is not None else ""),
+            "username": str(
+                raw_entry.get("username") if raw_entry.get("username") is not None else ""
+            ),
+            "password": str(
+                raw_entry.get("password") if raw_entry.get("password") is not None else ""
+            ),
         }
 
     def load_from_directory(self, knowledge_dir: Path) -> None:
@@ -114,7 +128,11 @@ class CredentialDB:
                             if norm is not None:
                                 self._entries.append(norm)
                             else:
-                                log.warning("Skipping invalid credential entry for %s in %s", product, yaml_file)
+                                log.warning(
+                                    "Skipping invalid credential entry for %s in %s",
+                                    product,
+                                    yaml_file,
+                                )
 
     def lookup(self, service: str = "", product: str = "") -> list[dict[str, str]]:
         """Find credentials for a service/product."""

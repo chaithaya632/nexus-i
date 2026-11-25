@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
 import logging
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
@@ -16,6 +16,7 @@ log = logging.getLogger("nexus.brain.chain_builder")
 @dataclass
 class ChainTemplate:
     """Pre-defined attack chain template from knowledge base."""
+
     name: str
     description: str = ""
     steps: list[dict[str, Any]] = field(default_factory=list)
@@ -111,7 +112,6 @@ class ChainBuilder:
             ("target_identified", "ports_discovered", "port_scan", "nmap", 0.1),
             ("ports_discovered", "services_identified", "service_enum", "nmap", 0.1),
             ("services_identified", "tech_fingerprinted", "tech_fingerprint", "whatweb", 0.15),
-
             # Web Application Paths
             ("service_http", "directories_found", "dir_bruteforce", "ffuf", 0.2),
             ("service_http", "vulns_scanned", "vuln_scan", "nuclei", 0.15),
@@ -123,7 +123,6 @@ class ChainBuilder:
             ("credentials_obtained", "admin_access", "login_admin", "hydra", 0.3),
             ("admin_access", "webshell_uploaded", "upload_shell", "custom", 0.4),
             ("webshell_uploaded", "rce_achieved", "execute_shell", "custom", 0.2),
-
             # Tomcat Paths
             ("service_tomcat", "tomcat_manager_found", "check_manager", "ffuf", 0.2),
             ("tomcat_manager_found", "tomcat_creds_found", "default_creds", "hydra", 0.3),
@@ -132,19 +131,16 @@ class ChainBuilder:
             ("service_tomcat", "ghostcat_vuln", "ghostcat_check", "nmap", 0.3),
             ("ghostcat_vuln", "config_leaked", "ghostcat_read", "custom", 0.3),
             ("config_leaked", "credentials_obtained", "parse_config", "custom", 0.2),
-
             # WordPress Paths
             ("service_wordpress", "wp_users_found", "wp_user_enum", "wpscan", 0.2),
             ("service_wordpress", "xmlrpc_enabled", "xmlrpc_check", "nuclei", 0.15),
             ("xmlrpc_enabled", "wp_creds_found", "xmlrpc_brute", "hydra", 0.5),
             ("wp_creds_found", "admin_access", "wp_admin_login", "custom", 0.1),
-
             # Credential Reuse
             ("credentials_obtained", "ssh_access", "ssh_login", "ssh", 0.3),
             ("credentials_obtained", "rdp_access", "rdp_login", "xfreerdp", 0.4),
             ("ssh_access", "rce_achieved", "ssh_command", "ssh", 0.1),
             ("rdp_access", "rce_achieved", "rdp_command", "xfreerdp", 0.1),
-
             # SMB Paths
             ("service_smb", "smb_shares_found", "enum_shares", "crackmapexec", 0.2),
             ("service_smb", "null_session", "null_session_check", "enum4linux", 0.3),
@@ -152,7 +148,6 @@ class ChainBuilder:
             ("ms17_010_vuln", "rce_achieved", "eternalblue_exploit", "msfconsole", 0.3),
             ("smb_shares_found", "sensitive_files", "read_shares", "smbclient", 0.4),
             ("sensitive_files", "credentials_obtained", "extract_creds", "custom", 0.3),
-
             # Post-Exploitation
             ("rce_achieved", "privesc_achieved", "privilege_escalation", "custom", 0.5),
             ("privesc_achieved", "data_exfiltrated", "data_collection", "custom", 0.3),
@@ -175,19 +170,19 @@ class ChainBuilder:
 
         paths: list[list[dict[str, Any]]] = []
         try:
-            for path_nodes in nx.shortest_simple_paths(
-                self._graph, start, goal, weight="weight"
-            ):
+            for path_nodes in nx.shortest_simple_paths(self._graph, start, goal, weight="weight"):
                 steps = []
                 for i in range(len(path_nodes) - 1):
                     edge = self._graph.edges[path_nodes[i], path_nodes[i + 1]]
-                    steps.append({
-                        "from": path_nodes[i],
-                        "to": path_nodes[i + 1],
-                        "action": edge.get("action", ""),
-                        "tool": edge.get("tool", ""),
-                        "weight": edge.get("weight", 1.0),
-                    })
+                    steps.append(
+                        {
+                            "from": path_nodes[i],
+                            "to": path_nodes[i + 1],
+                            "action": edge.get("action", ""),
+                            "tool": edge.get("tool", ""),
+                            "weight": edge.get("weight", 1.0),
+                        }
+                    )
                 paths.append(steps)
                 if len(paths) >= max_paths:
                     break
@@ -202,8 +197,15 @@ class ChainBuilder:
             return []
         reachable = nx.descendants(self._graph, start)
         # Goals are states with no outgoing edges or high-impact states
-        goals = {"rce_achieved", "data_exfiltrated", "privesc_achieved",
-                 "admin_access", "admin_panel_access", "credentials_obtained", "lateral_movement"}
+        goals = {
+            "rce_achieved",
+            "data_exfiltrated",
+            "privesc_achieved",
+            "admin_access",
+            "admin_panel_access",
+            "credentials_obtained",
+            "lateral_movement",
+        }
         return sorted(reachable & goals)
 
     def suggest_next_actions(self, current_states: list[str]) -> list[dict[str, Any]]:
@@ -213,14 +215,16 @@ class ChainBuilder:
             if state not in self._graph:
                 continue
             for _, neighbor, edge_data in self._graph.out_edges(state, data=True):
-                suggestions.append({
-                    "from_state": state,
-                    "to_state": neighbor,
-                    "action": edge_data.get("action", ""),
-                    "tool": edge_data.get("tool", ""),
-                    "weight": edge_data.get("weight", 1.0),
-                    "description": edge_data.get("description", ""),
-                })
+                suggestions.append(
+                    {
+                        "from_state": state,
+                        "to_state": neighbor,
+                        "action": edge_data.get("action", ""),
+                        "tool": edge_data.get("tool", ""),
+                        "weight": edge_data.get("weight", 1.0),
+                        "description": edge_data.get("description", ""),
+                    }
+                )
         suggestions.sort(key=lambda s: s["weight"])
         return suggestions
 

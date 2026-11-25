@@ -28,15 +28,28 @@ class TestSarifExportAndSuppressions:
         db.add_target(Target(engagement_id=eng.id, host="app.local", is_live=True))
 
         f_crit = Finding(
-            engagement_id=eng.id, host="app.local", port=443, protocol="https",
-            title="Spring4Shell RCE", severity=Severity.CRITICAL, cvss_score=9.8,
-            cve_ids=["CVE-2022-22965"], cwe_id="CWE-94", owasp_category="A03:2021",
-            tool_source="nuclei", remediation="Upgrade Spring Framework to 5.3.18+",
+            engagement_id=eng.id,
+            host="app.local",
+            port=443,
+            protocol="https",
+            title="Spring4Shell RCE",
+            severity=Severity.CRITICAL,
+            cvss_score=9.8,
+            cve_ids=["CVE-2022-22965"],
+            cwe_id="CWE-94",
+            owasp_category="A03:2021",
+            tool_source="nuclei",
+            remediation="Upgrade Spring Framework to 5.3.18+",
         )
         f_supp = Finding(
-            engagement_id=eng.id, host="app.local", port=80, protocol="http",
+            engagement_id=eng.id,
+            host="app.local",
+            port=80,
+            protocol="http",
             title="HTTP: Missing X-Content-Type-Options: nosniff",
-            severity=Severity.INFO, cwe_id="CWE-693", tool_source="http_headers",
+            severity=Severity.INFO,
+            cwe_id="CWE-693",
+            tool_source="http_headers",
             false_positive=True,
         )
         db.add_finding(f_crit)
@@ -82,17 +95,33 @@ class TestSarifExportAndSuppressions:
         rules = load_ignore_rules(ign_txt)
         assert len(rules) == 3
 
-        f1 = Finding(host="prod.local", port=443, title="Rapid Reset", cve_ids=["CVE-2023-44487"], severity=Severity.HIGH)
-        f2 = Finding(host="staging.local", port=80, title="Missing CSP", cwe_id="CWE-693", severity=Severity.LOW)
-        f3 = Finding(host="prod.local", port=80, title="Missing CSP", cwe_id="CWE-693", severity=Severity.LOW)
-        f4 = Finding(host="prod.local", port=443, title="Missing HSTS Header", severity=Severity.LOW)
+        f1 = Finding(
+            host="prod.local",
+            port=443,
+            title="Rapid Reset",
+            cve_ids=["CVE-2023-44487"],
+            severity=Severity.HIGH,
+        )
+        f2 = Finding(
+            host="staging.local",
+            port=80,
+            title="Missing CSP",
+            cwe_id="CWE-693",
+            severity=Severity.LOW,
+        )
+        f3 = Finding(
+            host="prod.local", port=80, title="Missing CSP", cwe_id="CWE-693", severity=Severity.LOW
+        )
+        f4 = Finding(
+            host="prod.local", port=443, title="Missing HSTS Header", severity=Severity.LOW
+        )
 
         res, count = apply_baseline_suppressions([f1, f2, f3, f4], rules)
         assert count == 3
-        assert res[0].false_positive is True   # CVE-2023-44487
-        assert res[1].false_positive is True   # CWE-693 on staging.local
+        assert res[0].false_positive is True  # CVE-2023-44487
+        assert res[1].false_positive is True  # CWE-693 on staging.local
         assert res[2].false_positive is False  # CWE-693 on prod.local stays active!
-        assert res[3].false_positive is True   # *HSTS*
+        assert res[3].false_positive is True  # *HSTS*
 
         ign_yaml = tmp_path / "ignore.yaml"
         ign_yaml.write_text(
@@ -110,19 +139,68 @@ class TestEngagementDiffing:
 
     def test_diff_engagements_classifies_findings(self, tmp_path: Path) -> None:
         db = EngagementStore(tmp_path / "diff.db")
-        e1 = Engagement(id="eng_old", name="old", target="app.local", phase=EngagementPhase.COMPLETE)
-        e2 = Engagement(id="eng_new", name="new", target="app.local", phase=EngagementPhase.COMPLETE)
+        e1 = Engagement(
+            id="eng_old", name="old", target="app.local", phase=EngagementPhase.COMPLETE
+        )
+        e2 = Engagement(
+            id="eng_new", name="new", target="app.local", phase=EngagementPhase.COMPLETE
+        )
         db.create_engagement(e1)
         db.create_engagement(e2)
 
         # Old: XSS (fixed) + HSTS (persists)
-        db.add_finding(Finding(engagement_id=e1.id, host="app.local", port=443, title="Reflected XSS", cwe_id="CWE-79", severity=Severity.HIGH))
-        db.add_finding(Finding(engagement_id=e1.id, host="app.local", port=443, title="Missing HSTS", cwe_id="CWE-523", severity=Severity.LOW))
+        db.add_finding(
+            Finding(
+                engagement_id=e1.id,
+                host="app.local",
+                port=443,
+                title="Reflected XSS",
+                cwe_id="CWE-79",
+                severity=Severity.HIGH,
+            )
+        )
+        db.add_finding(
+            Finding(
+                engagement_id=e1.id,
+                host="app.local",
+                port=443,
+                title="Missing HSTS",
+                cwe_id="CWE-523",
+                severity=Severity.LOW,
+            )
+        )
 
         # New: HSTS (persists) + SQLi (new regression) + suppressed info
-        db.add_finding(Finding(engagement_id=e2.id, host="app.local", port=443, title="Missing HSTS", cwe_id="CWE-523", severity=Severity.LOW))
-        db.add_finding(Finding(engagement_id=e2.id, host="app.local", port=443, title="SQL Injection", cwe_id="CWE-89", severity=Severity.CRITICAL))
-        db.add_finding(Finding(engagement_id=e2.id, host="app.local", port=443, title="Banner Info", severity=Severity.INFO, false_positive=True))
+        db.add_finding(
+            Finding(
+                engagement_id=e2.id,
+                host="app.local",
+                port=443,
+                title="Missing HSTS",
+                cwe_id="CWE-523",
+                severity=Severity.LOW,
+            )
+        )
+        db.add_finding(
+            Finding(
+                engagement_id=e2.id,
+                host="app.local",
+                port=443,
+                title="SQL Injection",
+                cwe_id="CWE-89",
+                severity=Severity.CRITICAL,
+            )
+        )
+        db.add_finding(
+            Finding(
+                engagement_id=e2.id,
+                host="app.local",
+                port=443,
+                title="Banner Info",
+                severity=Severity.INFO,
+                false_positive=True,
+            )
+        )
 
         diff = diff_engagements(db, e1.id, e2.id)
         assert diff["counts"] == {"new": 1, "resolved": 1, "persistent": 1, "suppressed": 1}
@@ -183,18 +261,39 @@ class TestExpandedKnowledgeAndRemediationPacks:
         db.create_engagement(e1)
         db.create_engagement(e2)
 
-        db.add_finding(Finding(
-            engagement_id=e1.id, host="app.local", port=443, title="SQL Injection",
-            cwe_id="CWE-89", severity=Severity.HIGH, evidence="URL: https://app.local/login",
-        ))
-        db.add_finding(Finding(
-            engagement_id=e2.id, host="app.local", port=443, title="SQL Injection",
-            cwe_id="CWE-89", severity=Severity.HIGH, evidence="URL: https://app.local/login",
-        ))
-        db.add_finding(Finding(
-            engagement_id=e2.id, host="app.local", port=443, title="SQL Injection",
-            cwe_id="CWE-89", severity=Severity.HIGH, evidence="URL: https://app.local/admin",
-        ))
+        db.add_finding(
+            Finding(
+                engagement_id=e1.id,
+                host="app.local",
+                port=443,
+                title="SQL Injection",
+                cwe_id="CWE-89",
+                severity=Severity.HIGH,
+                evidence="URL: https://app.local/login",
+            )
+        )
+        db.add_finding(
+            Finding(
+                engagement_id=e2.id,
+                host="app.local",
+                port=443,
+                title="SQL Injection",
+                cwe_id="CWE-89",
+                severity=Severity.HIGH,
+                evidence="URL: https://app.local/login",
+            )
+        )
+        db.add_finding(
+            Finding(
+                engagement_id=e2.id,
+                host="app.local",
+                port=443,
+                title="SQL Injection",
+                cwe_id="CWE-89",
+                severity=Severity.HIGH,
+                evidence="URL: https://app.local/admin",
+            )
+        )
         diff = diff_engagements(db, e1.id, e2.id)
         assert diff["counts"]["persistent"] == 1
         assert diff["counts"]["new"] == 1
@@ -214,7 +313,8 @@ class TestExpandedKnowledgeAndRemediationPacks:
 
         f_a = Finding(host="a.local", title="Missing CSP", cwe_id="CWE-693", severity=Severity.LOW)
         f_c = Finding(host="c.local", title="Info leak", cwe_id="CWE-200", severity=Severity.LOW)
-        f_win = Finding(host="d.local", title="Path C:\\inetpub\\wwwroot exposed", severity=Severity.LOW)
+        f_win = Finding(
+            host="d.local", title="Path C:\\inetpub\\wwwroot exposed", severity=Severity.LOW
+        )
         _, cnt = apply_baseline_suppressions([f_a, f_c, f_win], rules)
         assert cnt == 3
-

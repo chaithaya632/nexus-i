@@ -60,10 +60,14 @@ async def theharvester_gather(
     json_path = ToolRunner.make_temp_path(".json")
 
     args = [
-        "-d", clean_domain,
-        "-b", clean_sources,
-        "-l", str(limit),
-        "-f", json_path,
+        "-d",
+        clean_domain,
+        "-b",
+        clean_sources,
+        "-l",
+        str(limit),
+        "-f",
+        json_path,
     ]
 
     emails: list[str] = []
@@ -106,7 +110,10 @@ async def theharvester_gather(
 
     log.info(
         "theHarvester for %s: %d emails, %d hosts, %d IPs",
-        domain, len(clean_emails), len(clean_hosts), len(clean_ips),
+        domain,
+        len(clean_emails),
+        len(clean_hosts),
+        len(clean_ips),
     )
     return {
         "domain": domain,
@@ -180,17 +187,19 @@ async def gather_osint(
     # Create a finding for discovered emails
     emails = result["emails"]
     if emails:
-        findings.append(Finding(
-            host=domain,
-            title=f"OSINT: {len(emails)} email addresses discovered",
-            description=(
-                f"Passive OSINT enumeration discovered {len(emails)} email "
-                f"addresses associated with {domain}.  These can be used for "
-                f"targeted phishing, credential stuffing, or password spraying."
-            ),
-            severity=Severity.LOW,
-            tool_source="theHarvester",
-            evidence="\n".join(emails[:50]),  # cap evidence at 50
-        ))
+        findings.append(
+            Finding(
+                host=domain,
+                title=f"OSINT: {len(emails)} email addresses discovered",
+                description=(
+                    f"Passive OSINT enumeration discovered {len(emails)} email "
+                    f"addresses associated with {domain}.  These can be used for "
+                    f"targeted phishing, credential stuffing, or password spraying."
+                ),
+                severity=Severity.LOW,
+                tool_source="theHarvester",
+                evidence="\n".join(emails[:50]),  # cap evidence at 50
+            )
+        )
 
     return targets, findings

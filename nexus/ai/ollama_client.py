@@ -16,11 +16,41 @@ log = logging.getLogger("nexus.ai.ollama")
 
 # Models we recommend for uncensored security analysis
 RECOMMENDED_MODELS: list[dict[str, str]] = [
-    {"name": "dolphin-mistral",   "size": "4.1GB", "vram": "~5GB",  "tier": "light",    "description": "Uncensored Mistral 7B — best all-around for security analysis"},
-    {"name": "whiterabbitneo",    "size": "4.1GB", "vram": "~5GB",  "tier": "light",    "description": "Security-focused uncensored model, trained on cybersecurity data"},
-    {"name": "dolphin-llama3",    "size": "4.7GB", "vram": "~6GB",  "tier": "standard", "description": "Uncensored Llama-3 8B — better reasoning, more VRAM"},
-    {"name": "qwen2.5:0.5b",     "size": "0.4GB", "vram": "~1GB",  "tier": "minimal",  "description": "Tiny model for minimal-tier systems — limited accuracy"},
-    {"name": "qwen2.5:1.5b",     "size": "1.0GB", "vram": "~2GB",  "tier": "minimal",  "description": "Small model for low-RAM systems — decent accuracy"},
+    {
+        "name": "dolphin-mistral",
+        "size": "4.1GB",
+        "vram": "~5GB",
+        "tier": "light",
+        "description": "Uncensored Mistral 7B — best all-around for security analysis",
+    },
+    {
+        "name": "whiterabbitneo",
+        "size": "4.1GB",
+        "vram": "~5GB",
+        "tier": "light",
+        "description": "Security-focused uncensored model, trained on cybersecurity data",
+    },
+    {
+        "name": "dolphin-llama3",
+        "size": "4.7GB",
+        "vram": "~6GB",
+        "tier": "standard",
+        "description": "Uncensored Llama-3 8B — better reasoning, more VRAM",
+    },
+    {
+        "name": "qwen2.5:0.5b",
+        "size": "0.4GB",
+        "vram": "~1GB",
+        "tier": "minimal",
+        "description": "Tiny model for minimal-tier systems — limited accuracy",
+    },
+    {
+        "name": "qwen2.5:1.5b",
+        "size": "1.0GB",
+        "vram": "~2GB",
+        "tier": "minimal",
+        "description": "Small model for low-RAM systems — decent accuracy",
+    },
 ]
 
 # Timeout for generation (some prompts take 60s+ on CPU-only)
@@ -50,7 +80,7 @@ class OllamaClient:
         self.host = host.rstrip("/")
         self._client = httpx.Client(base_url=self.host, timeout=_HEALTH_TIMEOUT)
 
-    def __enter__(self) -> "OllamaClient":
+    def __enter__(self) -> OllamaClient:
         return self
 
     def __exit__(self, *args: Any) -> None:

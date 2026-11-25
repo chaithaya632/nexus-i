@@ -1,6 +1,7 @@
 """Tests for the stealth controller."""
 
 import asyncio
+
 import pytest
 
 from nexus.stealth.controller import (

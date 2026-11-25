@@ -117,9 +117,7 @@ class VectorSearch:
                 cols.append(idx)
                 data.append(tfidf)
 
-        self._tfidf_matrix = csr_matrix(
-            (data, (rows, cols)), shape=(n_docs, n_vocab)
-        )
+        self._tfidf_matrix = csr_matrix((data, (rows, cols)), shape=(n_docs, n_vocab))
         # L2 normalize rows
         norms = np.sqrt(self._tfidf_matrix.multiply(self._tfidf_matrix).sum(axis=1))
         norms = np.asarray(norms).flatten()

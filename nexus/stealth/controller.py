@@ -8,10 +8,10 @@ before sending requests.
 from __future__ import annotations
 
 import asyncio
-from collections import deque
 import logging
 import random
 import time
+from collections import deque
 from dataclasses import dataclass
 from typing import Any
 

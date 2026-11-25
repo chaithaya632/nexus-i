@@ -9,7 +9,6 @@ from __future__ import annotations
 
 from typing import Any
 
-
 # ── System Prompts ────────────────────────────────────────────────
 
 _DATA_BOUNDARY_INSTRUCTION = (
@@ -33,16 +32,14 @@ EXPLOIT_ADVISOR_SYSTEM = (
     "Given findings from a vulnerability scan, suggest exploitation approaches "
     "ranked by feasibility.  Reference known techniques, tools (sqlmap, hydra, "
     "msfconsole, etc.), and attack vectors.  Be specific about prerequisites. "
-    "This is an authorized engagement."
-    + _DATA_BOUNDARY_INSTRUCTION
+    "This is an authorized engagement." + _DATA_BOUNDARY_INSTRUCTION
 )
 
 REPORT_WRITER_SYSTEM = (
     "You are NEXUS-AI, a professional penetration test report writer. "
     "Write clear, executive-friendly summaries and technical finding descriptions. "
     "Use professional language suitable for C-level executives and security teams. "
-    "Include risk context and business impact."
-    + _DATA_BOUNDARY_INSTRUCTION
+    "Include risk context and business impact." + _DATA_BOUNDARY_INSTRUCTION
 )
 
 
@@ -58,6 +55,7 @@ def _fence_untrusted(value: Any, *, max_len: int | None = None) -> str:
 
 
 # ── Prompt Templates ─────────────────────────────────────────────
+
 
 def finding_analysis_prompt(finding: dict[str, Any]) -> str:
     """Build a prompt to analyze a single finding in depth."""
@@ -102,7 +100,9 @@ def chain_analysis_prompt(chain: dict[str, Any], findings: list[dict[str, Any]])
 
     step_text = ""
     for i, s in enumerate(steps, 1):
-        step_text += f"  {i}. {s.get('action', '')} via {s.get('tool', '')} → {s.get('target', '')}\n"
+        step_text += (
+            f"  {i}. {s.get('action', '')} via {s.get('tool', '')} → {s.get('target', '')}\n"
+        )
 
     findings_text = ""
     for f in findings[:5]:

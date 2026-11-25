@@ -13,16 +13,47 @@ from nexus.scanner._http import make_http_client, parse_url_target
 
 log = logging.getLogger("nexus.scanner.passive_dast")
 
-_CSRF_TOKEN_HINTS = ("csrf", "xsrf", "_token", "authenticity_token", "__requestverificationtoken", "nonce")
+_CSRF_TOKEN_HINTS = (
+    "csrf",
+    "xsrf",
+    "_token",
+    "authenticity_token",
+    "__requestverificationtoken",
+    "nonce",
+)
 _DOM_SINK_RE = re.compile(
     r"(?:\.(?:innerHTML|outerHTML)\s*=|dangerouslySetInnerHTML\b|\bdocument\.write\s*\(|\beval\s*\()"
 )
 _PUBLIC_PATH_HINTS = (
-    "/login", "/logout", "/signin", "/signup", "/register", "/health",
-    "/status", "/metrics", "/swagger", "/openapi", "/api-docs", "/redoc",
-    "/robots.txt", "/favicon.ico", "/.well-known",
+    "/login",
+    "/logout",
+    "/signin",
+    "/signup",
+    "/register",
+    "/health",
+    "/status",
+    "/metrics",
+    "/swagger",
+    "/openapi",
+    "/api-docs",
+    "/redoc",
+    "/robots.txt",
+    "/favicon.ico",
+    "/.well-known",
 )
-_STATIC_EXTS = (".css", ".js", ".png", ".jpg", ".jpeg", ".gif", ".svg", ".ico", ".woff", ".woff2", ".map")
+_STATIC_EXTS = (
+    ".css",
+    ".js",
+    ".png",
+    ".jpg",
+    ".jpeg",
+    ".gif",
+    ".svg",
+    ".ico",
+    ".woff",
+    ".woff2",
+    ".map",
+)
 
 
 class _PassiveHtmlInspector(HTMLParser):
@@ -64,7 +95,9 @@ class _PassiveHtmlInspector(HTMLParser):
         elif t == "iframe" and amap.get("src"):
             self.iframes.append(amap["src"])
         elif t == "a" and amap.get("target", "").lower() == "_blank":
-            self.blank_links.append({"href": amap.get("href", ""), "rel": amap.get("rel", "").lower()})
+            self.blank_links.append(
+                {"href": amap.get("href", ""), "rel": amap.get("rel", "").lower()}
+            )
 
     def handle_endtag(self, tag: str) -> None:
         t = tag.lower()
@@ -107,11 +140,20 @@ def analyze_html_passive(
         if title in seen_titles:
             return
         seen_titles.add(title)
-        findings.append(Finding(
-            host=host, port=port, protocol=proto,
-            title=title, description=desc, severity=sev, cwe_id=cwe,
-            tool_source="passive_dast", evidence=evidence, confirmed=confirmed,
-        ))
+        findings.append(
+            Finding(
+                host=host,
+                port=port,
+                protocol=proto,
+                title=title,
+                description=desc,
+                severity=sev,
+                cwe_id=cwe,
+                tool_source="passive_dast",
+                evidence=evidence,
+                confirmed=confirmed,
+            )
+        )
 
     if is_html:
         parser = _PassiveHtmlInspector()
@@ -122,19 +164,27 @@ def analyze_html_passive(
 
         for form in parser.forms:
             resolved_action = urljoin(url, form["action"]) if form["action"] else url
-            if form["has_password"] and (proto == "http" or resolved_action.lower().startswith("http://")):
+            if form["has_password"] and (
+                proto == "http" or resolved_action.lower().startswith("http://")
+            ):
                 _emit(
                     "Cleartext Password Submission Over HTTP",
                     f"Password input on {url} submits over unencrypted HTTP ({resolved_action}).",
-                    Severity.HIGH, "CWE-319", f"URL: {url}\nForm action: {resolved_action}",
+                    Severity.HIGH,
+                    "CWE-319",
+                    f"URL: {url}\nForm action: {resolved_action}",
                 )
             if form["method"] == "post":
-                has_csrf = any(any(h in name for h in _CSRF_TOKEN_HINTS) for name in form["input_names"])
+                has_csrf = any(
+                    any(h in name for h in _CSRF_TOKEN_HINTS) for name in form["input_names"]
+                )
                 if not has_csrf:
                     _emit(
                         "POST Form Missing Anti-CSRF Token Field",
                         f"POST form at {url} (action={resolved_action}) has no recognizable CSRF token input.",
-                        Severity.LOW, "CWE-352", f"URL: {url}\nAction: {resolved_action}",
+                        Severity.LOW,
+                        "CWE-352",
+                        f"URL: {url}\nAction: {resolved_action}",
                     )
 
         for sc in parser.scripts:
@@ -145,13 +195,22 @@ def analyze_html_passive(
                 _emit(
                     "Mixed Active Content: HTTP Script on HTTPS Page",
                     f"HTTPS page {url} loads script over plaintext HTTP ({resolved_src}).",
-                    Severity.MEDIUM, "CWE-319", f"URL: {url}\nScript: {resolved_src}",
+                    Severity.MEDIUM,
+                    "CWE-319",
+                    f"URL: {url}\nScript: {resolved_src}",
                 )
-            elif parsed_src.scheme == "https" and src_host and src_host != host and not sc["integrity"].strip():
+            elif (
+                parsed_src.scheme == "https"
+                and src_host
+                and src_host != host
+                and not sc["integrity"].strip()
+            ):
                 _emit(
                     "External Script Missing Subresource Integrity (SRI)",
                     f"Third-party script {resolved_src} loaded by {url} lacks an 'integrity' attribute.",
-                    Severity.LOW, "CWE-353", f"URL: {url}\nExternal script: {resolved_src}",
+                    Severity.LOW,
+                    "CWE-353",
+                    f"URL: {url}\nExternal script: {resolved_src}",
                 )
 
         if proto == "https":
@@ -161,7 +220,9 @@ def analyze_html_passive(
                     _emit(
                         "Mixed Content: HTTP Iframe on HTTPS Page",
                         f"HTTPS page {url} embeds insecure iframe ({resolved_if}).",
-                        Severity.MEDIUM, "CWE-319", f"URL: {url}\nIframe: {resolved_if}",
+                        Severity.MEDIUM,
+                        "CWE-319",
+                        f"URL: {url}\nIframe: {resolved_if}",
                     )
 
         for lnk in parser.blank_links:
@@ -169,7 +230,9 @@ def analyze_html_passive(
                 _emit(
                     "Reverse Tabnabbing Risk (target=_blank Without rel=noopener)",
                     f"Link on {url} opens a new tab without rel='noopener' or rel='noreferrer'.",
-                    Severity.INFO, "CWE-1022", f"URL: {url}\nHref: {lnk['href']}",
+                    Severity.INFO,
+                    "CWE-1022",
+                    f"URL: {url}\nHref: {lnk['href']}",
                 )
 
         for snippet in parser.inline_scripts:
@@ -178,7 +241,9 @@ def analyze_html_passive(
                 _emit(
                     "Client-Side DOM Sink Audit Candidate",
                     f"Inline script on {url} uses risky DOM sink '{m.group(0).strip()}'.",
-                    Severity.INFO, "CWE-79", f"URL: {url}\nSink: {m.group(0).strip()}",
+                    Severity.INFO,
+                    "CWE-79",
+                    f"URL: {url}\nSink: {m.group(0).strip()}",
                     confirmed=False,
                 )
 
@@ -188,7 +253,9 @@ def analyze_html_passive(
             _emit(
                 "Client-Side DOM Sink Audit Candidate",
                 f"JavaScript asset {url} references DOM sink '{m.group(0).strip()}'.",
-                Severity.INFO, "CWE-79", f"URL: {url}\nSink: {m.group(0).strip()}",
+                Severity.INFO,
+                "CWE-79",
+                f"URL: {url}\nSink: {m.group(0).strip()}",
                 confirmed=False,
             )
 
@@ -243,14 +310,20 @@ async def audit_graphql_introspection(
                 if key in seen_hosts:
                     continue
                 seen_hosts.add(key)
-                findings.append(Finding(
-                    host=host, port=port, protocol=proto,
-                    title="GraphQL Schema Introspection Enabled",
-                    description=f"GraphQL endpoint {ep} permits unauthenticated/full __schema introspection.",
-                    severity=Severity.LOW, cwe_id="CWE-200",
-                    tool_source="graphql_probe", confirmed=True,
-                    evidence=f"POST {ep} -> {txt[:250]}",
-                ))
+                findings.append(
+                    Finding(
+                        host=host,
+                        port=port,
+                        protocol=proto,
+                        title="GraphQL Schema Introspection Enabled",
+                        description=f"GraphQL endpoint {ep} permits unauthenticated/full __schema introspection.",
+                        severity=Severity.LOW,
+                        cwe_id="CWE-200",
+                        tool_source="graphql_probe",
+                        confirmed=True,
+                        evidence=f"POST {ep} -> {txt[:250]}",
+                    )
+                )
     return findings
 
 
@@ -310,14 +383,20 @@ async def audit_auth_enforcement(
             if ratio >= 0.85 and url not in seen_urls:
                 seen_urls.add(url)
                 host, port, proto = parse_url_target(url)
-                findings.append(Finding(
-                    host=host, port=port, protocol=proto,
-                    title="API Endpoint Accessible Without Authentication",
-                    description=(
-                        f"GET {url} returned HTTP 200 with matching payload content when auth_headers were stripped."
-                    ),
-                    severity=Severity.HIGH, cwe_id="CWE-306",
-                    tool_source="auth_diff", confirmed=True,
-                    evidence=f"URL: {url}\nAuthenticated vs unauthenticated similarity: {ratio:.2f}",
-                ))
+                findings.append(
+                    Finding(
+                        host=host,
+                        port=port,
+                        protocol=proto,
+                        title="API Endpoint Accessible Without Authentication",
+                        description=(
+                            f"GET {url} returned HTTP 200 with matching payload content when auth_headers were stripped."
+                        ),
+                        severity=Severity.HIGH,
+                        cwe_id="CWE-306",
+                        tool_source="auth_diff",
+                        confirmed=True,
+                        evidence=f"URL: {url}\nAuthenticated vs unauthenticated similarity: {ratio:.2f}",
+                    )
+                )
     return findings

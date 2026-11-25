@@ -2,13 +2,15 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass, field
-from typing import Any, Callable
+from typing import Any
 
 
 @dataclass
 class Fact:
     """A single piece of knowledge about the engagement state."""
+
     key: str
     value: Any
     source: str = ""
@@ -18,6 +20,7 @@ class Fact:
 @dataclass
 class Rule:
     """IF conditions THEN actions production rule."""
+
     name: str
     priority: int = 50  # Lower = higher priority (0-100)
     conditions: list[Callable[[dict[str, Fact]], bool]] = field(default_factory=list)
@@ -88,6 +91,7 @@ def build_service_rules() -> list[Rule]:
         def check(facts: dict[str, Fact]) -> bool:
             f = facts.get(key)
             return f is not None and substring.lower() in str(f.value).lower()
+
         return check
 
     def _port_open(port: int) -> Callable[[dict[str, Fact]], bool]:
@@ -98,7 +102,14 @@ def build_service_rules() -> list[Rule]:
             name="http_detected",
             priority=10,
             conditions=[_has("service_http")],
-            actions=["run_nuclei", "run_ffuf", "run_nikto", "run_whatweb", "check_sqli", "check_xss"],
+            actions=[
+                "run_nuclei",
+                "run_ffuf",
+                "run_nikto",
+                "run_whatweb",
+                "check_sqli",
+                "check_xss",
+            ],
             description="HTTP service found — run web vulnerability scanners",
         ),
         Rule(
@@ -168,7 +179,12 @@ def build_service_rules() -> list[Rule]:
             name="tomcat_detected",
             priority=5,
             conditions=[_val_contains("tech_stack", "tomcat")],
-            actions=["try_default_creds_tomcat", "check_ghostcat", "check_manager_exposed", "try_war_deploy"],
+            actions=[
+                "try_default_creds_tomcat",
+                "check_ghostcat",
+                "check_manager_exposed",
+                "try_war_deploy",
+            ],
             description="Apache Tomcat detected — high-value target",
         ),
         Rule(
@@ -182,7 +198,11 @@ def build_service_rules() -> list[Rule]:
             name="jenkins_detected",
             priority=5,
             conditions=[_val_contains("tech_stack", "jenkins")],
-            actions=["check_jenkins_anon", "try_default_creds_jenkins", "check_jenkins_script_console"],
+            actions=[
+                "check_jenkins_anon",
+                "try_default_creds_jenkins",
+                "check_jenkins_script_console",
+            ],
             description="Jenkins detected — check unauthenticated access",
         ),
         Rule(
@@ -210,7 +230,12 @@ def build_service_rules() -> list[Rule]:
             name="credentials_found",
             priority=1,
             conditions=[_has("credentials_obtained")],
-            actions=["try_credential_reuse", "test_admin_panels", "try_ssh_with_creds", "try_rdp_with_creds"],
+            actions=[
+                "try_credential_reuse",
+                "test_admin_panels",
+                "try_ssh_with_creds",
+                "try_rdp_with_creds",
+            ],
             description="Credentials obtained — test reuse across services",
         ),
         Rule(

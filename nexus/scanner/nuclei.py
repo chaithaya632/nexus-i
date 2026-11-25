@@ -4,8 +4,6 @@ from __future__ import annotations
 
 import json
 import logging
-from pathlib import Path
-from typing import Any
 
 from nexus.db.models import Finding, Severity
 from nexus.recon.runner import (
@@ -29,10 +27,10 @@ _SEV_MAP: dict[str, Severity] = {
 
 # Stealth-aware concurrency and rate limits
 _STEALTH_SETTINGS: dict[str, dict[str, int]] = {
-    "loud":   {"concurrency": 50, "rate_limit": 300, "bulk_size": 50},
+    "loud": {"concurrency": 50, "rate_limit": 300, "bulk_size": 50},
     "normal": {"concurrency": 25, "rate_limit": 150, "bulk_size": 25},
-    "quiet":  {"concurrency": 10, "rate_limit": 50,  "bulk_size": 10},
-    "ghost":  {"concurrency": 3,  "rate_limit": 10,  "bulk_size": 5},
+    "quiet": {"concurrency": 10, "rate_limit": 50, "bulk_size": 10},
+    "ghost": {"concurrency": 3, "rate_limit": 10, "bulk_size": 5},
 }
 
 
@@ -70,9 +68,12 @@ async def nuclei_scan(
     args = [
         "-jsonl",
         "-silent",
-        "-concurrency", str(settings["concurrency"]),
-        "-rate-limit", str(settings["rate_limit"]),
-        "-bulk-size", str(settings["bulk_size"]),
+        "-concurrency",
+        str(settings["concurrency"]),
+        "-rate-limit",
+        str(settings["rate_limit"]),
+        "-bulk-size",
+        str(settings["bulk_size"]),
     ]
 
     if templates:

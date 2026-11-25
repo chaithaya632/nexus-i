@@ -73,7 +73,9 @@ class TestGraphQLAndAuthDiff:
                 if length:
                     self.rfile.read(length)
                 if self.path == "/graphql":
-                    body = json.dumps({"data": {"__schema": {"queryType": {"name": "Query"}}}}).encode()
+                    body = json.dumps(
+                        {"data": {"__schema": {"queryType": {"name": "Query"}}}}
+                    ).encode()
                     self.send_response(200)
                     self.send_header("Content-Type", "application/json")
                     self.send_header("Content-Length", str(len(body)))
@@ -199,7 +201,6 @@ class TestDatabasesSmtpCloudAndServerStatus:
                 pass
 
         srv = HTTPServer(("127.0.0.1", 0), _CloudCtrl)
-        port = srv.server_address[1]
         threading.Thread(target=srv.serve_forever, daemon=True).start()
         try:
             # Map direct ports for test via audit_network_service service hint + port override
@@ -215,6 +216,7 @@ class TestDatabasesSmtpCloudAndServerStatus:
         threading.Thread(target=srv2.serve_forever, daemon=True).start()
         try:
             from unittest.mock import patch
+
             from nexus.scanner._http import make_http_client as real_mk
 
             def _rewrite_client(*args, **kwargs):
@@ -222,10 +224,15 @@ class TestDatabasesSmtpCloudAndServerStatus:
 
             # Call direct HTTP probe logic with URL rewrite for ephemeral port
             import httpx
+
             orig_get = httpx.AsyncClient.get
 
             async def _fake_get(self_cli, url, *a, **kw):
-                rewritten = url.replace(":2379/", f":{p2}/").replace(":8500/", f":{p2}/").replace(":10255/", f":{p2}/")
+                rewritten = (
+                    url.replace(":2379/", f":{p2}/")
+                    .replace(":8500/", f":{p2}/")
+                    .replace(":10255/", f":{p2}/")
+                )
                 return await orig_get(self_cli, rewritten, *a, **kw)
 
             with patch.object(httpx.AsyncClient, "get", _fake_get):
@@ -255,7 +262,7 @@ class TestDatabasesSmtpCloudAndServerStatus:
                 # Verify OP_MSG (opcode 2013) is used
                 if len(req) >= 16:
                     assert struct.unpack("<i", req[12:16])[0] == 2013
-                c.sendall(b"\x00" * 36 + b'ismaster\x00\x01maxBsonObjectSize\x00')
+                c.sendall(b"\x00" * 36 + b"ismaster\x00\x01maxBsonObjectSize\x00")
 
         # 2. PostgreSQL mock (SSL N + AuthenticationOk code 0)
         pg_srv = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
@@ -282,7 +289,13 @@ class TestDatabasesSmtpCloudAndServerStatus:
         def _serve_my():
             c, _ = my_srv.accept()
             with c:
-                pkt_body = b"\x0a8.0.32\x00" + b"\x01\x00\x00\x00" + b"12345678\x00" + struct.pack("<H", 0x0001) + b"\x00" * 16
+                pkt_body = (
+                    b"\x0a8.0.32\x00"
+                    + b"\x01\x00\x00\x00"
+                    + b"12345678\x00"
+                    + struct.pack("<H", 0x0001)
+                    + b"\x00" * 16
+                )
                 c.sendall(struct.pack("<I", len(pkt_body))[:3] + b"\x00" + pkt_body)
 
         # 4. SMTP mock (no STARTTLS, VRFY advertised)
@@ -322,11 +335,15 @@ class TestDatabasesSmtpCloudAndServerStatus:
             "PostgreSQL: Passwordless Trust Authentication Enabled",
         }
         assert f_my[0].tool_source == "mysql_probe" and "8.0.32" in f_my[0].evidence
-        assert {f.title for f in f_smtp} == {"SMTP: STARTTLS Not Advertised", "SMTP: VRFY Command Enabled"}
+        assert {f.title for f in f_smtp} == {
+            "SMTP: STARTTLS Not Advertised",
+            "SMTP: VRFY Command Enabled",
+        }
 
     @pytest.mark.asyncio
     async def test_crawler_and_headers_do_not_forward_auth_across_redirects(self) -> None:
         from unittest.mock import patch
+
         from nexus.scanner.crawler import crawl_web
         from nexus.scanner.headers import audit_http_security
 
@@ -362,8 +379,14 @@ class TestDatabasesSmtpCloudAndServerStatus:
         threading.Thread(target=org_srv.serve_forever, daemon=True).start()
         try:
             with patch("nexus.scanner.crawler.ToolRunner.is_available", return_value=False):
-                await crawl_web(f"http://127.0.0.1:{org_port}/", headers={"Authorization": "Bearer secret_hdr_no_leak"})
-            await audit_http_security([f"http://127.0.0.1:{org_port}/"], headers={"Authorization": "Bearer secret_hdr_no_leak"})
+                await crawl_web(
+                    f"http://127.0.0.1:{org_port}/",
+                    headers={"Authorization": "Bearer secret_hdr_no_leak"},
+                )
+            await audit_http_security(
+                [f"http://127.0.0.1:{org_port}/"],
+                headers={"Authorization": "Bearer secret_hdr_no_leak"},
+            )
         finally:
             ext_srv.shutdown()
             ext_srv.server_close()
@@ -390,8 +413,12 @@ class TestDatabasesSmtpCloudAndServerStatus:
         fake_ctx.wrap_socket.return_value = fake_ssock
 
         with (
-            patch("nexus.scanner.network_services.socket.create_connection", return_value=fake_sock),
-            patch("nexus.scanner.network_services.ssl.create_default_context", return_value=fake_ctx),
+            patch(
+                "nexus.scanner.network_services.socket.create_connection", return_value=fake_sock
+            ),
+            patch(
+                "nexus.scanner.network_services.ssl.create_default_context", return_value=fake_ctx
+            ),
         ):
             findings = await audit_postgresql("127.0.0.1", 5432)
 

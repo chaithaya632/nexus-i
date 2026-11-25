@@ -1,17 +1,19 @@
 """Tests for the correlator: dedup, enrichment, graph, and pipeline."""
 
-import pytest
-from nexus.db.models import Finding, Severity, AttackChain
-
-
 # ── Dedup tests ───────────────────────────────────────────────────
-
 from nexus.correlator.dedup import deduplicate_findings
+from nexus.db.models import Finding, Severity
 
 
 def _make_finding(**kw) -> Finding:
-    defaults = {"host": "example.com", "port": 80, "protocol": "http",
-                "title": "Test", "severity": Severity.INFO, "tool_source": "test"}
+    defaults = {
+        "host": "example.com",
+        "port": 80,
+        "protocol": "http",
+        "title": "Test",
+        "severity": Severity.INFO,
+        "tool_source": "test",
+    }
     defaults.update(kw)
     return Finding(**defaults)
 
@@ -94,7 +96,7 @@ def test_enrich_no_crash_without_subsystems():
 
 # ── Correlator graph tests ───────────────────────────────────────
 
-from nexus.correlator.graph import build_attack_chains, _find_related_finding
+from nexus.correlator.graph import _find_related_finding, build_attack_chains
 
 
 def test_build_chains_empty():
@@ -149,19 +151,19 @@ def test_correlate_empty():
 
 # ── Module import smoke test ─────────────────────────────────────
 
+
 def test_correlator_package_imports():
     from nexus.correlator import (
-        deduplicate_findings,
-        enrich_findings,
-        build_attack_chains,
         correlate,
     )
+
     assert callable(correlate)
 
 
 def test_correlate_with_all_real_brain_subsystems():
     """Verify correlate() integrates TaxonomyMapper, RemediationDB, KnowledgeGraph, ChainBuilder, and RuleEngine cleanly."""
     from pathlib import Path
+
     from nexus.brain.chain_builder import ChainBuilder
     from nexus.brain.expert import RuleEngine, build_service_rules
     from nexus.brain.knowledge_graph import KnowledgeGraph
@@ -187,15 +189,22 @@ def test_correlate_with_all_real_brain_subsystems():
 
     findings = [
         _make_finding(
-            host="app.local", port=8080, protocol="http",
+            host="app.local",
+            port=8080,
+            protocol="http",
             title="[nuclei] SQL Injection in /search",
-            cwe_id="CWE-89", severity=Severity.LOW,
-            cve_ids=["CVE-2021-44228"], tool_source="nuclei",
+            cwe_id="CWE-89",
+            severity=Severity.LOW,
+            cve_ids=["CVE-2021-44228"],
+            tool_source="nuclei",
         ),
         _make_finding(
-            host="app.local", port=8080, protocol="http",
+            host="app.local",
+            port=8080,
+            protocol="http",
             title="[nikto] Apache HTTP Server vulnerable",
-            cwe_id="CWE-22", severity=Severity.MEDIUM,
+            cwe_id="CWE-22",
+            severity=Severity.MEDIUM,
             tool_source="nikto",
         ),
     ]
@@ -222,12 +231,18 @@ def test_correlate_with_all_real_brain_subsystems():
 def test_dedup_preserves_distinct_endpoints():
     findings = [
         _make_finding(
-            host="app.local", port=443, cwe_id="CWE-89",
-            title="SQL Injection", evidence="URL: https://app.local/login",
+            host="app.local",
+            port=443,
+            cwe_id="CWE-89",
+            title="SQL Injection",
+            evidence="URL: https://app.local/login",
         ),
         _make_finding(
-            host="app.local", port=443, cwe_id="CWE-89",
-            title="SQL Injection", evidence="URL: https://app.local/api/search",
+            host="app.local",
+            port=443,
+            cwe_id="CWE-89",
+            title="SQL Injection",
+            evidence="URL: https://app.local/api/search",
         ),
     ]
     result = deduplicate_findings(findings)
@@ -262,18 +277,23 @@ def test_graph_mysql_not_sqli_and_expert_str_actions_expand_states():
     cb.build_default_graph()
 
     # MySQL banner finding must NOT trigger sqli_found
-    mysql_finding = _make_finding(host="db.local", port=3306, protocol="mysql", title="MySQL 8.0 exposed")
+    mysql_finding = _make_finding(
+        host="db.local", port=3306, protocol="mysql", title="MySQL 8.0 exposed"
+    )
     chains_mysql = build_attack_chains([mysql_finding], chain_builder=cb)
     assert not any("sqli" in c.name for c in chains_mysql)
 
     # Expert Rule with str action should expand graph states (e.g. 'sqli_found' -> 'rce_achieved')
     expert = RuleEngine()
-    expert.add_rule(Rule(
-        name="custom_port_to_sqli",
-        conditions=[lambda facts: "port_8080" in facts],
-        actions=["check_sqli"],
-    ))
-    port_finding = _make_finding(host="web.local", port=8080, protocol="http", title="HTTP Port 8080")
+    expert.add_rule(
+        Rule(
+            name="custom_port_to_sqli",
+            conditions=[lambda facts: "port_8080" in facts],
+            actions=["check_sqli"],
+        )
+    )
+    port_finding = _make_finding(
+        host="web.local", port=8080, protocol="http", title="HTTP Port 8080"
+    )
     chains = build_attack_chains([port_finding], chain_builder=cb, expert=expert)
     assert any("sqli_found" in c.name for c in chains)
-

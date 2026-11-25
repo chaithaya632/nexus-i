@@ -1,13 +1,11 @@
 """Tests for nexus.core.scope."""
 
-import ipaddress
-import tempfile
 from pathlib import Path
 
 import pytest
 import yaml
 
-from nexus.core.scope import ScopeEnforcer, ScopeViolation, Scope
+from nexus.core.scope import ScopeEnforcer, ScopeViolation
 
 
 class TestScopeEnforcer:
@@ -17,9 +15,12 @@ class TestScopeEnforcer:
         return p
 
     def test_domain_match(self, tmp_path):
-        p = self._write_scope(tmp_path, {
-            "allowed_domains": ["example.com", "*.test.com"],
-        })
+        p = self._write_scope(
+            tmp_path,
+            {
+                "allowed_domains": ["example.com", "*.test.com"],
+            },
+        )
         enforcer = ScopeEnforcer.from_file(p)
 
         assert enforcer.is_in_scope("example.com")
@@ -29,9 +30,12 @@ class TestScopeEnforcer:
         assert not enforcer.is_in_scope("notexample.com")
 
     def test_ip_match(self, tmp_path):
-        p = self._write_scope(tmp_path, {
-            "allowed_ips": ["10.0.0.1", "10.0.0.5"],
-        })
+        p = self._write_scope(
+            tmp_path,
+            {
+                "allowed_ips": ["10.0.0.1", "10.0.0.5"],
+            },
+        )
         enforcer = ScopeEnforcer.from_file(p)
 
         assert enforcer.is_in_scope("10.0.0.1")
@@ -39,9 +43,12 @@ class TestScopeEnforcer:
         assert not enforcer.is_in_scope("10.0.0.2")
 
     def test_cidr_match(self, tmp_path):
-        p = self._write_scope(tmp_path, {
-            "allowed_cidrs": ["192.168.1.0/24"],
-        })
+        p = self._write_scope(
+            tmp_path,
+            {
+                "allowed_cidrs": ["192.168.1.0/24"],
+            },
+        )
         enforcer = ScopeEnforcer.from_file(p)
 
         assert enforcer.is_in_scope("192.168.1.1")
@@ -49,19 +56,25 @@ class TestScopeEnforcer:
         assert not enforcer.is_in_scope("192.168.2.1")
 
     def test_exclusion(self, tmp_path):
-        p = self._write_scope(tmp_path, {
-            "allowed_cidrs": ["10.0.0.0/8"],
-            "excluded_targets": ["10.0.0.99"],
-        })
+        p = self._write_scope(
+            tmp_path,
+            {
+                "allowed_cidrs": ["10.0.0.0/8"],
+                "excluded_targets": ["10.0.0.99"],
+            },
+        )
         enforcer = ScopeEnforcer.from_file(p)
 
         assert enforcer.is_in_scope("10.0.0.1")
         assert not enforcer.is_in_scope("10.0.0.99")
 
     def test_enforce_raises(self, tmp_path):
-        p = self._write_scope(tmp_path, {
-            "allowed_domains": ["safe.com"],
-        })
+        p = self._write_scope(
+            tmp_path,
+            {
+                "allowed_domains": ["safe.com"],
+            },
+        )
         enforcer = ScopeEnforcer.from_file(p)
 
         enforcer.enforce("safe.com")  # should not raise
@@ -69,10 +82,13 @@ class TestScopeEnforcer:
             enforcer.enforce("evil.com")
 
     def test_port_filtering(self, tmp_path):
-        p = self._write_scope(tmp_path, {
-            "allowed_domains": ["example.com"],
-            "allowed_ports": [80, 443, 8080],
-        })
+        p = self._write_scope(
+            tmp_path,
+            {
+                "allowed_domains": ["example.com"],
+                "allowed_ports": [80, 443, 8080],
+            },
+        )
         enforcer = ScopeEnforcer.from_file(p)
 
         assert enforcer.is_port_allowed(80)
@@ -130,11 +146,14 @@ class TestScopeEnforcer:
         assert not enforcer.is_in_scope("evil.com")
 
     def test_ipv6_canonicalization_and_trailing_dot(self, tmp_path):
-        p = self._write_scope(tmp_path, {
-            "allowed_domains": ["example.com"],
-            "allowed_ips": ["2001:0db8:0000:0000::1", "2001:0db8::2"],
-            "excluded_targets": ["2001:0db8::2"],
-        })
+        p = self._write_scope(
+            tmp_path,
+            {
+                "allowed_domains": ["example.com"],
+                "allowed_ips": ["2001:0db8:0000:0000::1", "2001:0db8::2"],
+                "excluded_targets": ["2001:0db8::2"],
+            },
+        )
         enforcer = ScopeEnforcer.from_file(p)
 
         assert enforcer.is_in_scope("2001:db8::1")
@@ -143,11 +162,14 @@ class TestScopeEnforcer:
         assert enforcer.is_in_scope("EXAMPLE.COM.")
 
     def test_excluded_cidr_and_wildcard_domain(self, tmp_path):
-        p = self._write_scope(tmp_path, {
-            "allowed_cidrs": ["10.0.0.0/24"],
-            "allowed_domains": ["*.example.com"],
-            "excluded_targets": ["10.0.0.0/28", "*.prod.example.com"],
-        })
+        p = self._write_scope(
+            tmp_path,
+            {
+                "allowed_cidrs": ["10.0.0.0/24"],
+                "allowed_domains": ["*.example.com"],
+                "excluded_targets": ["10.0.0.0/28", "*.prod.example.com"],
+            },
+        )
         enforcer = ScopeEnforcer.from_file(p)
 
         assert not enforcer.is_in_scope("10.0.0.5")

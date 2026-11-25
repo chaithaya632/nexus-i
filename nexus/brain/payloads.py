@@ -25,6 +25,7 @@ log = logging.getLogger("nexus.brain.payloads")
 @dataclass
 class Payload:
     """Single payload template."""
+
     name: str
     category: str
     platform: str = "linux"
@@ -58,11 +59,17 @@ class PayloadDB:
         Categories: revshell, webshell, sqli, xss, ssrf, cmdi, lfi, ssti, xxe, auth_bypass
         """
         categories = [
-            ("revshell", "Reverse shell payloads for bash, python, php, perl, ruby, nc, socat, java, nodejs"),
+            (
+                "revshell",
+                "Reverse shell payloads for bash, python, php, perl, ruby, nc, socat, java, nodejs",
+            ),
             ("webshell", "Web shell templates for PHP, JSP, ASPX, Python CGI"),
             ("sqli", "SQL injection payloads: auth bypass, union, error-based, blind, time-based"),
             ("xss", "Cross-site scripting payloads: reflected, stored, DOM-based, filter bypass"),
-            ("ssrf", "Server-side request forgery payloads: localhost, cloud metadata, protocol handlers"),
+            (
+                "ssrf",
+                "Server-side request forgery payloads: localhost, cloud metadata, protocol handlers",
+            ),
             ("cmdi", "OS command injection payloads: semicolon, pipe, backtick, blind OOB"),
             ("lfi", "Local file inclusion and path traversal payloads"),
             ("ssti", "Server-side template injection payloads for Jinja2, Twig, Mako, ERB"),
@@ -71,12 +78,14 @@ class PayloadDB:
         ]
         # Store as stub payloads so categories() works before YAML load
         for cat_name, cat_desc in categories:
-            self._payloads.append(Payload(
-                name=f"_category_{cat_name}",
-                category=cat_name,
-                platform="universal",
-                description=cat_desc,
-            ))
+            self._payloads.append(
+                Payload(
+                    name=f"_category_{cat_name}",
+                    category=cat_name,
+                    platform="universal",
+                    description=cat_desc,
+                )
+            )
 
     def load_from_yaml(self, yaml_dir: Path) -> None:
         """Load payload templates from YAML files in the knowledge base."""
@@ -92,16 +101,18 @@ class PayloadDB:
                 continue
             for entry in raw.get("payloads", []):
                 if isinstance(entry, dict) and "name" in entry and "template" in entry:
-                    self._payloads.append(Payload(
-                        name=entry["name"],
-                        category=entry.get("category", "custom"),
-                        platform=entry.get("platform", "linux"),
-                        language=entry.get("language", ""),
-                        template=entry["template"],
-                        description=entry.get("description", ""),
-                        evasion_level=entry.get("evasion_level", 0),
-                        tags=entry.get("tags", []),
-                    ))
+                    self._payloads.append(
+                        Payload(
+                            name=entry["name"],
+                            category=entry.get("category", "custom"),
+                            platform=entry.get("platform", "linux"),
+                            language=entry.get("language", ""),
+                            template=entry["template"],
+                            description=entry.get("description", ""),
+                            evasion_level=entry.get("evasion_level", 0),
+                            tags=entry.get("tags", []),
+                        )
+                    )
 
     def add_payload(self, payload: Payload) -> None:
         """Add a payload programmatically."""
@@ -130,7 +141,8 @@ class PayloadDB:
         if keyword:
             kw = keyword.lower()
             results = [
-                p for p in results
+                p
+                for p in results
                 if kw in p.name.lower()
                 or kw in p.description.lower()
                 or any(kw in t.lower() for t in p.tags)

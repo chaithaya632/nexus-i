@@ -9,16 +9,18 @@ import httpx
 
 from nexus.recon.runner import validate_headers
 
-_SENSITIVE_HEADER_KEYS = frozenset({
-    "authorization",
-    "proxy-authorization",
-    "cookie",
-    "set-cookie",
-    "x-api-key",
-    "x-auth-token",
-    "x-access-token",
-    "api-key",
-})
+_SENSITIVE_HEADER_KEYS = frozenset(
+    {
+        "authorization",
+        "proxy-authorization",
+        "cookie",
+        "set-cookie",
+        "x-api-key",
+        "x-auth-token",
+        "x-access-token",
+        "api-key",
+    }
+)
 
 
 def parse_url_target(url: str) -> tuple[str, int | None, str]:
@@ -39,7 +41,9 @@ def redact_headers(headers: dict[str, str] | None) -> dict[str, str]:
     out: dict[str, str] = {}
     for k, v in headers.items():
         kl = k.lower().strip()
-        if kl in _SENSITIVE_HEADER_KEYS or any(tok in kl for tok in ("token", "secret", "auth", "key", "pass", "cookie")):
+        if kl in _SENSITIVE_HEADER_KEYS or any(
+            tok in kl for tok in ("token", "secret", "auth", "key", "pass", "cookie")
+        ):
             out[k] = "***REDACTED***"
         else:
             out[k] = v
@@ -52,12 +56,14 @@ def _resolve_stealth_controller(stealth: Any | None = None) -> Any | None:
         if isinstance(stealth, str):
             try:
                 from nexus.stealth.controller import StealthController
+
                 return StealthController(stealth)
             except Exception:
                 return None
         return stealth
     try:
         import nexus.stealth.controller as sc_mod
+
         getter = getattr(sc_mod, "get_active_stealth", None)
         if callable(getter):
             return getter()
@@ -100,8 +106,10 @@ def make_http_client(
     if ctrl is not None:
         throttle_fn = getattr(ctrl, "throttle", None)
         if callable(throttle_fn):
+
             async def _throttle_request(_request: httpx.Request) -> None:
                 await throttle_fn()
+
             event_hooks = {"request": [_throttle_request]}
 
     return httpx.AsyncClient(

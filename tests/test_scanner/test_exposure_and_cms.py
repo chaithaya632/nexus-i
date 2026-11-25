@@ -93,7 +93,12 @@ class TestWpScanAuditor:
                     "version": {"number": "3.92.0"},
                     "vulnerabilities": [{"title": "SQLi", "references": {"cve": ["2024-27956"]}}],
                 },
-                "akismet": {"version": {"number": "4.0"}, "outdated": True, "latest_version": "5.3", "vulnerabilities": []},
+                "akismet": {
+                    "version": {"number": "4.0"},
+                    "outdated": True,
+                    "latest_version": "5.3",
+                    "vulnerabilities": [],
+                },
             },
             "users": {"admin": {"id": 1}},
         }
@@ -115,9 +120,13 @@ class TestWpScanAuditor:
 
         with (
             patch("nexus.scanner.cms_scan.ToolRunner.is_available", return_value=True),
-            patch("nexus.scanner.cms_scan.ToolRunner.run", AsyncMock(side_effect=_fake_run)) as mock_run,
+            patch(
+                "nexus.scanner.cms_scan.ToolRunner.run", AsyncMock(side_effect=_fake_run)
+            ) as mock_run,
         ):
-            findings = await wpscan_audit("https://wp.local", stealth="quiet", headers={"Cookie": "wp_test=1"})
+            findings = await wpscan_audit(
+                "https://wp.local", stealth="quiet", headers={"Cookie": "wp_test=1"}
+            )
 
         assert len(findings) == 1
         args = mock_run.call_args.args[1]
@@ -127,7 +136,9 @@ class TestWpScanAuditor:
         assert "wp_test=1" in args
 
     @pytest.mark.asyncio
-    async def test_wpscan_audit_passes_api_token_and_runner_redacts_secrets(self, monkeypatch) -> None:
+    async def test_wpscan_audit_passes_api_token_and_runner_redacts_secrets(
+        self, monkeypatch
+    ) -> None:
         from nexus.recon.runner import _redact_args
 
         monkeypatch.setenv("WPSCAN_API_TOKEN", "wpvuln_secret_123")
@@ -136,11 +147,15 @@ class TestWpScanAuditor:
         async def _fake_run(tool: str, args: list[str], **_kwargs):
             out_path = args[args.index("-o") + 1]
             Path(out_path).write_text(json.dumps(sample), encoding="utf-8")
-            return ToolOutput(tool=tool, args=_redact_args(args), returncode=0, stdout="", stderr="")
+            return ToolOutput(
+                tool=tool, args=_redact_args(args), returncode=0, stdout="", stderr=""
+            )
 
         with (
             patch("nexus.scanner.cms_scan.ToolRunner.is_available", return_value=True),
-            patch("nexus.scanner.cms_scan.ToolRunner.run", AsyncMock(side_effect=_fake_run)) as mock_run,
+            patch(
+                "nexus.scanner.cms_scan.ToolRunner.run", AsyncMock(side_effect=_fake_run)
+            ) as mock_run,
         ):
             await wpscan_audit("https://wp.local", headers={"Cookie": "session=abc"})
 
@@ -162,12 +177,20 @@ class TestWpScanAuditor:
             calls.append(list(args))
             out_path = args[args.index("-o") + 1]
             payload = (
-                {"scan_aborted": "Update required, you can not run a scan if a database file is missing."}
+                {
+                    "scan_aborted": "Update required, you can not run a scan if a database file is missing."
+                }
                 if "--no-update" in args
                 else {"users": {"wpadmin": {"id": 1}}}
             )
             Path(out_path).write_text(json.dumps(payload), encoding="utf-8")
-            return ToolOutput(tool=tool, args=[], returncode=4 if "--no-update" in args else 0, stdout="", stderr="")
+            return ToolOutput(
+                tool=tool,
+                args=[],
+                returncode=4 if "--no-update" in args else 0,
+                stdout="",
+                stderr="",
+            )
 
         with (
             patch("nexus.scanner.cms_scan.ToolRunner.is_available", return_value=True),
@@ -205,21 +228,37 @@ class TestWpScanAuditor:
         from nexus.scanner.exposure import _verify_actuator_env
 
         # WPScan JSON with references.cve == null must not crash
-        sample = {"version": {"number": "6.0", "vulnerabilities": [{"title": "XSS", "references": {"cve": None}}]}}
+        sample = {
+            "version": {
+                "number": "6.0",
+                "vulnerabilities": [{"title": "XSS", "references": {"cve": None}}],
+            }
+        }
         findings = _parse_wpscan_json(json.dumps(sample), "https://wp.local")
         assert len(findings) == 1 and findings[0].cve_ids == []
 
         # Nikto -Add-header and sensitive custom headers redacted; -h left untouched
-        redacted = _redact_args([
-            "-h", "target.local", "-Add-header", "Proxy-Authorization: Basic dXNlcjpwYXNz",
-            "-Add-header=X-Secret: top_sec",
-        ])
+        redacted = _redact_args(
+            [
+                "-h",
+                "target.local",
+                "-Add-header",
+                "Proxy-Authorization: Basic dXNlcjpwYXNz",
+                "-Add-header=X-Secret: top_sec",
+            ]
+        )
         raw_joined = " ".join(redacted)
         assert "dXNlcjpwYXNz" not in raw_joined
         assert "top_sec" not in raw_joined
         assert "-h target.local" in raw_joined
 
         # /actuator/env masks values while reporting propertySources names
-        env_body = json.dumps({"propertySources": [{"name": "applicationConfig", "properties": {"db.pw": {"value": "s3cr3t"}}}]})
+        env_body = json.dumps(
+            {
+                "propertySources": [
+                    {"name": "applicationConfig", "properties": {"db.pw": {"value": "s3cr3t"}}}
+                ]
+            }
+        )
         ev = _verify_actuator_env(env_body, "application/json")
         assert ev is not None and "applicationConfig" in ev and "s3cr3t" not in ev

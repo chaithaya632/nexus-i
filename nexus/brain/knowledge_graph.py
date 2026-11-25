@@ -86,11 +86,11 @@ def _version_in_range(ver_str: str, range_spec: str) -> bool:
                 ("=", lambda v, b: _cmp_versions(v, b) == 0),
             ):
                 if cl.startswith(op):
-                    bound = _parse_version(cl[len(op):])
+                    bound = _parse_version(cl[len(op) :])
                     if bound is None:
                         return False
                     # Do not match an ambiguous minor-only banner (e.g. 'Apache/2.4') against patch bounds ('<=2.4.48')
-                    if len(ver[0]) < len(bound[0]) and ver[0] == bound[0][:len(ver[0])]:
+                    if len(ver[0]) < len(bound[0]) and ver[0] == bound[0][: len(ver[0])]:
                         return False
                     if not fn(ver, bound):
                         return False
@@ -107,9 +107,9 @@ def _version_in_range(ver_str: str, range_spec: str) -> bool:
         if low is None or high is None:
             return False
         # Do not match an ambiguous minor-only banner (e.g. 'Apache/2.4') against patch bounds ('2.4.0-2.4.55')
-        if len(ver[0]) < len(high[0]) and ver[0] == high[0][:len(ver[0])]:
+        if len(ver[0]) < len(high[0]) and ver[0] == high[0][: len(ver[0])]:
             return False
-        if len(ver[0]) < len(low[0]) and ver[0] == low[0][:len(ver[0])]:
+        if len(ver[0]) < len(low[0]) and ver[0] == low[0][: len(ver[0])]:
             return False
         return _cmp_versions(ver, low) >= 0 and _cmp_versions(ver, high) <= 0
     if len(parts) == 1:
@@ -118,10 +118,10 @@ def _version_in_range(ver_str: str, range_spec: str) -> bool:
             return False
         # Exact match when full X.Y.Z specified; major.minor prefix if only X.Y
         if len(target[0]) >= 3 or target[1] > 0:
-            if len(ver[0]) < len(target[0]) and ver[0] == target[0][:len(ver[0])]:
+            if len(ver[0]) < len(target[0]) and ver[0] == target[0][: len(ver[0])]:
                 return False
             return _cmp_versions(ver, target) == 0
-        return ver[0][:len(target[0])] == target[0]
+        return ver[0][: len(target[0])] == target[0]
     return False
 
 
@@ -228,7 +228,9 @@ class KnowledgeGraph:
                         vuln_type=v.get("type", ""),
                         description=v.get("description", ""),
                         affected_versions=version_range,
-                        version_specs=[version_range] if any(op in version_range for op in ("<", ">", "=")) else [s.strip() for s in version_range.split(",") if s.strip()],
+                        version_specs=[version_range]
+                        if any(op in version_range for op in ("<", ">", "="))
+                        else [s.strip() for s in version_range.split(",") if s.strip()],
                         exploits=exploits,
                         chain_to=v.get("chain_to", []),
                         remediation=v.get("remediation", ""),
@@ -249,11 +251,7 @@ class KnowledgeGraph:
             products = cve_data.get("products", []) or ["generic"]
             fingerprints = cve_data.get("fingerprints", []) or []
             exploit_tools = cve_data.get("exploit_tools", []) or []
-            exploits = [
-                ExploitInfo(module=t, tool=t)
-                for t in exploit_tools
-                if isinstance(t, str)
-            ]
+            exploits = [ExploitInfo(module=t, tool=t) for t in exploit_tools if isinstance(t, str)]
             families = list(dict.fromkeys(_product_family(str(p)) for p in products)) or ["generic"]
             primary_service = families[0]
             entry = VulnEntry(
@@ -322,12 +320,16 @@ class KnowledgeGraph:
             if not v.affected_versions and not v.version_specs:
                 matched.append(v)
                 continue
-            specs = v.version_specs or [s.strip() for s in v.affected_versions.split(",") if s.strip()]
+            specs = v.version_specs or [
+                s.strip() for s in v.affected_versions.split(",") if s.strip()
+            ]
             if any(_version_in_range(version, s) for s in specs):
                 matched.append(v)
         return matched
 
-    def match_banner_vulns(self, service: str = "", version: str = "") -> list[tuple[str, VulnEntry]]:
+    def match_banner_vulns(
+        self, service: str = "", version: str = ""
+    ) -> list[tuple[str, VulnEntry]]:
         """Match an observed service banner + version against all loaded CVEs.
 
         Uses fingerprint/product matching plus SemVer/range comparison so patched
@@ -342,16 +344,20 @@ class KnowledgeGraph:
         matches: list[tuple[str, VulnEntry]] = []
 
         # Product token hints derived from service + version banner
-        banner_tokens = {
-            tok for tok in re.split(r"[^a-z0-9]+", banner_text) if len(tok) >= 3
-        }
+        banner_tokens = {tok for tok in re.split(r"[^a-z0-9]+", banner_text) if len(tok) >= 3}
 
         for svc_name, sk in self._services.items():
             # Match either service name tokens or known banner fingerprints
-            svc_tokens = [t for t in re.split(r"[^a-z0-9]+", svc_name.lower()) if len(t) >= 3 and not t.isdigit()]
+            svc_tokens = [
+                t
+                for t in re.split(r"[^a-z0-9]+", svc_name.lower())
+                if len(t) >= 3 and not t.isdigit()
+            ]
             fp_match = any(fp.lower() in banner_text for fp in sk.fingerprints)
-            tok_match = bool(svc_tokens) and all(t in banner_tokens or t in banner_text for t in svc_tokens[:1]) and (
-                len(svc_tokens) == 1 or any(t in banner_text for t in svc_tokens[1:])
+            tok_match = (
+                bool(svc_tokens)
+                and all(t in banner_tokens or t in banner_text for t in svc_tokens[:1])
+                and (len(svc_tokens) == 1 or any(t in banner_text for t in svc_tokens[1:]))
             )
             if not (fp_match or tok_match):
                 continue
@@ -359,11 +365,15 @@ class KnowledgeGraph:
             for entry in sk.vulns:
                 if entry.cve in seen_cves:
                     continue
-                specs = entry.version_specs or [s.strip() for s in entry.affected_versions.split(",") if s.strip()]
+                specs = entry.version_specs or [
+                    s.strip() for s in entry.affected_versions.split(",") if s.strip()
+                ]
                 # If a version string is present on the port banner, require a matching version range
                 spec_has_ver = any(_VER_RE.search(s) for s in specs)
                 if has_num_ver:
-                    if not spec_has_ver or not any(_version_in_range(version or service, s) for s in specs):
+                    if not spec_has_ver or not any(
+                        _version_in_range(version or service, s) for s in specs
+                    ):
                         continue
                 elif spec_has_ver and not fp_match:
                     continue
@@ -378,15 +388,17 @@ class KnowledgeGraph:
         results = []
         for svc_name, sk in self._services.items():
             for v in sk.vulns:
-                if (q in v.cve.lower() or q in v.description.lower() or
-                        q in v.vuln_type.lower() or q in svc_name.lower()):
+                if (
+                    q in v.cve.lower()
+                    or q in v.description.lower()
+                    or q in v.vuln_type.lower()
+                    or q in svc_name.lower()
+                ):
                     results.append((svc_name, v))
         return results
 
     def stats(self) -> dict[str, int]:
-        total_exploits = sum(
-            len(v.exploits) for sk in self._services.values() for v in sk.vulns
-        )
+        total_exploits = sum(len(v.exploits) for sk in self._services.values() for v in sk.vulns)
         return {
             "services": self.service_count,
             "cves": self.cve_count,

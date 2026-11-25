@@ -1,7 +1,5 @@
 """Tests for nexus.brain.chain_builder."""
 
-import pytest
-
 from nexus.brain.chain_builder import ChainBuilder
 
 

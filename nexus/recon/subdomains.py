@@ -151,7 +151,12 @@ async def enumerate_subdomains(
             pass
 
     if is_local_or_ip:
-        return [Target(host=domain_clean, ip=domain_clean if "." in domain_clean or ":" in domain_clean else "")]
+        return [
+            Target(
+                host=domain_clean,
+                ip=domain_clean if "." in domain_clean or ":" in domain_clean else "",
+            )
+        ]
 
     merged: dict[str, Target] = {}
 
@@ -164,7 +169,9 @@ async def enumerate_subdomains(
 
     # amass (slower, bounded so engagements don't stall on amass engine)
     if use_amass and ToolRunner.is_available("amass"):
-        for t in await amass_enum(domain_clean, timeout=min(timeout, 60), passive_only=passive_only):
+        for t in await amass_enum(
+            domain_clean, timeout=min(timeout, 60), passive_only=passive_only
+        ):
             merged.setdefault(t.host, t)
     elif use_amass:
         log.warning("amass not found — skipping")

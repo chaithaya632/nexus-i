@@ -6,7 +6,6 @@ import csv
 import io
 import logging
 import re
-from typing import Any
 from urllib.parse import urlparse
 
 from nexus.db.models import Finding, Severity
@@ -61,8 +60,8 @@ async def nikto_scan(
         ssl: force SSL.
         timeout: max seconds.
     """
-    from pathlib import Path
     import tempfile
+    from pathlib import Path
 
     # Nikto errors with "-port cannot be used with a full URI" if both URL and -p are passed
     clean_target = validate_cli_target(target, label="target")
@@ -121,8 +120,7 @@ def _parse_nikto_csv(
     """Parse Nikto CSV text (where data rows are quoted) into Findings using csv.reader."""
     findings: list[Finding] = []
     filtered_lines = [
-        line for line in csv_text.splitlines()
-        if line.strip() and not line.lstrip().startswith("#")
+        line for line in csv_text.splitlines() if line.strip() and not line.lstrip().startswith("#")
     ]
     if not filtered_lines:
         return findings
@@ -147,16 +145,18 @@ def _parse_nikto_csv(
         p = int(port_raw) if port_raw.isdigit() else (default_port or (443 if ssl else 80))
         severity = _classify_severity(desc)
 
-        findings.append(Finding(
-            host=host or ip or target,
-            port=p,
-            protocol="https" if ssl else "http",
-            title=f"Nikto: {desc[:80]}",
-            description=desc,
-            severity=severity,
-            tool_source="nikto",
-            evidence=f"Reference: {osvdb}\nMethod: {method}\nURI: {uri}\n{desc}",
-        ))
+        findings.append(
+            Finding(
+                host=host or ip or target,
+                port=p,
+                protocol="https" if ssl else "http",
+                title=f"Nikto: {desc[:80]}",
+                description=desc,
+                severity=severity,
+                tool_source="nikto",
+                evidence=f"Reference: {osvdb}\nMethod: {method}\nURI: {uri}\n{desc}",
+            )
+        )
 
     log.info("nikto found %d issues on %s", len(findings), target)
     return findings

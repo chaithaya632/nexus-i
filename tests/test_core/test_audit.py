@@ -4,7 +4,7 @@ import asyncio
 import json
 import threading
 import warnings
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
@@ -147,7 +147,7 @@ class TestAuditLogger:
             "non_json",
             extra={
                 "path": Path("/tmp/report.pdf"),
-                "ts": datetime(2026, 1, 1, tzinfo=timezone.utc),
+                "ts": datetime(2026, 1, 1, tzinfo=UTC),
                 "tags": {"sqli"},
             },
         )
@@ -203,12 +203,14 @@ class TestTaskScheduler:
         async def fail():
             raise RuntimeError("boom")
 
-        results = await scheduler.run_parallel([
-            ("t1", ok(1)),
-            ("t2", ok(2)),
-            ("t3", fail()),
-            ("t4", ok(4)),
-        ])
+        results = await scheduler.run_parallel(
+            [
+                ("t1", ok(1)),
+                ("t2", ok(2)),
+                ("t3", fail()),
+                ("t4", ok(4)),
+            ]
+        )
         assert peak <= 2
         assert [r.status for r in results] == [
             TaskStatus.COMPLETED,
@@ -247,11 +249,13 @@ class TestTaskScheduler:
 
         with warnings.catch_warnings(record=True) as caught:
             warnings.simplefilter("error", RuntimeWarning)
-            results = await scheduler.run_sequential([
-                ("first", fail()),
-                ("second", never_runs()),
-                ("third", never_runs()),
-            ])
+            results = await scheduler.run_sequential(
+                [
+                    ("first", fail()),
+                    ("second", never_runs()),
+                    ("third", never_runs()),
+                ]
+            )
 
         assert len(results) == 1
         assert results[0].status == TaskStatus.FAILED

@@ -15,7 +15,9 @@ def finding_fingerprint(f: Finding) -> tuple[str, int, str, tuple[str, ...], str
     """Stable identity key matching findings across consecutive engagement runs."""
     endpoint = extract_endpoint(f)
     if not endpoint and f.description.strip():
-        endpoint = "desc:" + hashlib.sha1(f.description.strip().lower().encode("utf-8")).hexdigest()[:10]
+        endpoint = (
+            "desc:" + hashlib.sha1(f.description.strip().lower().encode("utf-8")).hexdigest()[:10]
+        )
     return (
         f.host.strip().lower(),
         int(f.port or 0),

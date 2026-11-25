@@ -4,11 +4,11 @@ import pytest
 import yaml
 
 from nexus.core.config import (
-    NexusConfig,
     SCAN_PROFILE_SETTINGS,
+    NexusConfig,
     ScanProfile,
-    Tier,
     StealthLevel,
+    Tier,
     get_config,
     set_config,
 )
@@ -16,8 +16,9 @@ from nexus.core.config import (
 
 class TestNexusConfig:
     def test_default_config(self, tmp_path):
-        cfg = NexusConfig(data_dir=tmp_path, db_path=tmp_path / "test.db",
-                          output_dir=tmp_path / "output")
+        cfg = NexusConfig(
+            data_dir=tmp_path, db_path=tmp_path / "test.db", output_dir=tmp_path / "output"
+        )
         assert cfg.tier == Tier.MINIMAL
         assert cfg.stealth == StealthLevel.MEDIUM
         assert cfg.max_threads == 5
@@ -49,8 +50,12 @@ class TestNexusConfig:
         assert cfg.max_threads == 20
 
     def test_singleton(self, tmp_path):
-        cfg = NexusConfig(data_dir=tmp_path, db_path=tmp_path / "test.db",
-                          output_dir=tmp_path / "output", tier=Tier.STANDARD)
+        cfg = NexusConfig(
+            data_dir=tmp_path,
+            db_path=tmp_path / "test.db",
+            output_dir=tmp_path / "output",
+            tier=Tier.STANDARD,
+        )
         set_config(cfg)
         retrieved = get_config()
         assert retrieved.tier == Tier.STANDARD

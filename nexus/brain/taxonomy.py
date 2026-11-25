@@ -6,16 +6,46 @@ import re
 from typing import Any
 
 OWASP_TOP_10_2021: dict[str, dict[str, str]] = {
-    "A01": {"name": "Broken Access Control", "keywords": "idor,bola,privilege,authorization,access control,directory traversal,path traversal,insecure direct object"},
-    "A02": {"name": "Cryptographic Failures", "keywords": "ssl,tls,cipher,encryption,certificate,cleartext,plaintext,weak crypto,hashing,md5,sha1"},
-    "A03": {"name": "Injection", "keywords": "sqli,sql injection,xss,cross-site scripting,command injection,ldap injection,xpath,template injection,ssti,nosql injection"},
-    "A04": {"name": "Insecure Design", "keywords": "business logic,design flaw,threat model,abuse case"},
-    "A05": {"name": "Security Misconfiguration", "keywords": "default credentials,unnecessary features,error messages,directory listing,debug,stack trace,misconfiguration,open port"},
-    "A06": {"name": "Vulnerable Components", "keywords": "cve,outdated,vulnerable version,component,library,dependency,supply chain"},
-    "A07": {"name": "Identification and Authentication", "keywords": "authentication,brute force,credential stuffing,password,session,weak password,multi-factor,mfa"},
-    "A08": {"name": "Software and Data Integrity", "keywords": "deserialization,ci/cd,integrity,unsigned,untrusted data"},
-    "A09": {"name": "Security Logging and Monitoring", "keywords": "logging,monitoring,audit,detection,alerting,insufficient logging"},
-    "A10": {"name": "Server-Side Request Forgery", "keywords": "ssrf,server-side request,internal service,metadata endpoint"},
+    "A01": {
+        "name": "Broken Access Control",
+        "keywords": "idor,bola,privilege,authorization,access control,directory traversal,path traversal,insecure direct object",
+    },
+    "A02": {
+        "name": "Cryptographic Failures",
+        "keywords": "ssl,tls,cipher,encryption,certificate,cleartext,plaintext,weak crypto,hashing,md5,sha1",
+    },
+    "A03": {
+        "name": "Injection",
+        "keywords": "sqli,sql injection,xss,cross-site scripting,command injection,ldap injection,xpath,template injection,ssti,nosql injection",
+    },
+    "A04": {
+        "name": "Insecure Design",
+        "keywords": "business logic,design flaw,threat model,abuse case",
+    },
+    "A05": {
+        "name": "Security Misconfiguration",
+        "keywords": "default credentials,unnecessary features,error messages,directory listing,debug,stack trace,misconfiguration,open port",
+    },
+    "A06": {
+        "name": "Vulnerable Components",
+        "keywords": "cve,outdated,vulnerable version,component,library,dependency,supply chain",
+    },
+    "A07": {
+        "name": "Identification and Authentication",
+        "keywords": "authentication,brute force,credential stuffing,password,session,weak password,multi-factor,mfa",
+    },
+    "A08": {
+        "name": "Software and Data Integrity",
+        "keywords": "deserialization,ci/cd,integrity,unsigned,untrusted data",
+    },
+    "A09": {
+        "name": "Security Logging and Monitoring",
+        "keywords": "logging,monitoring,audit,detection,alerting,insufficient logging",
+    },
+    "A10": {
+        "name": "Server-Side Request Forgery",
+        "keywords": "ssrf,server-side request,internal service,metadata endpoint",
+    },
 }
 
 # Common CWE mappings for penetration testing findings
@@ -67,18 +97,46 @@ CWE_MAP: dict[str, str] = {
 
 # Common CWE -> OWASP Top 10 2021 mapping
 CWE_TO_OWASP: dict[str, str] = {
-    "CWE-22": "A01", "CWE-269": "A01", "CWE-284": "A01", "CWE-352": "A01",
-    "CWE-601": "A01", "CWE-639": "A01", "CWE-732": "A01", "CWE-200": "A01",
-    "CWE-311": "A02", "CWE-326": "A02", "CWE-327": "A02",
-    "CWE-20": "A03", "CWE-78": "A03", "CWE-79": "A03", "CWE-89": "A03",
-    "CWE-94": "A03", "CWE-98": "A03", "CWE-917": "A03", "CWE-1336": "A03",
-    "CWE-434": "A04", "CWE-1021": "A04",
-    "CWE-16": "A05", "CWE-548": "A05", "CWE-611": "A05", "CWE-1393": "A05",
-    "CWE-120": "A06", "CWE-122": "A06", "CWE-126": "A06", "CWE-416": "A06",
-    "CWE-287": "A07", "CWE-306": "A01", "CWE-307": "A07", "CWE-384": "A07",
-    "CWE-521": "A07", "CWE-798": "A07",
-    "CWE-426": "A08", "CWE-502": "A08",
-    "CWE-400": "A05", "CWE-444": "A05", "CWE-362": "A04",
+    "CWE-22": "A01",
+    "CWE-269": "A01",
+    "CWE-284": "A01",
+    "CWE-352": "A01",
+    "CWE-601": "A01",
+    "CWE-639": "A01",
+    "CWE-732": "A01",
+    "CWE-200": "A01",
+    "CWE-311": "A02",
+    "CWE-326": "A02",
+    "CWE-327": "A02",
+    "CWE-20": "A03",
+    "CWE-78": "A03",
+    "CWE-79": "A03",
+    "CWE-89": "A03",
+    "CWE-94": "A03",
+    "CWE-98": "A03",
+    "CWE-917": "A03",
+    "CWE-1336": "A03",
+    "CWE-434": "A04",
+    "CWE-1021": "A04",
+    "CWE-16": "A05",
+    "CWE-548": "A05",
+    "CWE-611": "A05",
+    "CWE-1393": "A05",
+    "CWE-120": "A06",
+    "CWE-122": "A06",
+    "CWE-126": "A06",
+    "CWE-416": "A06",
+    "CWE-287": "A07",
+    "CWE-306": "A01",
+    "CWE-307": "A07",
+    "CWE-384": "A07",
+    "CWE-521": "A07",
+    "CWE-798": "A07",
+    "CWE-426": "A08",
+    "CWE-502": "A08",
+    "CWE-400": "A05",
+    "CWE-444": "A05",
+    "CWE-362": "A04",
     "CWE-918": "A10",
 }
 
@@ -133,9 +191,19 @@ class TaxonomyMapper:
 
     def map_finding(self, finding: Any) -> str:
         """Return formatted OWASP Top 10 category string for a Finding or dict."""
-        cwe_id = finding.get("cwe_id", "") if isinstance(finding, dict) else getattr(finding, "cwe_id", "")
-        title = finding.get("title", "") if isinstance(finding, dict) else getattr(finding, "title", "")
-        desc = finding.get("description", "") if isinstance(finding, dict) else getattr(finding, "description", "")
+        cwe_id = (
+            finding.get("cwe_id", "")
+            if isinstance(finding, dict)
+            else getattr(finding, "cwe_id", "")
+        )
+        title = (
+            finding.get("title", "") if isinstance(finding, dict) else getattr(finding, "title", "")
+        )
+        desc = (
+            finding.get("description", "")
+            if isinstance(finding, dict)
+            else getattr(finding, "description", "")
+        )
         if cwe_id:
             mapped = self.map_cwe(str(cwe_id))
             if mapped:
@@ -145,7 +213,9 @@ class TaxonomyMapper:
             return f"{cat_id} — {self.get_owasp_name(cat_id)}"
         return ""
 
-    def classify_finding(self, title: str, description: str = "", vuln_type: str = "") -> dict[str, str]:
+    def classify_finding(
+        self, title: str, description: str = "", vuln_type: str = ""
+    ) -> dict[str, str]:
         """Full classification of a finding."""
         owasp = self.classify_owasp(title, description)
         cwe = self.classify_cwe(vuln_type) if vuln_type else ""

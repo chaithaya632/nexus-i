@@ -94,53 +94,90 @@ class TestWave6ExtendedCatalogAndKevSync:
 
     def test_import_cisa_kev_and_nvd_autoloaded_on_engine_boot(self, tmp_path: Path) -> None:
         import json
+
         from nexus.brain.cve_sync import import_cisa_kev_file, import_nvd_json_file
 
         kev_json = tmp_path / "kev.json"
-        kev_json.write_text(json.dumps({
-            "vulnerabilities": [{
-                "cveID": "CVE-2024-99991",
-                "vendorProject": "Acme",
-                "product": "EdgeGateway",
-                "shortDescription": "Acme EdgeGateway auth bypass",
-                "requiredAction": "Upgrade EdgeGateway to 5.1+",
-                "knownRansomwareCampaignUse": "Known",
-                "cwes": ["CWE-287"],
-            }]
-        }), encoding="utf-8")
+        kev_json.write_text(
+            json.dumps(
+                {
+                    "vulnerabilities": [
+                        {
+                            "cveID": "CVE-2024-99991",
+                            "vendorProject": "Acme",
+                            "product": "EdgeGateway",
+                            "shortDescription": "Acme EdgeGateway auth bypass",
+                            "requiredAction": "Upgrade EdgeGateway to 5.1+",
+                            "knownRansomwareCampaignUse": "Known",
+                            "cwes": ["CWE-287"],
+                        }
+                    ]
+                }
+            ),
+            encoding="utf-8",
+        )
 
         nvd_json = tmp_path / "nvd.json"
-        nvd_json.write_text(json.dumps({
-            "vulnerabilities": [{
-                "cve": {
-                    "id": "CVE-2024-99992",
-                    "descriptions": [{"lang": "en", "value": "Acme EdgePortal path traversal"}],
-                    "metrics": {"cvssMetricV31": [{"cvssData": {"baseScore": 8.6, "baseSeverity": "HIGH"}}]},
-                    "weaknesses": [{"description": [{"value": "CWE-22"}]}],
-                    "configurations": [{"nodes": [{"cpeMatch": [{
-                        "vulnerable": True,
-                        "criteria": "cpe:2.3:a:acme:edgeportal:*:*:*:*:*:*:*:*",
-                        "versionStartIncluding": "2.0.0",
-                        "versionEndExcluding": "2.4.1",
-                    }]}]}],
+        nvd_json.write_text(
+            json.dumps(
+                {
+                    "vulnerabilities": [
+                        {
+                            "cve": {
+                                "id": "CVE-2024-99992",
+                                "descriptions": [
+                                    {"lang": "en", "value": "Acme EdgePortal path traversal"}
+                                ],
+                                "metrics": {
+                                    "cvssMetricV31": [
+                                        {"cvssData": {"baseScore": 8.6, "baseSeverity": "HIGH"}}
+                                    ]
+                                },
+                                "weaknesses": [{"description": [{"value": "CWE-22"}]}],
+                                "configurations": [
+                                    {
+                                        "nodes": [
+                                            {
+                                                "cpeMatch": [
+                                                    {
+                                                        "vulnerable": True,
+                                                        "criteria": "cpe:2.3:a:acme:edgeportal:*:*:*:*:*:*:*:*",
+                                                        "versionStartIncluding": "2.0.0",
+                                                        "versionEndExcluding": "2.4.1",
+                                                    }
+                                                ]
+                                            }
+                                        ]
+                                    }
+                                ],
+                            }
+                        }
+                    ]
                 }
-            }]
-        }), encoding="utf-8")
+            ),
+            encoding="utf-8",
+        )
 
         data_dir = tmp_path / "nexus_data"
         c_kev, _ = import_cisa_kev_file(kev_json, data_dir)
         c_nvd, _ = import_nvd_json_file(nvd_json, data_dir)
         assert c_kev == 1 and c_nvd == 1
 
-        cfg = NexusConfig(data_dir=data_dir, db_path=tmp_path / "sync.db", output_dir=tmp_path / "out")
+        cfg = NexusConfig(
+            data_dir=data_dir, db_path=tmp_path / "sync.db", output_dir=tmp_path / "out"
+        )
         eng = NexusEngine(cfg)
         eng.boot()
         try:
             assert eng.knowledge.has_cve("CVE-2024-99991")
             assert eng.knowledge.has_cve("CVE-2024-99992")
-            matched = {e.cve for _, e in eng.knowledge.match_banner_vulns("edgeportal", "EdgePortal 2.2.0")}
+            matched = {
+                e.cve for _, e in eng.knowledge.match_banner_vulns("edgeportal", "EdgePortal 2.2.0")
+            }
             assert "CVE-2024-99992" in matched
-            patched = {e.cve for _, e in eng.knowledge.match_banner_vulns("edgeportal", "EdgePortal 2.4.1")}
+            patched = {
+                e.cve for _, e in eng.knowledge.match_banner_vulns("edgeportal", "EdgePortal 2.4.1")
+            }
             assert "CVE-2024-99992" not in patched
         finally:
             eng.shutdown()

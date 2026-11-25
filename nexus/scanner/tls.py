@@ -8,9 +8,8 @@ import logging
 import socket
 import ssl
 import tempfile
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any
 
 from nexus.db.models import Finding, Severity
 from nexus.recon.runner import ToolRunner
@@ -42,32 +41,41 @@ def _parse_sslyze_json(raw_json: str, host: str, port: int) -> list[Finding]:
             accepted = suite_res.get("accepted_cipher_suites") or []
             if accepted:
                 names = [c.get("cipher_suite", {}).get("name", "") for c in accepted[:5]]
-                findings.append(Finding(
-                    host=host,
-                    port=port,
-                    protocol="https",
-                    title=f"TLS: {label}",
-                    description=(
-                        f"{host}:{port} accepts deprecated protocol {label} with "
-                        f"{len(accepted)} cipher suite(s)."
-                    ),
-                    severity=sev,
-                    cwe_id="CWE-326",
-                    tool_source="sslyze",
-                    evidence="Accepted suites: " + ", ".join(n for n in names if n),
-                ))
+                findings.append(
+                    Finding(
+                        host=host,
+                        port=port,
+                        protocol="https",
+                        title=f"TLS: {label}",
+                        description=(
+                            f"{host}:{port} accepts deprecated protocol {label} with "
+                            f"{len(accepted)} cipher suite(s)."
+                        ),
+                        severity=sev,
+                        cwe_id="CWE-326",
+                        tool_source="sslyze",
+                        evidence="Accepted suites: " + ", ".join(n for n in names if n),
+                    )
+                )
 
         # Heartbleed
         hb = (scan_res.get("heartbleed") or {}).get("result") or {}
         if hb.get("is_vulnerable_to_heartbleed"):
-            findings.append(Finding(
-                host=host, port=port, protocol="https",
-                title="TLS: OpenSSL Heartbleed (CVE-2014-0160)",
-                description=f"{host}:{port} is vulnerable to Heartbleed memory disclosure.",
-                severity=Severity.HIGH, cvss_score=7.5,
-                cve_ids=["CVE-2014-0160"], cwe_id="CWE-126",
-                tool_source="sslyze", confirmed=True,
-            ))
+            findings.append(
+                Finding(
+                    host=host,
+                    port=port,
+                    protocol="https",
+                    title="TLS: OpenSSL Heartbleed (CVE-2014-0160)",
+                    description=f"{host}:{port} is vulnerable to Heartbleed memory disclosure.",
+                    severity=Severity.HIGH,
+                    cvss_score=7.5,
+                    cve_ids=["CVE-2014-0160"],
+                    cwe_id="CWE-126",
+                    tool_source="sslyze",
+                    confirmed=True,
+                )
+            )
 
         # Certificate expiration / trust issues
         certinfo = (scan_res.get("certificate_info") or {}).get("result") or {}
@@ -77,36 +85,54 @@ def _parse_sslyze_json(raw_json: str, host: str, port: int) -> list[Finding]:
             if not_after_str:
                 try:
                     exp = datetime.fromisoformat(not_after_str.replace("Z", "+00:00"))
-                    days_left = (exp - datetime.now(timezone.utc)).days
+                    days_left = (exp - datetime.now(UTC)).days
                     if days_left < 0:
-                        findings.append(Finding(
-                            host=host, port=port, protocol="https",
-                            title="TLS: Expired SSL/TLS Certificate",
-                            description=f"Certificate on {host}:{port} expired {abs(days_left)} day(s) ago.",
-                            severity=Severity.HIGH, cwe_id="CWE-295",
-                            tool_source="sslyze", evidence=f"Expired: {not_after_str}",
-                        ))
+                        findings.append(
+                            Finding(
+                                host=host,
+                                port=port,
+                                protocol="https",
+                                title="TLS: Expired SSL/TLS Certificate",
+                                description=f"Certificate on {host}:{port} expired {abs(days_left)} day(s) ago.",
+                                severity=Severity.HIGH,
+                                cwe_id="CWE-295",
+                                tool_source="sslyze",
+                                evidence=f"Expired: {not_after_str}",
+                            )
+                        )
                     elif days_left < 30:
-                        findings.append(Finding(
-                            host=host, port=port, protocol="https",
-                            title="TLS: Certificate Expiring Soon",
-                            description=f"Certificate on {host}:{port} expires in {days_left} day(s).",
-                            severity=Severity.LOW, cwe_id="CWE-295",
-                            tool_source="sslyze", evidence=f"Expires: {not_after_str}",
-                        ))
+                        findings.append(
+                            Finding(
+                                host=host,
+                                port=port,
+                                protocol="https",
+                                title="TLS: Certificate Expiring Soon",
+                                description=f"Certificate on {host}:{port} expires in {days_left} day(s).",
+                                severity=Severity.LOW,
+                                cwe_id="CWE-295",
+                                tool_source="sslyze",
+                                evidence=f"Expires: {not_after_str}",
+                            )
+                        )
                 except ValueError:
                     pass
 
             for path_val in dep.get("path_validation_results", []):
                 if path_val.get("was_validation_successful") is False:
                     err = path_val.get("validation_error") or "Untrusted certificate chain"
-                    findings.append(Finding(
-                        host=host, port=port, protocol="https",
-                        title="TLS: Untrusted / Invalid Certificate Chain",
-                        description=f"Certificate validation failed on {host}:{port}: {err}",
-                        severity=Severity.MEDIUM, cwe_id="CWE-295",
-                        tool_source="sslyze", evidence=f"TrustStore: {path_val.get('trust_store', {}).get('name', 'default')}",
-                    ))
+                    findings.append(
+                        Finding(
+                            host=host,
+                            port=port,
+                            protocol="https",
+                            title="TLS: Untrusted / Invalid Certificate Chain",
+                            description=f"Certificate validation failed on {host}:{port}: {err}",
+                            severity=Severity.MEDIUM,
+                            cwe_id="CWE-295",
+                            tool_source="sslyze",
+                            evidence=f"TrustStore: {path_val.get('trust_store', {}).get('name', 'default')}",
+                        )
+                    )
                     break
 
     return findings
@@ -118,7 +144,7 @@ def _extract_cert_expiry(ssock: ssl.SSLSocket) -> tuple[int | None, str]:
     not_after = cert.get("notAfter")
     if isinstance(not_after, str) and not_after:
         ts = ssl.cert_time_to_seconds(not_after)
-        days_left = int((ts - datetime.now(timezone.utc).timestamp()) // 86400)
+        days_left = int((ts - datetime.now(UTC).timestamp()) // 86400)
         return days_left, not_after
 
     try:
@@ -132,8 +158,8 @@ def _extract_cert_expiry(ssock: ssl.SSLSocket) -> tuple[int | None, str]:
             cert_obj = x509.load_der_x509_certificate(bytes(der))
             exp = getattr(cert_obj, "not_valid_after_utc", None)
             if exp is None:
-                exp = cert_obj.not_valid_after.replace(tzinfo=timezone.utc)
-            days_left = int((exp.timestamp() - datetime.now(timezone.utc).timestamp()) // 86400)
+                exp = cert_obj.not_valid_after.replace(tzinfo=UTC)
+            days_left = int((exp.timestamp() - datetime.now(UTC).timestamp()) // 86400)
             return days_left, exp.isoformat()
         except Exception:
             pass
@@ -144,23 +170,36 @@ def _inspect_ssock(ssock: ssl.SSLSocket, host: str, port: int, findings: list[Fi
     """Inspect negotiated TLS protocol version and certificate expiry."""
     ver = ssock.version() or ""
     if ver in ("TLSv1", "TLSv1.1", "SSLv3", "SSLv2"):
-        findings.append(Finding(
-            host=host, port=port, protocol="https",
-            title=f"TLS: Deprecated Protocol Negotiated ({ver})",
-            description=f"{host}:{port} negotiated weak protocol {ver}.",
-            severity=Severity.MEDIUM, cwe_id="CWE-326",
-            tool_source="tls_probe", evidence=f"Negotiated: {ver}",
-        ))
+        findings.append(
+            Finding(
+                host=host,
+                port=port,
+                protocol="https",
+                title=f"TLS: Deprecated Protocol Negotiated ({ver})",
+                description=f"{host}:{port} negotiated weak protocol {ver}.",
+                severity=Severity.MEDIUM,
+                cwe_id="CWE-326",
+                tool_source="tls_probe",
+                evidence=f"Negotiated: {ver}",
+            )
+        )
     days_left, not_after_label = _extract_cert_expiry(ssock)
     if days_left is not None and days_left < 30:
-        findings.append(Finding(
-            host=host, port=port, protocol="https",
-            title="TLS: Certificate Expiring Soon" if days_left >= 0 else "TLS: Expired Certificate",
-            description=f"Certificate on {host}:{port} notAfter={not_after_label}.",
-            severity=Severity.HIGH if days_left < 0 else Severity.LOW,
-            cwe_id="CWE-295", tool_source="tls_probe",
-            evidence=f"notAfter: {not_after_label}",
-        ))
+        findings.append(
+            Finding(
+                host=host,
+                port=port,
+                protocol="https",
+                title="TLS: Certificate Expiring Soon"
+                if days_left >= 0
+                else "TLS: Expired Certificate",
+                description=f"Certificate on {host}:{port} notAfter={not_after_label}.",
+                severity=Severity.HIGH if days_left < 0 else Severity.LOW,
+                cwe_id="CWE-295",
+                tool_source="tls_probe",
+                evidence=f"notAfter: {not_after_label}",
+            )
+        )
 
 
 def _stdlib_tls_probe(host: str, port: int, timeout: float = 8.0) -> list[Finding]:
@@ -172,13 +211,19 @@ def _stdlib_tls_probe(host: str, port: int, timeout: float = 8.0) -> list[Findin
             with ctx.wrap_socket(sock, server_hostname=host) as ssock:
                 _inspect_ssock(ssock, host, port, findings)
     except ssl.SSLCertVerificationError as exc:
-        findings.append(Finding(
-            host=host, port=port, protocol="https",
-            title="TLS: Certificate Verification Failed",
-            description=f"TLS verification error on {host}:{port}: {exc}",
-            severity=Severity.MEDIUM, cwe_id="CWE-295",
-            tool_source="tls_probe", evidence=str(exc)[:500],
-        ))
+        findings.append(
+            Finding(
+                host=host,
+                port=port,
+                protocol="https",
+                title="TLS: Certificate Verification Failed",
+                description=f"TLS verification error on {host}:{port}: {exc}",
+                severity=Severity.MEDIUM,
+                cwe_id="CWE-295",
+                tool_source="tls_probe",
+                evidence=str(exc)[:500],
+            )
+        )
         # Continue inspecting negotiated protocol & certificate expiry without verification
         unverified_ctx = ssl.create_default_context()
         unverified_ctx.check_hostname = False
@@ -205,9 +250,15 @@ async def audit_tls(
         with tempfile.TemporaryDirectory(prefix="nexus_tls_") as td:
             json_path = Path(td) / "sslyze.json"
             args = [
-                "--tlsv1", "--tlsv1_1", "--tlsv1_2", "--tlsv1_3",
-                "--certinfo", "--heartbleed", "--quiet",
-                "--json_out", str(json_path),
+                "--tlsv1",
+                "--tlsv1_1",
+                "--tlsv1_2",
+                "--tlsv1_3",
+                "--certinfo",
+                "--heartbleed",
+                "--quiet",
+                "--json_out",
+                str(json_path),
                 f"{host}:{port}",
             ]
             out = await ToolRunner.run("sslyze", args, timeout=timeout)
@@ -216,6 +267,8 @@ async def audit_tls(
                 findings = _parse_sslyze_json(raw, host, port)
                 log.info("sslyze found %d TLS issues on %s:%d", len(findings), host, port)
                 return findings
-            log.debug("sslyze produced no JSON output (rc=%d), falling back to stdlib", out.returncode)
+            log.debug(
+                "sslyze produced no JSON output (rc=%d), falling back to stdlib", out.returncode
+            )
 
     return await asyncio.to_thread(_stdlib_tls_probe, host, port)

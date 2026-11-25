@@ -16,18 +16,18 @@ from __future__ import annotations
 import logging
 from typing import Any
 
+from nexus.ai.guard import AIGuard
 from nexus.ai.ollama_client import OllamaClient, matches_model_name
 from nexus.ai.prompts import (
-    SECURITY_ANALYST_SYSTEM,
     EXPLOIT_ADVISOR_SYSTEM,
     REPORT_WRITER_SYSTEM,
-    finding_analysis_prompt,
+    SECURITY_ANALYST_SYSTEM,
     chain_analysis_prompt,
     executive_summary_prompt,
     exploit_suggestion_prompt,
+    finding_analysis_prompt,
     remediation_prompt,
 )
-from nexus.ai.guard import AIGuard
 
 log = logging.getLogger("nexus.ai.boost")
 
@@ -66,7 +66,8 @@ class AIBoost:
                 log.warning(
                     "Ollama is running but model '%s' not found.  "
                     "Available: %s.  AI boost disabled.",
-                    self.model, models or "none",
+                    self.model,
+                    models or "none",
                 )
                 self.available = False
             else:
@@ -97,8 +98,11 @@ class AIBoost:
 
         prompt = finding_analysis_prompt(finding)
         raw = self.client.generate(
-            prompt, self.model, system=SECURITY_ANALYST_SYSTEM,
-            temperature=0.3, max_tokens=1024,
+            prompt,
+            self.model,
+            system=SECURITY_ANALYST_SYSTEM,
+            temperature=0.3,
+            max_tokens=1024,
         )
         if not raw:
             return finding
@@ -110,7 +114,8 @@ class AIBoost:
         else:
             log.info(
                 "AI analysis for '%s' rejected by guard: %s",
-                finding.get("title", "?"), guarded.warnings,
+                finding.get("title", "?"),
+                guarded.warnings,
             )
             finding["ai_analysis"] = ""
             finding["ai_confidence"] = 0.0
@@ -142,8 +147,11 @@ class AIBoost:
 
         prompt = chain_analysis_prompt(chain, related_findings)
         raw = self.client.generate(
-            prompt, self.model, system=SECURITY_ANALYST_SYSTEM,
-            temperature=0.3, max_tokens=1024,
+            prompt,
+            self.model,
+            system=SECURITY_ANALYST_SYSTEM,
+            temperature=0.3,
+            max_tokens=1024,
         )
         if raw:
             guarded = self.guard.validate(raw)
@@ -169,11 +177,18 @@ class AIBoost:
             return ""
 
         prompt = executive_summary_prompt(
-            target, total_findings, severity_counts, chains_count, credentials_count,
+            target,
+            total_findings,
+            severity_counts,
+            chains_count,
+            credentials_count,
         )
         raw = self.client.generate(
-            prompt, self.model, system=REPORT_WRITER_SYSTEM,
-            temperature=0.4, max_tokens=1024,
+            prompt,
+            self.model,
+            system=REPORT_WRITER_SYSTEM,
+            temperature=0.4,
+            max_tokens=1024,
         )
         if not raw:
             return ""
@@ -196,12 +211,20 @@ class AIBoost:
             return ""
 
         tools = available_tools or [
-            "nmap", "sqlmap", "hydra", "nuclei", "ffuf", "msfconsole",
+            "nmap",
+            "sqlmap",
+            "hydra",
+            "nuclei",
+            "ffuf",
+            "msfconsole",
         ]
         prompt = exploit_suggestion_prompt(finding, tools)
         raw = self.client.generate(
-            prompt, self.model, system=EXPLOIT_ADVISOR_SYSTEM,
-            temperature=0.3, max_tokens=1024,
+            prompt,
+            self.model,
+            system=EXPLOIT_ADVISOR_SYSTEM,
+            temperature=0.3,
+            max_tokens=1024,
         )
         if not raw:
             return ""
@@ -221,8 +244,11 @@ class AIBoost:
 
         prompt = remediation_prompt(finding)
         raw = self.client.generate(
-            prompt, self.model, system=SECURITY_ANALYST_SYSTEM,
-            temperature=0.3, max_tokens=1024,
+            prompt,
+            self.model,
+            system=SECURITY_ANALYST_SYSTEM,
+            temperature=0.3,
+            max_tokens=1024,
         )
         if not raw:
             return finding.get("remediation", "")
