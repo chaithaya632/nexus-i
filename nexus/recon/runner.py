@@ -45,6 +45,58 @@ class ToolOutput:
         return [l for l in self.stdout.splitlines() if l.strip()]
 
 
+_SECRET_NEXT_FLAGS = frozenset({
+    "--api-token",
+    "--enterprise-db-token",
+    "--cookie-string",
+    "--cookie",
+    "--wp-auth",
+})
+_HEADER_NEXT_FLAGS = frozenset({"--header", "-add-header", "--add-header"})
+_SENSITIVE_HEADER_KEYWORDS = ("token", "secret", "auth", "key", "pass", "cookie")
+
+
+def _mask_header_value(raw: str) -> str:
+    if ":" in raw:
+        hdr_name, _ = raw.split(":", 1)
+        if any(tok in hdr_name.strip().lower() for tok in _SENSITIVE_HEADER_KEYWORDS):
+            return f"{hdr_name}: ***"
+    return raw
+
+
+def _redact_args(args: list[str]) -> list[str]:
+    """Return a copy of CLI *args* with credential/token values masked for logs and ToolOutput."""
+    out: list[str] = []
+    redact_next = False
+    redact_header = False
+    for arg in args:
+        if redact_next:
+            out.append("***")
+            redact_next = False
+            continue
+        if redact_header:
+            out.append(_mask_header_value(arg))
+            redact_header = False
+            continue
+
+        low = arg.lower()
+        if low in _SECRET_NEXT_FLAGS:
+            out.append(arg)
+            redact_next = True
+        elif any(low.startswith(f + "=") for f in _SECRET_NEXT_FLAGS):
+            flag_name = arg.split("=", 1)[0]
+            out.append(f"{flag_name}=***")
+        elif arg == "-H" or low in _HEADER_NEXT_FLAGS:
+            out.append(arg)
+            redact_header = True
+        elif any(low.startswith(f + "=") for f in ("-h", *_HEADER_NEXT_FLAGS)):
+            flag_name, val = arg.split("=", 1)
+            out.append(f"{flag_name}={_mask_header_value(val)}")
+        else:
+            out.append(arg)
+    return out
+
+
 class ToolRunner:
     """Async wrapper for subprocess calls to external tools."""
 
@@ -80,7 +132,9 @@ class ToolRunner:
             await asyncio.sleep(delay_s)
 
         cmd = [tool, *args]
-        log.debug("Running: %s", " ".join(cmd))
+        safe_args = _redact_args(args)
+        safe_cmd = [tool, *safe_args]
+        log.debug("Running: %s", " ".join(safe_cmd))
 
         start = time.monotonic()
         proc: asyncio.subprocess.Process | None = None
@@ -103,10 +157,10 @@ class ToolRunner:
             if isinstance(exc, asyncio.CancelledError):
                 raise
             duration = time.monotonic() - start
-            log.warning("Tool timed out after %ds: %s", timeout, " ".join(cmd))
+            log.warning("Tool timed out after %ds: %s", timeout, " ".join(safe_cmd))
             return ToolOutput(
                 tool=tool,
-                args=args,
+                args=safe_args,
                 returncode=-1,
                 stdout="",
                 stderr=f"TIMEOUT after {timeout}s",
@@ -130,7 +184,7 @@ class ToolRunner:
         )
         return ToolOutput(
             tool=tool,
-            args=args,
+            args=safe_args,
             returncode=proc.returncode or 0,
             stdout=stdout,
             stderr=stderr,

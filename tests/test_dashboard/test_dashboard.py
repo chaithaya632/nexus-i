@@ -170,3 +170,15 @@ class TestDashboardApp:
         dash = DashboardApp(engine)
         assert dash.app is not None
         assert dash.engine._booted is True
+
+    def test_static_spa_has_sarif_diff_and_suppressed_controls(self, client):
+        r = client.get("/")
+        assert r.status_code == 200
+        assert "Download SARIF" in r.text
+        assert "Show suppressed" in r.text
+        assert "runDiff()" in r.text
+        assert "/api/diff" in r.text
+        assert "/sarif" in r.text
+        assert "data-eng-id=" in r.text
+        assert "loadFindings('" not in r.text
+        assert "&quot;" in r.text

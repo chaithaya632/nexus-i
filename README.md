@@ -28,8 +28,8 @@ NEXUS is an **open-source, AI-optional** autonomous penetration testing framewor
 
 ```bash
 # Clone
-git clone https://github.com/nexus-pt/nexus.git
-cd nexus
+git clone https://github.com/chaithaya632/nexus-i.git
+cd nexus-i
 
 # Install (core only — no heavy dependencies)
 pip install -e .

@@ -47,3 +47,10 @@ docker-compose.override.yml
 
 # Ollama models (don't commit)
 models/
+
+# Secrets & local scan artifacts
+.env
+.env.*
+*.pem
+*.key
+*.sarif

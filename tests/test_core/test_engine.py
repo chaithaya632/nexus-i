@@ -274,6 +274,7 @@ class TestEngineIntegrationContracts:
             ),
             patch("nexus.core.engine.crawl_web", AsyncMock(return_value=([], []))),
             patch("nexus.core.engine.audit_http_security", AsyncMock(return_value=[])),
+            patch("nexus.core.engine.audit_exposed_artifacts", AsyncMock(return_value=[])),
             patch("nexus.core.engine.nuclei_scan", nuclei_mock),
             patch("nexus.core.engine.ffuf_scan", ffuf_mock),
             patch("nexus.core.engine.audit_tls", tls_mock),
@@ -431,6 +432,7 @@ paths:
             ),
             patch("nexus.core.engine.crawl_web", crawl_mock),
             patch("nexus.core.engine.audit_http_security", hdr_mock),
+            patch("nexus.core.engine.audit_exposed_artifacts", AsyncMock(return_value=[])),
             patch("nexus.core.engine.nuclei_scan", nuclei_mock),
             patch("nexus.core.engine.ffuf_scan", ffuf_mock),
             patch("nexus.core.engine.audit_tls", tls_mock),
@@ -505,3 +507,68 @@ paths:
 
         assert net_mock.await_count == 2
         assert {f.tool_source for f in findings} == {"redis_probe", "nmap_smb"}
+
+    @pytest.mark.asyncio
+    async def test_run_scan_wave5_exposure_and_wpscan_smart_dispatch(self, engine: NexusEngine) -> None:
+        from unittest.mock import patch, AsyncMock
+        from nexus.core.config import ScanProfile
+        from nexus.db.models import Finding, Port, Severity, Target
+
+        engine.config.profile = ScanProfile.WEB
+        eng = engine.create_engagement("wp.local")
+        t = Target(
+            engagement_id=eng.id, host="wp.local", ip="10.0.0.60",
+            is_live=True, tech_stack=["WordPress", "PHP"],
+        )
+        engine.db.add_target(t)
+        engine.db.add_port(Port(target_id=t.id, port=443, protocol="tcp", state="open", service="https"))
+
+        exp_mock = AsyncMock(return_value=[
+            Finding(host="wp.local", port=443, protocol="https", title="Exposed Git", severity=Severity.HIGH, tool_source="exposure_probe")
+        ])
+        wp_mock = AsyncMock(return_value=[
+            Finding(host="wp.local", port=443, protocol="https", title="WPScan Enum", severity=Severity.INFO, tool_source="wpscan")
+        ])
+        with (
+            patch("nexus.core.engine.ToolRunner.is_available", side_effect=lambda name: name == "wpscan"),
+            patch("nexus.core.engine.crawl_web", AsyncMock(return_value=([], []))),
+            patch("nexus.core.engine.audit_http_security", AsyncMock(return_value=[])),
+            patch("nexus.core.engine.audit_tls", AsyncMock(return_value=[])),
+            patch("nexus.core.engine.audit_exposed_artifacts", exp_mock),
+            patch("nexus.core.engine.wpscan_audit", wp_mock),
+        ):
+            findings = await engine.run_scan(eng.id, "wp.local")
+
+        exp_mock.assert_awaited_once()
+        wp_mock.assert_awaited_once()
+        assert {f.tool_source for f in findings} == {"exposure_probe", "wpscan"}
+
+    @pytest.mark.asyncio
+    async def test_run_scan_forwards_wpscan_api_token(self, engine: NexusEngine, monkeypatch) -> None:
+        from unittest.mock import patch, AsyncMock
+        from nexus.core.config import ScanProfile
+        from nexus.db.models import Port, Target
+
+        engine.config.profile = ScanProfile.WEB
+        monkeypatch.setenv("WPSCAN_API_TOKEN", "env_wp_tok_456")
+        eng = engine.create_engagement("wp-tok.local")
+        t = Target(
+            engagement_id=eng.id, host="wp-tok.local", ip="10.0.0.61",
+            is_live=True, tech_stack=["WordPress"],
+        )
+        engine.db.add_target(t)
+        engine.db.add_port(Port(target_id=t.id, port=443, protocol="tcp", state="open", service="https"))
+
+        wp_mock = AsyncMock(return_value=[])
+        with (
+            patch("nexus.core.engine.ToolRunner.is_available", side_effect=lambda name: name == "wpscan"),
+            patch("nexus.core.engine.crawl_web", AsyncMock(return_value=([], []))),
+            patch("nexus.core.engine.audit_http_security", AsyncMock(return_value=[])),
+            patch("nexus.core.engine.audit_tls", AsyncMock(return_value=[])),
+            patch("nexus.core.engine.audit_exposed_artifacts", AsyncMock(return_value=[])),
+            patch("nexus.core.engine.wpscan_audit", wp_mock),
+        ):
+            await engine.run_scan(eng.id, "wp-tok.local")
+
+        wp_mock.assert_awaited_once()
+        assert wp_mock.call_args.kwargs.get("api_token") == "env_wp_tok_456"

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -46,8 +47,10 @@ from nexus.scanner.ssh_audit import audit_ssh
 from nexus.scanner.tls import audit_tls
 from nexus.scanner._http import parse_url_target, redact_headers
 from nexus.scanner.crawler import crawl_web
+from nexus.scanner.exposure import audit_exposed_artifacts
 from nexus.scanner.headers import audit_http_security
 from nexus.scanner.network_services import audit_network_service
+from nexus.scanner.cms_scan import wpscan_audit
 from nexus.scanner.openapi import audit_openapi_spec
 from nexus.correlator.baseline import apply_baseline_suppressions, load_ignore_rules, resolve_ignore_path
 from nexus.correlator.engine import correlate as correlate_findings
@@ -664,6 +667,7 @@ class NexusEngine:
         net_endpoints: list[tuple[str, int, str]] = []
         seen_net: set[tuple[str, int]] = set()
         tech_tokens: set[str] = set()
+        wp_hosts: set[str] = set()
         wafs_detected: set[str] = set()
         discovered_services: set[str] = set()
 
@@ -693,6 +697,8 @@ class NexusEngine:
                 tok = tech.lower().strip()
                 if tok:
                     tech_tokens.add(tok)
+                    if "wordpress" in tok:
+                        wp_hosts.add(host.lower())
             if t.waf_detected:
                 wafs_detected.add(t.waf_detected)
 
@@ -740,8 +746,9 @@ class NexusEngine:
                                 self.expert.add_fact(f"service_{alias}", True, source="db")
                             discovered_services.add(alias)
 
-                    if p.port in (6379, 21, 445, 139, 9200) or any(
-                        tok in svc for tok in ("redis", "ftp", "smb", "microsoft-ds", "netbios-ssn", "elastic")
+                    if p.port in (6379, 21, 445, 139, 9200, 2375, 11211) or any(
+                        tok in svc
+                        for tok in ("redis", "ftp", "smb", "microsoft-ds", "netbios-ssn", "elastic", "docker", "memcache")
                     ):
                         if (host, p.port) not in seen_net:
                             seen_net.add((host, p.port))
@@ -851,6 +858,8 @@ class NexusEngine:
                 }
                 if self.config.profile == ScanProfile.API:
                     matched_tags.update({"api", "graphql", "swagger"})
+                elif self.config.profile == ScanProfile.QUICK and not matched_tags:
+                    matched_tags.update({"exposure", "misconfig"})
                 if matched_tags:
                     nuclei_extra = ["-tags", ",".join(sorted(matched_tags))]
 
@@ -959,7 +968,55 @@ class NexusEngine:
                 except Exception as exc:
                     log.warning("[SCAN] audit_http_security failed: %s", exc)
 
-        # 7. Network & datastore configuration audits (SMB, FTP, Redis, Elasticsearch)
+        # 6b. Signature-verified web exposure checks (/.git/HEAD, /.env, /actuator, /metrics)
+        if profile_cfg.get("run_exposure", True) and base_roots:
+            exp_roots = [
+                u for u in base_roots[:2]
+                if self._is_in_scope(*parse_url_target(u)[:2])
+            ]
+            if exp_roots:
+                log.info("[SCAN] Verifying exposed web artifacts on %d root(s)", len(exp_roots))
+                try:
+                    exp_findings = await audit_exposed_artifacts(exp_roots, headers=auth_headers or None)
+                    for ef in exp_findings:
+                        ef.engagement_id = eng_id
+                    all_findings.extend(exp_findings)
+                except Exception as exc:
+                    log.warning("[SCAN] audit_exposed_artifacts failed: %s", exc)
+
+        # 6c. WordPress passive enumeration when WordPress fingerprinted
+        if (
+            self.config.profile in (ScanProfile.WEB, ScanProfile.FULL)
+            and base_roots
+            and wp_hosts
+            and ToolRunner.is_available("wpscan")
+        ):
+            wp_candidates = [u for u in base_roots if parse_url_target(u)[0] in wp_hosts]
+            wp_candidates.sort(key=lambda u: 0 if u.startswith("https://") else 1)
+            wp_url = wp_candidates[0] if wp_candidates else ""
+            if wp_url and self._is_in_scope(*parse_url_target(wp_url)[:2]):
+                log.info("[SCAN] Running WPScan passive audit on %s", wp_url)
+                try:
+                    wp_token = (
+                        self.config.wpscan_api_token
+                        or self.config.api_keys.get("wpscan")
+                        or os.environ.get("NEXUS_WPSCAN_API_TOKEN")
+                        or os.environ.get("WPSCAN_API_TOKEN")
+                    )
+                    wp_kwargs: dict[str, Any] = {
+                        "stealth": effective_stealth,
+                        "headers": auth_headers or None,
+                    }
+                    if wp_token:
+                        wp_kwargs["api_token"] = wp_token
+                    wp_findings = await wpscan_audit(wp_url, **wp_kwargs)
+                    for wf in wp_findings:
+                        wf.engagement_id = eng_id
+                    all_findings.extend(wp_findings)
+                except Exception as exc:
+                    log.warning("[SCAN] wpscan_audit failed: %s", exc)
+
+        # 7. Network & datastore configuration audits (SMB, FTP, Redis, Elasticsearch, Docker, Memcached)
         if profile_cfg.get("run_network_audits", True) and net_endpoints:
             log.info("[SCAN] Auditing %d network/datastore service endpoint(s)", len(net_endpoints))
             net_tasks = [
@@ -976,7 +1033,7 @@ class NexusEngine:
                     nf.engagement_id = eng_id
                     all_findings.append(nf)
 
-        # 4. Plugin scanners
+        # 8. Plugin scanners
         if self.plugins and self.plugins.registry.scanners:
             for pname, sfn in self.plugins.registry.scanners.items():
                 try:

@@ -83,11 +83,17 @@ class TestNexusConfig:
             db_path=tmp_path / "test.db",
             output_dir=tmp_path / "output",
             auth_headers={"Authorization": "Bearer sensitive_token"},
+            wpscan_api_token="wp_secret_token_val",
+            api_keys={"wpscan": "wp_map_secret"},
             openapi_spec=tmp_path / "spec.yaml",
         )
         saved_path = cfg.save(tmp_path / "cfg.yaml")
         raw = saved_path.read_text(encoding="utf-8")
         loaded_dict = yaml.safe_load(raw)
         assert "sensitive_token" not in raw
+        assert "wp_secret_token_val" not in raw
+        assert "wp_map_secret" not in raw
         assert "auth_headers" not in loaded_dict
+        assert "wpscan_api_token" not in loaded_dict
+        assert "api_keys" not in loaded_dict
         assert "openapi_spec" in loaded_dict

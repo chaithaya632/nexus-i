@@ -13,7 +13,7 @@ body{font-family:system-ui,-apple-system,sans-serif;background:#0a0e17;color:#e0
 .header .status-dot{display:inline-block;width:10px;height:10px;border-radius:50%;margin-right:6px}
 .header .status-dot.ok{background:#00e676}.header .status-dot.err{background:#ff1744}
 .container{max-width:1400px;margin:0 auto;padding:20px}
-.cards{display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:12px;margin:16px 0}
+.cards{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:12px;margin:16px 0}
 .card{background:#141828;border:1px solid #1e2a4a;border-radius:8px;padding:16px}
 .card h3{color:#00d4ff;margin-bottom:8px;font-size:13px;text-transform:uppercase}
 .card .value{font-size:32px;font-weight:700;color:#fff}
@@ -59,9 +59,10 @@ tr:hover{background:#141828}
 
   <!-- Tabs -->
   <div class="tabs">
-    <div class="tab active" onclick="showTab('engagements')">Engagements</div>
-    <div class="tab" onclick="showTab('findings')">Findings</div>
-    <div class="tab" onclick="showTab('brain')">Brain Stats</div>
+    <div class="tab active" onclick="showTab('engagements', this)">Engagements</div>
+    <div class="tab" onclick="showTab('findings', this)">Findings</div>
+    <div class="tab" onclick="showTab('diff', this)">Diff</div>
+    <div class="tab" onclick="showTab('brain', this)">Brain Stats</div>
   </div>
 
   <!-- Engagements Tab -->
@@ -74,6 +75,19 @@ tr:hover{background:#141828}
     <div id="findings-view"><div class="empty">Select an engagement to view findings.</div></div>
   </div>
 
+  <!-- Diff Tab -->
+  <div class="tab-content" id="tab-diff">
+    <div class="card" style="margin-bottom:16px">
+      <h3>Compare Engagements (CI Regression Diff)</h3>
+      <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-top:8px">
+        <label>Baseline: <select id="diff-old" class="btn"></select></label>
+        <label>Current: <select id="diff-new" class="btn"></select></label>
+        <button class="btn" onclick="runDiff()">Compare</button>
+      </div>
+    </div>
+    <div id="diff-view"><div class="empty">Select two engagements and click Compare.</div></div>
+  </div>
+
   <!-- Brain Stats Tab -->
   <div class="tab-content" id="tab-brain">
     <div id="brain-stats"><div class="empty">Loading...</div></div>
@@ -82,18 +96,20 @@ tr:hover{background:#141828}
 
 <script>
 let currentEngId = null;
+let includeSuppressed = true;
+let cachedEngagements = [];
 
 function esc(v) {
   const d = document.createElement('div');
   d.textContent = v == null ? '' : String(v);
-  return d.innerHTML;
+  return d.innerHTML.replace(/"/g, '&quot;').replace(/'/g, '&#39;');
 }
 
-function showTab(name) {
+function showTab(name, tabEl) {
   document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
   document.querySelectorAll('.tab-content').forEach(t => t.classList.remove('active'));
-  if (typeof event !== 'undefined' && event && event.target) {
-    event.target.classList.add('active');
+  if (tabEl) {
+    tabEl.classList.add('active');
   }
   document.getElementById('tab-' + name).classList.add('active');
 }
@@ -112,14 +128,15 @@ async function loadStatus() {
     const r = await fetch('/api/status');
     const st = await r.json();
     document.getElementById('conn-status').innerHTML =
-      '<span class="status-dot ok"></span> Connected | Tier: ' + esc(st.tier) +
+      '<span class="status-dot ok"></span> Connected | Profile: ' + esc(st.profile || 'full') +
+      ' | Tier: ' + esc(st.tier) +
       ' | AI: ' + (st.ai && st.ai.available ? '✓ ' + esc(st.ai.model) : 'off');
 
     const b = st.brain || {};
     document.getElementById('stats-cards').innerHTML = [
       card('Expert Rules', b.expert_rules || 0, '#00d4ff'),
       card('CVEs', b.knowledge_cves || 0, '#ff6d00'),
-      card('Payloads', b.payloads || 0, '#00e676'),
+      card('Vector Entries', b.vector_entries || 0, '#00e676'),
       card('Remediations', b.remediations || 0, '#ffab00'),
       card('Default Creds', b.default_creds || 0, '#ff1744'),
       card('WAF Profiles', b.waf_profiles || 0, '#2979ff'),
@@ -142,29 +159,102 @@ async function loadEngagements() {
   try {
     const r = await fetch('/api/engagements');
     const engs = await r.json();
+    cachedEngagements = engs;
+    populateDiffSelectors(engs);
     if (!engs.length) {
       document.getElementById('engagements').innerHTML =
         '<div class="empty">No engagements yet. Run: nexus engage &lt;target&gt;</div>';
       return;
     }
-    let html = '<table><tr><th>ID</th><th>Name</th><th>Target</th><th>Phase</th><th>Created</th><th></th></tr>';
+    let html = '<table><tr><th>ID</th><th>Name</th><th>Target</th><th>Phase</th><th>Created</th><th>Actions</th></tr>';
     engs.forEach(e => {
       const safeId = esc(e.id);
+      const sarifHref = '/api/engagements/' + encodeURIComponent(e.id) + '/sarif';
       html += '<tr>' +
         '<td>' + safeId + '</td>' +
         '<td>' + esc(e.name) + '</td>' +
         '<td>' + esc(e.target) + '</td>' +
         '<td><span class="' + phaseClass(e.phase) + '">' + esc(e.phase) + '</span></td>' +
         '<td>' + esc(new Date(e.created_at).toLocaleString()) + '</td>' +
-        '<td><button class="btn" onclick="loadFindings(\'' + safeId + '\')">View</button></td>' +
+        '<td style="display:flex;gap:6px">' +
+          '<button class="btn view-eng-btn" data-eng-id="' + safeId + '">View</button>' +
+          '<a class="btn" href="' + sarifHref + '" download="nexus_' + safeId + '.sarif" style="text-decoration:none">SARIF</a>' +
+        '</td>' +
         '</tr>';
     });
     html += '</table>';
     document.getElementById('engagements').innerHTML = html;
+    document.querySelectorAll('#engagements .view-eng-btn').forEach(btn => {
+      btn.addEventListener('click', () => loadFindings(btn.dataset.engId));
+    });
   } catch (e) {
     document.getElementById('engagements').innerHTML =
       '<div class="empty">Failed to load engagements.</div>';
   }
+}
+
+function populateDiffSelectors(engs) {
+  const oldSel = document.getElementById('diff-old');
+  const newSel = document.getElementById('diff-new');
+  if (!oldSel || !newSel) return;
+  const prevOld = oldSel.value;
+  const prevNew = newSel.value;
+  const opts = engs.map(e => '<option value="' + esc(e.id) + '">' + esc(e.id) + ' (' + esc(e.target) + ')</option>').join('');
+  oldSel.innerHTML = opts;
+  newSel.innerHTML = opts;
+  if (prevOld) oldSel.value = prevOld;
+  if (prevNew) newSel.value = prevNew;
+  else if (engs.length >= 2) {
+    oldSel.selectedIndex = 1;
+    newSel.selectedIndex = 0;
+  }
+}
+
+async function runDiff() {
+  const oldId = document.getElementById('diff-old').value;
+  const newId = document.getElementById('diff-new').value;
+  const out = document.getElementById('diff-view');
+  if (!oldId || !newId) {
+    out.innerHTML = '<div class="empty">Need two engagements to compare.</div>';
+    return;
+  }
+  try {
+    const r = await fetch('/api/diff?old=' + encodeURIComponent(oldId) + '&new=' + encodeURIComponent(newId));
+    const d = await r.json();
+    if (!r.ok) {
+      out.innerHTML = '<div class="empty">' + esc(d.error || 'Diff failed') + '</div>';
+      return;
+    }
+    const c = d.counts || {};
+    let html = '<div class="cards">' +
+      card('New (Regressions)', c.new || 0, '#ff1744') +
+      card('Resolved', c.resolved || 0, '#00e676') +
+      card('Persistent', c.persistent || 0, '#ffab00') +
+      card('Suppressed', c.suppressed || 0, '#888') +
+      '</div>';
+    if ((d.new || []).length) {
+      html += '<h3 style="margin:10px 0;color:#ff1744">New Findings</h3><table><tr><th>Severity</th><th>Title</th><th>Host</th><th>Port</th></tr>';
+      d.new.forEach(f => {
+        html += '<tr><td>' + sevBadge(f.severity) + '</td><td>' + esc(f.title) + '</td><td>' + esc(f.host) + '</td><td>' + esc(f.port || '') + '</td></tr>';
+      });
+      html += '</table>';
+    }
+    if ((d.resolved || []).length) {
+      html += '<h3 style="margin:16px 0 10px;color:#00e676">Resolved Findings</h3><table><tr><th>Severity</th><th>Title</th><th>Host</th><th>Port</th></tr>';
+      d.resolved.forEach(f => {
+        html += '<tr><td>' + sevBadge(f.severity) + '</td><td>' + esc(f.title) + '</td><td>' + esc(f.host) + '</td><td>' + esc(f.port || '') + '</td></tr>';
+      });
+      html += '</table>';
+    }
+    out.innerHTML = html;
+  } catch (e) {
+    out.innerHTML = '<div class="empty">Diff request failed.</div>';
+  }
+}
+
+async function toggleSuppressed(checked) {
+  includeSuppressed = checked;
+  if (currentEngId) await loadFindings(currentEngId);
 }
 
 async function loadFindings(engId) {
@@ -177,13 +267,19 @@ async function loadFindings(engId) {
 
   try {
     const [fr, sr] = await Promise.all([
-      fetch('/api/engagements/' + encodeURIComponent(engId) + '/findings'),
+      fetch('/api/engagements/' + encodeURIComponent(engId) + '/findings?include_suppressed=' + String(includeSuppressed)),
       fetch('/api/engagements/' + encodeURIComponent(engId)),
     ]);
     const findings = await fr.json();
     const summary = await sr.json();
 
-    let html = '<h3>Engagement: ' + esc(summary.name || engId) + ' → ' + esc(summary.target || '') + '</h3>';
+    const sarifHref = '/api/engagements/' + encodeURIComponent(engId) + '/sarif';
+    let html = '<div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:10px">' +
+      '<h3>Engagement: ' + esc(summary.name || engId) + ' → ' + esc(summary.target || '') + '</h3>' +
+      '<div style="display:flex;gap:10px;align-items:center">' +
+        '<label style="font-size:13px"><input type="checkbox" ' + (includeSuppressed ? 'checked ' : '') + 'onchange="toggleSuppressed(this.checked)"> Show suppressed</label>' +
+        '<a class="btn" href="' + sarifHref + '" download="nexus_' + esc(engId) + '.sarif" style="text-decoration:none">Download SARIF</a>' +
+      '</div></div>';
 
     // Severity chart
     const sc = summary.severity_counts || {};
@@ -205,9 +301,12 @@ async function loadFindings(engId) {
     if (!findings.length) {
       html += '<div class="empty">No findings for this engagement.</div>';
     } else {
-      html += '<table><tr><th>Severity</th><th>Title</th><th>Host</th><th>Port</th><th>Tool</th><th>CVEs</th></tr>';
+      html += '<table><tr><th>Severity</th><th>Title</th><th>Host</th><th>Port</th><th>Tool</th><th>CVEs</th><th>Status</th></tr>';
       findings.forEach(f => {
         const sev = typeof f.severity === 'object' ? f.severity.value || f.severity : f.severity || 'info';
+        const statusCell = f.false_positive
+          ? '<span class="badge" style="background:#333;color:#ccc">suppressed</span>'
+          : (f.confirmed ? '<span class="badge" style="background:#00e676;color:#000">verified</span>' : '<span style="color:#888">detected</span>');
         html += '<tr>' +
           '<td>' + sevBadge(sev) + '</td>' +
           '<td>' + esc(f.title || '') + '</td>' +
@@ -215,6 +314,7 @@ async function loadFindings(engId) {
           '<td>' + esc(f.port || '') + '</td>' +
           '<td>' + esc(f.tool_source || '') + '</td>' +
           '<td>' + esc((f.cve_ids || []).join(', ') || '-') + '</td>' +
+          '<td>' + statusCell + '</td>' +
           '</tr>';
       });
       html += '</table>';

@@ -17,8 +17,10 @@ from nexus.scanner.network_services import (
     _parse_nmap_ftp_xml,
     _parse_nmap_smb_xml,
     _parse_nxc_smb_output,
+    audit_docker_api,
     audit_elasticsearch,
     audit_ftp,
+    audit_memcached,
     audit_network_service,
     audit_redis,
     audit_smb,
@@ -167,3 +169,32 @@ class TestFtpAndSmbAuditors:
 
         assert len(findings) == 1
         assert findings[0].cwe_id == "CWE-300"
+
+    @pytest.mark.asyncio
+    async def test_audit_docker_api_and_memcached(self) -> None:
+        class _DockerHandler(BaseHTTPRequestHandler):
+            def do_GET(self):
+                self.send_response(200)
+                self.send_header("Content-Type", "application/json")
+                self.end_headers()
+                self.wfile.write(json.dumps({"ApiVersion": "1.43", "Os": "linux"}).encode())
+
+            def log_message(self, format, *args):
+                pass
+
+        d_srv = HTTPServer(("127.0.0.1", 0), _DockerHandler)
+        d_port = d_srv.server_address[1]
+        threading.Thread(target=d_srv.serve_forever, daemon=True).start()
+        m_srv, m_port, _ = _start_tcp_responder(b"VERSION 1.6.22\r\n")
+        try:
+            d_findings = await audit_docker_api("127.0.0.1", d_port, timeout=3.0)
+            m_findings = await audit_network_service("127.0.0.1", m_port, "memcached")
+        finally:
+            d_srv.shutdown()
+            d_srv.server_close()
+            m_srv.close()
+
+        assert len(d_findings) == 1
+        assert d_findings[0].severity == Severity.CRITICAL and d_findings[0].tool_source == "docker_probe"
+        assert len(m_findings) == 1
+        assert m_findings[0].tool_source == "memcached_probe"

@@ -114,12 +114,12 @@ from nexus.scanner.web import ffuf_scan
 
 @pytest.mark.asyncio
 async def test_ffuf_no_tool():
-    """ffuf should raise ToolNotFoundError when not installed."""
-    if ToolRunner.is_available("ffuf"):
-        pytest.skip("ffuf is installed — integration test only")
+    """ffuf should raise ToolNotFoundError when binary is missing."""
+    from unittest.mock import patch
     from nexus.recon.runner import ToolNotFoundError
-    with pytest.raises(ToolNotFoundError):
-        await ffuf_scan("http://example.com")
+    with patch("nexus.recon.runner.asyncio.create_subprocess_exec", side_effect=FileNotFoundError("ffuf")):
+        with pytest.raises(ToolNotFoundError):
+            await ffuf_scan("http://example.com")
 
 
 # ── Importer tests ───────────────────────────────────────────────

@@ -62,9 +62,9 @@ class DashboardApp:
         self.app = FastAPI(title="NEXUS Dashboard", version=__version__)
         self.app.add_middleware(
             CORSMiddleware,
-            allow_origins=["*"],
-            allow_credentials=True,
-            allow_methods=["*"],
+            allow_origin_regex=r"^https?://(127\.0\.0\.1|localhost)(:\d+)?$",
+            allow_credentials=False,
+            allow_methods=["GET", "POST", "OPTIONS"],
             allow_headers=["*"],
         )
         self._ws_clients: list[WebSocket] = []

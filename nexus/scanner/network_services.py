@@ -222,12 +222,16 @@ async def audit_smb(host: str, port: int = 445, *, timeout: int = 45) -> list[Fi
     return []
 
 
+def _url_host(host: str) -> str:
+    return f"[{host}]" if ":" in host and not host.startswith("[") else host
+
+
 async def audit_elasticsearch(host: str, port: int = 9200, *, timeout: float = 6.0) -> list[Finding]:
     """Read-only HTTP check for unauthenticated Elasticsearch cluster API exposure."""
-    url = f"http://{host}:{port}/"
+    url = f"http://{_url_host(host)}:{port}/"
     try:
         async with make_http_client(timeout=timeout) as client:
-            resp = await client.get(url)
+            resp = await client.get(url, follow_redirects=False)
             if resp.status_code == 200 and "cluster_name" in resp.text and "tagline" in resp.text:
                 return [
                     Finding(
@@ -248,6 +252,63 @@ async def audit_elasticsearch(host: str, port: int = 9200, *, timeout: float = 6
     return []
 
 
+async def audit_docker_api(host: str, port: int = 2375, *, timeout: float = 6.0) -> list[Finding]:
+    """Read-only HTTP check for unauthenticated Docker Engine REST API (TCP 2375)."""
+    url = f"http://{_url_host(host)}:{port}/version"
+    try:
+        async with make_http_client(timeout=timeout) as client:
+            resp = await client.get(url, follow_redirects=False)
+            if resp.status_code == 200 and "ApiVersion" in resp.text and ("Os" in resp.text or "Components" in resp.text):
+                return [
+                    Finding(
+                        host=host,
+                        port=port,
+                        protocol="http",
+                        title="Docker: Unauthenticated Engine API Exposed",
+                        description=f"Docker daemon REST API at {url} responds without TLS client authentication.",
+                        severity=Severity.CRITICAL,
+                        cwe_id="CWE-306",
+                        tool_source="docker_probe",
+                        evidence=resp.text[:400],
+                        confirmed=True,
+                    )
+                ]
+    except Exception as exc:
+        log.debug("Docker API probe skipped/failed for %s:%d: %s", host, port, exc)
+    return []
+
+
+def _probe_memcached_sync(host: str, port: int, timeout: float = 5.0) -> list[Finding]:
+    """Send a single read-only `version` command to check unauthenticated Memcached exposure."""
+    findings: list[Finding] = []
+    try:
+        with socket.create_connection((host, port), timeout=timeout) as sock:
+            sock.settimeout(timeout)
+            sock.sendall(b"version\r\n")
+            resp = sock.recv(256).decode("utf-8", errors="replace").strip()
+            if resp.startswith("VERSION "):
+                findings.append(Finding(
+                    host=host,
+                    port=port,
+                    protocol="memcached",
+                    title="Memcached: Unauthenticated Cache Exposed",
+                    description=f"Memcached on {host}:{port} discloses version and accepts unauthenticated commands.",
+                    severity=Severity.MEDIUM,
+                    cwe_id="CWE-306",
+                    tool_source="memcached_probe",
+                    evidence=f"Command: version -> {resp[:200]}",
+                    confirmed=True,
+                ))
+    except OSError as exc:
+        log.debug("Memcached probe failed for %s:%d: %s", host, port, exc)
+    return findings
+
+
+async def audit_memcached(host: str, port: int = 11211, *, timeout: float = 5.0) -> list[Finding]:
+    """Audit Memcached port for unauthenticated exposure."""
+    return await asyncio.to_thread(_probe_memcached_sync, host, port, timeout)
+
+
 async def audit_network_service(host: str, port: int, service: str = "") -> list[Finding]:
     """Dispatch defensive posture audit for non-HTTP network/datastore ports."""
     svc = service.lower().strip()
@@ -259,4 +320,8 @@ async def audit_network_service(host: str, port: int, service: str = "") -> list
         return await audit_smb(host, port)
     if port == 9200 or "elastic" in svc:
         return await audit_elasticsearch(host, port)
+    if port == 2375 or "docker" in svc:
+        return await audit_docker_api(host, port)
+    if port == 11211 or "memcache" in svc:
+        return await audit_memcached(host, port)
     return []
