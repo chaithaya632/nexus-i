@@ -1,0 +1,73 @@
+# Network Lateral Movement Chains — NEXUS Knowledge Base
+
+chains:
+  smb_to_lateral:
+    name: "SMB Shares → Credential Harvest → Lateral Movement"
+    description: "Enumerate SMB shares, extract credentials, pivot to other hosts"
+    impact: critical
+    preconditions: ["service_smb"]
+    steps:
+      - condition: "service_smb"
+        action: "enum_shares"
+        tool: "crackmapexec"
+        next: "shares_found"
+        weight: 0.2
+      - condition: "shares_found"
+        action: "read_sensitive_files"
+        tool: "smbclient"
+        next: "config_files_read"
+        weight: 0.4
+      - condition: "config_files_read"
+        action: "extract_creds_from_configs"
+        tool: "custom"
+        next: "credentials_obtained"
+        weight: 0.3
+      - condition: "credentials_obtained"
+        action: "spray_creds_across_hosts"
+        tool: "crackmapexec"
+        next: "lateral_movement"
+        weight: 0.3
+
+  ssh_key_reuse:
+    name: "SSH Key Found → Multi-host Access"
+    description: "Reuse discovered SSH keys across network hosts"
+    impact: high
+    preconditions: ["ssh_access"]
+    steps:
+      - condition: "ssh_access"
+        action: "enumerate_ssh_keys"
+        tool: "ssh"
+        next: "ssh_keys_found"
+        weight: 0.3
+      - condition: "ssh_keys_found"
+        action: "scan_internal_hosts"
+        tool: "nmap"
+        next: "internal_ssh_found"
+        weight: 0.2
+      - condition: "internal_ssh_found"
+        action: "try_keys_on_hosts"
+        tool: "ssh"
+        next: "lateral_movement"
+        weight: 0.3
+
+  credential_spray:
+    name: "Credential Spray → Multi-service Access"
+    description: "Test obtained credentials across all discovered services"
+    impact: high
+    preconditions: ["credentials_obtained"]
+    steps:
+      - condition: "credentials_obtained"
+        action: "spray_ssh"
+        tool: "hydra"
+        next: "ssh_access"
+        weight: 0.3
+      - condition: "credentials_obtained"
+        action: "spray_rdp"
+        tool: "hydra"
+        next: "rdp_access"
+        weight: 0.4
+      - condition: "credentials_obtained"
+        action: "spray_web_admin"
+        tool: "hydra"
+        next: "admin_access"
+        weight: 0.3

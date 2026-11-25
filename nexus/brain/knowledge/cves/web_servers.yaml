@@ -1,0 +1,115 @@
+# Web Server CVEs — NEXUS Knowledge Base
+# Format: each CVE has: description, severity, cvss, affected products, exploit references
+
+cves:
+  CVE-2021-41773:
+    description: "Apache HTTP Server 2.4.49 path traversal and RCE via mod_cgi"
+    severity: critical
+    cvss: 9.8
+    products: ["apache-httpd-2.4.49"]
+    cwe: "CWE-22"
+    exploit_tools: ["curl", "nuclei"]
+    fingerprints: ["Apache/2.4.49"]
+
+  CVE-2021-42013:
+    description: "Apache HTTP Server 2.4.50 path traversal bypass of CVE-2021-41773 fix"
+    severity: critical
+    cvss: 9.8
+    products: ["apache-httpd-2.4.50"]
+    cwe: "CWE-22"
+    exploit_tools: ["curl", "nuclei"]
+    fingerprints: ["Apache/2.4.50"]
+
+  CVE-2017-5638:
+    description: "Apache Struts 2 RCE via Content-Type header (Equifax breach)"
+    severity: critical
+    cvss: 10.0
+    products: ["apache-struts-2.3", "apache-struts-2.5"]
+    cwe: "CWE-20"
+    exploit_tools: ["nuclei", "msfconsole"]
+    fingerprints: ["Struts"]
+
+  CVE-2019-0211:
+    description: "Apache HTTP Server 2.4.17-2.4.38 local privilege escalation"
+    severity: high
+    cvss: 7.8
+    products: ["apache-httpd-2.4"]
+    cwe: "CWE-416"
+    exploit_tools: ["custom"]
+
+  CVE-2020-5902:
+    description: "F5 BIG-IP TMUI RCE via directory traversal"
+    severity: critical
+    cvss: 9.8
+    products: ["f5-bigip"]
+    cwe: "CWE-22"
+    exploit_tools: ["curl", "nuclei"]
+
+  CVE-2021-22986:
+    description: "F5 BIG-IP iControl REST unauthenticated RCE"
+    severity: critical
+    cvss: 9.8
+    products: ["f5-bigip"]
+    cwe: "CWE-306"
+    exploit_tools: ["curl", "nuclei"]
+
+  CVE-2017-12617:
+    description: "Apache Tomcat PUT method RCE via JSP upload"
+    severity: high
+    cvss: 8.1
+    products: ["apache-tomcat-7", "apache-tomcat-8", "apache-tomcat-9"]
+    cwe: "CWE-434"
+    exploit_tools: ["curl", "nuclei"]
+    fingerprints: ["Apache-Coyote", "Tomcat"]
+
+  CVE-2020-1938:
+    description: "Apache Tomcat AJP Ghostcat file read/inclusion"
+    severity: critical
+    cvss: 9.8
+    products: ["apache-tomcat"]
+    cwe: "CWE-22"
+    exploit_tools: ["nmap", "msfconsole"]
+    fingerprints: ["Tomcat"]
+
+  CVE-2021-44228:
+    description: "Apache Log4j2 RCE via JNDI lookup (Log4Shell)"
+    severity: critical
+    cvss: 10.0
+    products: ["log4j-2.0-2.14.1"]
+    cwe: "CWE-917"
+    exploit_tools: ["nuclei", "custom"]
+    fingerprints: ["Java", "Tomcat", "Spring"]
+
+  CVE-2024-6387:
+    description: "OpenSSH regreSSHion pre-auth RCE (glibc-based Linux)"
+    severity: critical
+    cvss: 8.1
+    products: ["openssh-8.5-9.7"]
+    cwe: "CWE-362"
+    exploit_tools: ["custom"]
+    fingerprints: ["OpenSSH"]
+
+  CVE-2023-44487:
+    description: "HTTP/2 Rapid Reset DDoS vulnerability"
+    severity: high
+    cvss: 7.5
+    products: ["nginx", "apache-httpd", "envoy"]
+    cwe: "CWE-400"
+    exploit_tools: ["custom"]
+
+  CVE-2023-25690:
+    description: "Apache HTTP Server 2.4.0-2.4.55 mod_proxy HTTP request smuggling"
+    severity: critical
+    cvss: 9.8
+    products: ["apache-httpd-2.4"]
+    cwe: "CWE-444"
+    exploit_tools: ["nuclei", "custom"]
+
+  CVE-2019-11043:
+    description: "PHP-FPM + Nginx RCE via path_info misconfiguration"
+    severity: critical
+    cvss: 9.8
+    products: ["php-fpm-7", "nginx"]
+    cwe: "CWE-120"
+    exploit_tools: ["custom", "nuclei"]
+    fingerprints: ["nginx", "PHP"]

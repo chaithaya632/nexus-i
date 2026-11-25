@@ -1,0 +1,95 @@
+# Web-to-RCE Attack Chains — NEXUS Knowledge Base
+
+chains:
+  sqli_to_rce:
+    name: "SQLi → Credential Dump → Admin Panel → Webshell → RCE"
+    description: "Classic web exploitation chain starting from SQL injection"
+    impact: critical
+    preconditions: ["service_http", "sqli_found"]
+    steps:
+      - condition: "sqli_found"
+        action: "sqli_exploit"
+        tool: "sqlmap"
+        next: "db_dumped"
+        weight: 0.3
+      - condition: "db_dumped"
+        action: "extract_credentials"
+        tool: "sqlmap"
+        next: "credentials_obtained"
+        weight: 0.2
+      - condition: "credentials_obtained"
+        action: "login_admin_panel"
+        tool: "custom"
+        next: "admin_access"
+        weight: 0.3
+      - condition: "admin_access"
+        action: "upload_webshell"
+        tool: "custom"
+        next: "webshell_uploaded"
+        weight: 0.4
+      - condition: "webshell_uploaded"
+        action: "execute_commands"
+        tool: "custom"
+        next: "rce_achieved"
+        weight: 0.1
+
+  lfi_to_rce:
+    name: "LFI → Log Poisoning → RCE"
+    description: "Local File Inclusion escalated to RCE via log poisoning"
+    impact: critical
+    preconditions: ["service_http", "lfi_found"]
+    steps:
+      - condition: "lfi_found"
+        action: "read_access_log"
+        tool: "curl"
+        next: "log_readable"
+        weight: 0.3
+      - condition: "log_readable"
+        action: "inject_php_in_useragent"
+        tool: "curl"
+        next: "log_poisoned"
+        weight: 0.3
+      - condition: "log_poisoned"
+        action: "include_poisoned_log"
+        tool: "curl"
+        next: "rce_achieved"
+        weight: 0.2
+
+  ssti_to_rce:
+    name: "SSTI → RCE via Template Engine"
+    description: "Server-Side Template Injection directly to code execution"
+    impact: critical
+    preconditions: ["service_http", "ssti_found"]
+    steps:
+      - condition: "ssti_found"
+        action: "identify_template_engine"
+        tool: "nuclei"
+        next: "engine_identified"
+        weight: 0.2
+      - condition: "engine_identified"
+        action: "exploit_ssti"
+        tool: "custom"
+        next: "rce_achieved"
+        weight: 0.3
+
+  tomcat_manager_to_rce:
+    name: "Tomcat Manager → WAR Deploy → RCE"
+    description: "Exploit exposed Tomcat Manager to deploy a malicious WAR file"
+    impact: critical
+    preconditions: ["service_tomcat"]
+    steps:
+      - condition: "service_tomcat"
+        action: "find_manager"
+        tool: "ffuf"
+        next: "manager_found"
+        weight: 0.2
+      - condition: "manager_found"
+        action: "bruteforce_creds"
+        tool: "hydra"
+        next: "tomcat_creds_obtained"
+        weight: 0.4
+      - condition: "tomcat_creds_obtained"
+        action: "deploy_war_shell"
+        tool: "msfconsole"
+        next: "rce_achieved"
+        weight: 0.2

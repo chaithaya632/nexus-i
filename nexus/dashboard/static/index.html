@@ -1,0 +1,250 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>NEXUS Dashboard</title>
+<style>
+*{margin:0;padding:0;box-sizing:border-box}
+body{font-family:system-ui,-apple-system,sans-serif;background:#0a0e17;color:#e0e0e0}
+.header{background:linear-gradient(135deg,#1a1a2e,#16213e);padding:20px 30px;border-bottom:2px solid #0f3460;display:flex;justify-content:space-between;align-items:center}
+.header h1{color:#00d4ff;font-size:24px}
+.header .sub{color:#888;font-size:14px}
+.header .status-dot{display:inline-block;width:10px;height:10px;border-radius:50%;margin-right:6px}
+.header .status-dot.ok{background:#00e676}.header .status-dot.err{background:#ff1744}
+.container{max-width:1400px;margin:0 auto;padding:20px}
+.cards{display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:12px;margin:16px 0}
+.card{background:#141828;border:1px solid #1e2a4a;border-radius:8px;padding:16px}
+.card h3{color:#00d4ff;margin-bottom:8px;font-size:13px;text-transform:uppercase}
+.card .value{font-size:32px;font-weight:700;color:#fff}
+.card .label{color:#888;font-size:12px;margin-top:4px}
+.section{margin:24px 0}
+.section h2{color:#00d4ff;font-size:18px;margin-bottom:12px;border-bottom:1px solid #1e2a4a;padding-bottom:8px}
+table{width:100%;border-collapse:collapse}
+th,td{text-align:left;padding:10px 12px;border-bottom:1px solid #1e2a4a}
+th{color:#00d4ff;font-size:12px;text-transform:uppercase;background:#0d1120}
+tr:hover{background:#141828}
+.badge{padding:3px 8px;border-radius:3px;font-size:11px;font-weight:600;text-transform:uppercase}
+.sev-critical{background:#ff1744;color:#fff}.sev-high{background:#ff6d00;color:#fff}
+.sev-medium{background:#ffab00;color:#000}.sev-low{background:#00e676;color:#000}
+.sev-info{background:#2979ff;color:#fff}
+.phase-complete{color:#00e676}.phase-exploit{color:#ff1744}.phase-scan{color:#ffab00}
+.phase-recon{color:#00d4ff}.phase-init{color:#666}
+.empty{color:#666;padding:40px;text-align:center;font-style:italic}
+.detail-panel{background:#141828;border:1px solid #1e2a4a;border-radius:8px;padding:20px;margin:12px 0;display:none}
+.btn{background:#0f3460;color:#00d4ff;border:1px solid #1e4a7a;padding:6px 14px;border-radius:4px;cursor:pointer;font-size:13px}
+.btn:hover{background:#1e4a7a}
+.severity-chart{display:flex;height:24px;border-radius:4px;overflow:hidden;margin:8px 0}
+.severity-chart div{transition:width .3s}
+.risk-grid{display:grid;grid-template-columns:repeat(5,1fr);gap:8px;margin:12px 0}
+.risk-cell{text-align:center;padding:8px;border-radius:4px}
+.tabs{display:flex;gap:4px;margin:16px 0 12px}
+.tab{padding:8px 16px;background:#0d1120;border:1px solid #1e2a4a;border-radius:4px 4px 0 0;cursor:pointer;color:#888;font-size:13px}
+.tab.active{background:#141828;color:#00d4ff;border-bottom-color:#141828}
+.tab-content{display:none}.tab-content.active{display:block}
+</style>
+</head>
+<body>
+<div class="header">
+  <div>
+    <h1>⚡ NEXUS Dashboard</h1>
+    <div class="sub">Network EXploration & Unified Security</div>
+  </div>
+  <div id="conn-status"><span class="status-dot err"></span> Connecting...</div>
+</div>
+
+<div class="container">
+  <!-- Status Cards -->
+  <div class="cards" id="stats-cards"></div>
+
+  <!-- Tabs -->
+  <div class="tabs">
+    <div class="tab active" onclick="showTab('engagements')">Engagements</div>
+    <div class="tab" onclick="showTab('findings')">Findings</div>
+    <div class="tab" onclick="showTab('brain')">Brain Stats</div>
+  </div>
+
+  <!-- Engagements Tab -->
+  <div class="tab-content active" id="tab-engagements">
+    <div id="engagements"><div class="empty">Loading...</div></div>
+  </div>
+
+  <!-- Findings Tab -->
+  <div class="tab-content" id="tab-findings">
+    <div id="findings-view"><div class="empty">Select an engagement to view findings.</div></div>
+  </div>
+
+  <!-- Brain Stats Tab -->
+  <div class="tab-content" id="tab-brain">
+    <div id="brain-stats"><div class="empty">Loading...</div></div>
+  </div>
+</div>
+
+<script>
+let currentEngId = null;
+
+function esc(v) {
+  const d = document.createElement('div');
+  d.textContent = v == null ? '' : String(v);
+  return d.innerHTML;
+}
+
+function showTab(name) {
+  document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+  document.querySelectorAll('.tab-content').forEach(t => t.classList.remove('active'));
+  if (typeof event !== 'undefined' && event && event.target) {
+    event.target.classList.add('active');
+  }
+  document.getElementById('tab-' + name).classList.add('active');
+}
+
+function sevBadge(sev) {
+  const s = esc(sev);
+  return '<span class="badge sev-' + s + '">' + s + '</span>';
+}
+
+function phaseClass(phase) {
+  return 'phase-' + esc(phase);
+}
+
+async function loadStatus() {
+  try {
+    const r = await fetch('/api/status');
+    const st = await r.json();
+    document.getElementById('conn-status').innerHTML =
+      '<span class="status-dot ok"></span> Connected | Tier: ' + esc(st.tier) +
+      ' | AI: ' + (st.ai && st.ai.available ? '✓ ' + esc(st.ai.model) : 'off');
+
+    const b = st.brain || {};
+    document.getElementById('stats-cards').innerHTML = [
+      card('Expert Rules', b.expert_rules || 0, '#00d4ff'),
+      card('CVEs', b.knowledge_cves || 0, '#ff6d00'),
+      card('Payloads', b.payloads || 0, '#00e676'),
+      card('Remediations', b.remediations || 0, '#ffab00'),
+      card('Default Creds', b.default_creds || 0, '#ff1744'),
+      card('WAF Profiles', b.waf_profiles || 0, '#2979ff'),
+    ].join('');
+
+    // Brain stats tab
+    let brainHtml = '<table><tr><th>Component</th><th>Count</th></tr>';
+    for (const [k, v] of Object.entries(b)) {
+      brainHtml += '<tr><td>' + esc(k.replace(/_/g, ' ')) + '</td><td>' + esc(v) + '</td></tr>';
+    }
+    brainHtml += '</table>';
+    document.getElementById('brain-stats').innerHTML = brainHtml;
+  } catch (e) {
+    document.getElementById('conn-status').innerHTML =
+      '<span class="status-dot err"></span> Disconnected';
+  }
+}
+
+async function loadEngagements() {
+  try {
+    const r = await fetch('/api/engagements');
+    const engs = await r.json();
+    if (!engs.length) {
+      document.getElementById('engagements').innerHTML =
+        '<div class="empty">No engagements yet. Run: nexus engage &lt;target&gt;</div>';
+      return;
+    }
+    let html = '<table><tr><th>ID</th><th>Name</th><th>Target</th><th>Phase</th><th>Created</th><th></th></tr>';
+    engs.forEach(e => {
+      const safeId = esc(e.id);
+      html += '<tr>' +
+        '<td>' + safeId + '</td>' +
+        '<td>' + esc(e.name) + '</td>' +
+        '<td>' + esc(e.target) + '</td>' +
+        '<td><span class="' + phaseClass(e.phase) + '">' + esc(e.phase) + '</span></td>' +
+        '<td>' + esc(new Date(e.created_at).toLocaleString()) + '</td>' +
+        '<td><button class="btn" onclick="loadFindings(\'' + safeId + '\')">View</button></td>' +
+        '</tr>';
+    });
+    html += '</table>';
+    document.getElementById('engagements').innerHTML = html;
+  } catch (e) {
+    document.getElementById('engagements').innerHTML =
+      '<div class="empty">Failed to load engagements.</div>';
+  }
+}
+
+async function loadFindings(engId) {
+  currentEngId = engId;
+  // Switch to findings tab
+  document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+  document.querySelectorAll('.tab-content').forEach(t => t.classList.remove('active'));
+  document.querySelectorAll('.tab')[1].classList.add('active');
+  document.getElementById('tab-findings').classList.add('active');
+
+  try {
+    const [fr, sr] = await Promise.all([
+      fetch('/api/engagements/' + encodeURIComponent(engId) + '/findings'),
+      fetch('/api/engagements/' + encodeURIComponent(engId)),
+    ]);
+    const findings = await fr.json();
+    const summary = await sr.json();
+
+    let html = '<h3>Engagement: ' + esc(summary.name || engId) + ' → ' + esc(summary.target || '') + '</h3>';
+
+    // Severity chart
+    const sc = summary.severity_counts || {};
+    const total = Object.values(sc).reduce((a, b) => a + b, 0) || 1;
+    html += '<div class="severity-chart">';
+    ['critical', 'high', 'medium', 'low', 'info'].forEach(s => {
+      const pct = ((sc[s] || 0) / total * 100).toFixed(1);
+      if (pct > 0) html += '<div class="sev-' + s + '" style="width:' + pct + '%" title="' + s + ': ' + (sc[s]||0) + '"></div>';
+    });
+    html += '</div>';
+
+    // Risk grid
+    html += '<div class="risk-grid">';
+    ['critical', 'high', 'medium', 'low', 'info'].forEach(s => {
+      html += '<div class="risk-cell sev-' + s + '">' + esc(sc[s] || 0) + '<br><small>' + s + '</small></div>';
+    });
+    html += '</div>';
+
+    if (!findings.length) {
+      html += '<div class="empty">No findings for this engagement.</div>';
+    } else {
+      html += '<table><tr><th>Severity</th><th>Title</th><th>Host</th><th>Port</th><th>Tool</th><th>CVEs</th></tr>';
+      findings.forEach(f => {
+        const sev = typeof f.severity === 'object' ? f.severity.value || f.severity : f.severity || 'info';
+        html += '<tr>' +
+          '<td>' + sevBadge(sev) + '</td>' +
+          '<td>' + esc(f.title || '') + '</td>' +
+          '<td>' + esc(f.host || '') + '</td>' +
+          '<td>' + esc(f.port || '') + '</td>' +
+          '<td>' + esc(f.tool_source || '') + '</td>' +
+          '<td>' + esc((f.cve_ids || []).join(', ') || '-') + '</td>' +
+          '</tr>';
+      });
+      html += '</table>';
+    }
+    document.getElementById('findings-view').innerHTML = html;
+  } catch (e) {
+    document.getElementById('findings-view').innerHTML =
+      '<div class="empty">Failed to load findings.</div>';
+  }
+}
+
+function card(label, value, color) {
+  return '<div class="card"><div class="value" style="color:' + esc(color) + '">' + esc(value) +
+    '</div><div class="label">' + esc(label) + '</div></div>';
+}
+
+// Initial load
+loadStatus();
+loadEngagements();
+setInterval(loadStatus, 15000);
+setInterval(loadEngagements, 15000);
+
+// WebSocket
+try {
+  const ws = new WebSocket((location.protocol === 'https:' ? 'wss:' : 'ws:') + '//' + location.host + '/ws');
+  ws.onmessage = function(e) {
+    try { const m = JSON.parse(e.data); if (m.event) { loadStatus(); loadEngagements(); } } catch(x) {}
+  };
+  ws.onclose = function() { setTimeout(() => location.reload(), 10000); };
+} catch(e) {}
+</script>
+</body>
+</html>

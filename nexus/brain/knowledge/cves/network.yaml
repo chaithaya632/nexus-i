@@ -1,0 +1,63 @@
+# Network Service CVEs — NEXUS Knowledge Base
+
+cves:
+  CVE-2017-0144:
+    description: "Windows SMB EternalBlue RCE (MS17-010)"
+    severity: critical
+    cvss: 9.8
+    products: ["windows-smb-v1"]
+    cwe: "CWE-120"
+    exploit_tools: ["msfconsole", "nmap"]
+    fingerprints: ["Windows", "SMBv1"]
+
+  CVE-2020-0796:
+    description: "Windows SMBv3 SMBGhost RCE (compression)"
+    severity: critical
+    cvss: 10.0
+    products: ["windows-smbv3"]
+    cwe: "CWE-120"
+    exploit_tools: ["msfconsole", "custom"]
+    fingerprints: ["Windows 10", "SMBv3"]
+
+  CVE-2019-0708:
+    description: "Windows RDP BlueKeep pre-auth RCE"
+    severity: critical
+    cvss: 9.8
+    products: ["windows-rdp"]
+    cwe: "CWE-416"
+    exploit_tools: ["msfconsole", "nmap"]
+    fingerprints: ["Windows RDP"]
+
+  CVE-2014-0160:
+    description: "OpenSSL Heartbleed — memory disclosure"
+    severity: high
+    cvss: 7.5
+    products: ["openssl-1.0.1"]
+    cwe: "CWE-126"
+    exploit_tools: ["nmap", "msfconsole"]
+    fingerprints: ["OpenSSL"]
+
+  CVE-2015-7547:
+    description: "glibc getaddrinfo stack buffer overflow"
+    severity: critical
+    cvss: 8.1
+    products: ["glibc-2.9-2.22"]
+    cwe: "CWE-120"
+    exploit_tools: ["custom"]
+
+  CVE-2023-38408:
+    description: "OpenSSH ssh-agent RCE via forwarded agent"
+    severity: critical
+    cvss: 9.8
+    products: ["openssh"]
+    cwe: "CWE-426"
+    exploit_tools: ["custom"]
+    fingerprints: ["OpenSSH"]
+
+  CVE-2021-3156:
+    description: "Sudo Baron Samedit heap buffer overflow privilege escalation"
+    severity: high
+    cvss: 7.8
+    products: ["sudo-1.8-1.9"]
+    cwe: "CWE-122"
+    exploit_tools: ["custom"]

@@ -1,0 +1,103 @@
+# NEXUS AI Model Configurations
+# ─────────────────────────────
+# Models are grouped by resource tier.  NEXUS auto-selects the best
+# model for the detected tier.  All models must be uncensored —
+# censored models refuse security-analysis prompts.
+
+tiers:
+  minimal:
+    # 2GB RAM — CPU only, tiny model for basic analysis
+    primary: "qwen2.5:0.5b"
+    fallback: null
+    max_tokens: 512
+    temperature: 0.3
+    notes: "Very limited accuracy.  Expert system does the heavy lifting."
+
+  light:
+    # 4GB RAM — the sweet spot for most pentest VMs
+    primary: "dolphin-mistral"
+    fallback: "qwen2.5:1.5b"
+    max_tokens: 2048
+    temperature: 0.3
+    notes: "Uncensored Mistral 7B.  Best balance of accuracy and speed."
+
+  standard:
+    # 6GB RAM — dedicated pentest machine
+    primary: "dolphin-mistral"
+    fallback: "whiterabbitneo"
+    max_tokens: 4096
+    temperature: 0.3
+    notes: "Full Mistral 7B with room for larger context windows."
+
+  full:
+    # 12GB+ RAM — workstation with GPU
+    primary: "dolphin-llama3"
+    fallback: "dolphin-mistral"
+    max_tokens: 4096
+    temperature: 0.3
+    notes: "Llama-3 8B for best reasoning quality.  GPU recommended."
+
+# Recommended models with their characteristics
+models:
+  dolphin-mistral:
+    size_gb: 4.1
+    vram_gb: 5.0
+    min_ram_gb: 4
+    uncensored: true
+    strengths:
+      - "General security analysis"
+      - "Vulnerability explanation"
+      - "Report writing"
+    weaknesses:
+      - "May miss niche protocol-specific details"
+
+  whiterabbitneo:
+    size_gb: 4.1
+    vram_gb: 5.0
+    min_ram_gb: 4
+    uncensored: true
+    strengths:
+      - "Cybersecurity-specific training data"
+      - "Exploit technique knowledge"
+      - "Attack chain reasoning"
+    weaknesses:
+      - "Less polished report writing"
+      - "Narrower general knowledge"
+
+  dolphin-llama3:
+    size_gb: 4.7
+    vram_gb: 6.0
+    min_ram_gb: 6
+    uncensored: true
+    strengths:
+      - "Superior reasoning and instruction following"
+      - "Better context handling"
+      - "High quality report output"
+    weaknesses:
+      - "Needs more RAM/VRAM"
+      - "Slower on CPU-only systems"
+
+  qwen2.5:0.5b:
+    size_gb: 0.4
+    vram_gb: 1.0
+    min_ram_gb: 2
+    uncensored: true
+    strengths:
+      - "Runs on anything"
+      - "Very fast inference"
+    weaknesses:
+      - "Limited accuracy"
+      - "Short context window"
+      - "Cannot reason about complex chains"
+
+  qwen2.5:1.5b:
+    size_gb: 1.0
+    vram_gb: 2.0
+    min_ram_gb: 2
+    uncensored: true
+    strengths:
+      - "Reasonable accuracy for its size"
+      - "Good fallback when resources are tight"
+    weaknesses:
+      - "Limited reasoning depth"
+      - "May miss subtle issues"

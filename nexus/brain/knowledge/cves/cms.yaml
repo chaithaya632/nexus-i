@@ -1,0 +1,55 @@
+# CMS CVEs — NEXUS Knowledge Base
+
+cves:
+  CVE-2018-7600:
+    description: "Drupal Drupalgeddon 2 RCE"
+    severity: critical
+    cvss: 9.8
+    products: ["drupal-7", "drupal-8"]
+    cwe: "CWE-20"
+    exploit_tools: ["nuclei", "msfconsole"]
+    fingerprints: ["Drupal"]
+
+  CVE-2019-6340:
+    description: "Drupal REST module RCE via deserialization"
+    severity: critical
+    cvss: 8.1
+    products: ["drupal-8"]
+    cwe: "CWE-502"
+    exploit_tools: ["nuclei", "custom"]
+    fingerprints: ["Drupal"]
+
+  CVE-2020-36326:
+    description: "PHPMailer object injection via deserialization"
+    severity: critical
+    cvss: 9.8
+    products: ["phpmailer"]
+    cwe: "CWE-502"
+    exploit_tools: ["custom"]
+
+  CVE-2023-23752:
+    description: "Joomla 4.0-4.2.7 unauthorized API access — information disclosure"
+    severity: medium
+    cvss: 5.3
+    products: ["joomla-4"]
+    cwe: "CWE-200"
+    exploit_tools: ["curl", "nuclei"]
+    fingerprints: ["Joomla"]
+
+  CVE-2024-27956:
+    description: "WordPress WP-Automatic plugin SQL injection"
+    severity: critical
+    cvss: 9.8
+    products: ["wordpress-wp-automatic"]
+    cwe: "CWE-89"
+    exploit_tools: ["sqlmap", "nuclei"]
+    fingerprints: ["WordPress"]
+
+  CVE-2023-28121:
+    description: "WordPress WooCommerce Payments auth bypass"
+    severity: critical
+    cvss: 9.8
+    products: ["woocommerce-payments"]
+    cwe: "CWE-287"
+    exploit_tools: ["nuclei", "custom"]
+    fingerprints: ["WordPress", "WooCommerce"]
