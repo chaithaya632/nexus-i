@@ -379,3 +379,98 @@ class TestDashboardApp:
 
         index_html = client.get("/").text
         assert "Proxy History" in index_html or "/api/proxy/diff" in index_html
+        assert "proxy-repeater-send" in index_html
+        assert "rep-url" in index_html
+
+        # Priority backlog endpoint
+        from nexus.db.models import Finding, Severity
+
+        engine.db.add_finding(
+            Finding(
+                engagement_id=eng.id,
+                host="proxy.example.test",
+                title="KEV Alert",
+                cve_ids=["CVE-2021-44228"],
+                severity=Severity.CRITICAL,
+                confirmed=True,
+            )
+        )
+        r_pri = client.get(f"/api/engagements/{eng.id}/priority")
+        assert r_pri.status_code == 200
+        assert r_pri.json()["kev_flagged"] == 1
+        assert client.get("/api/engagements/missing/priority").status_code == 404
+
+    def test_proxy_replay_scope_validation_and_persistence(self, engine):
+        from unittest.mock import AsyncMock, MagicMock, patch
+
+        from nexus.core.scope import ScopeEnforcer
+
+        dash = DashboardApp(engine)
+        client = TestClient(dash.app)
+
+        # 1. Fail-closed when no engagement scope is active
+        engine.scope = None
+        r_no_scope = client.post(
+            "/api/proxy/replay", json={"method": "GET", "url": "https://app.example.test/"}
+        )
+        assert r_no_scope.status_code == 403
+
+        # 2. Enforce scope and reject invalid method / header / off-scope URLs
+        eng = engine.create_engagement("app.example.test")
+        engine.scope = ScopeEnforcer.for_target("app.example.test")
+        assert (
+            client.post(
+                "/api/proxy/replay",
+                json={"method": "GET", "url": "https://evil.otherdomain.test/"},
+            ).status_code
+            == 403
+        )
+        assert (
+            client.post(
+                "/api/proxy/replay",
+                json={"method": "TRACE", "url": "https://app.example.test/"},
+            ).status_code
+            == 400
+        )
+        assert (
+            client.post(
+                "/api/proxy/replay",
+                json={
+                    "method": "GET",
+                    "url": "https://app.example.test/",
+                    "headers": {"Bad\r\nHeader": "x"},
+                },
+            ).status_code
+            == 400
+        )
+
+        # 3. Valid in-scope replay redacts secrets and records ProxyEntry
+        fake_resp = MagicMock()
+        fake_resp.status_code = 200
+        fake_resp.headers = {"Content-Type": "application/json", "Set-Cookie": "sid=topsecret"}
+        fake_resp.text = '{"ok":true}'
+
+        fake_client = MagicMock()
+        fake_client.request = AsyncMock(return_value=fake_resp)
+        fake_client.__aenter__ = AsyncMock(return_value=fake_client)
+        fake_client.__aexit__ = AsyncMock(return_value=False)
+
+        with (
+            patch("nexus.core.scope.socket.getaddrinfo", return_value=[]),
+            patch("nexus.scanner._http.make_http_client", return_value=fake_client),
+        ):
+            r_ok = client.post(
+                "/api/proxy/replay",
+                json={
+                    "engagement_id": eng.id,
+                    "method": "POST",
+                    "url": "https://app.example.test/api/v1",
+                    "headers": {"Authorization": "Bearer secret-tok"},
+                    "body": '{"test":1}',
+                },
+            )
+        assert r_ok.status_code == 200
+        data = r_ok.json()
+        assert data["status_code"] == 200
+        assert data["request_headers"]["Authorization"] != "Bearer secret-tok"
+        assert len(engine.db.get_proxy_history(eng.id)) >= 1

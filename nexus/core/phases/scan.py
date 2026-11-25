@@ -4,12 +4,14 @@ from __future__ import annotations
 
 import logging
 import os
+from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from nexus.core.auth import StatefulAuthSession
 from nexus.core.config import SCAN_PROFILE_SETTINGS, ScanProfile
 from nexus.db.models import EngagementPhase, Finding
 from nexus.scanner._http import parse_url_target, redact_headers
+from nexus.scanner.yaml_rules import YamlPassiveRuleEngine
 from nexus.scanner.zap import zap_scan
 from nexus.stealth.controller import set_active_stealth
 
@@ -610,6 +612,46 @@ class ScanPhase:
                 all_findings.extend(auth_findings)
             except Exception as exc:
                 log.warning("[SCAN] audit_auth_enforcement failed: %s", exc)
+
+        # 6e. Declarative YAML passive detection rules
+        if profile_cfg.get("run_headers", True) and scoped_urls:
+            rule_engine = getattr(engine, "yaml_rules", None)
+            if rule_engine is None or rule_engine.rule_count == 0:
+                rules_dir = Path(__file__).resolve().parents[2] / "brain" / "knowledge" / "rules"
+                rule_engine = YamlPassiveRuleEngine()
+                rule_engine.load_directory(rules_dir)
+            if rule_engine.rule_count > 0:
+                log.info(
+                    "[SCAN] Running %d YAML passive rule(s) against %d URL(s)",
+                    rule_engine.rule_count,
+                    min(len(scoped_urls), 8),
+                )
+                try:
+                    from nexus.scanner._http import make_http_client
+
+                    async with make_http_client(
+                        headers=auth_headers or None, timeout=15.0
+                    ) as client:
+                        for target_url in scoped_urls[:8]:
+                            try:
+                                resp = await client.get(target_url)
+                                yr_findings = rule_engine.inspect_response(
+                                    target_url,
+                                    status_code=resp.status_code,
+                                    headers=dict(resp.headers),
+                                    body=resp.text,
+                                )
+                                for yf in yr_findings:
+                                    yf.engagement_id = eng_id
+                                all_findings.extend(yr_findings)
+                            except Exception as exc:
+                                log.debug(
+                                    "[SCAN] YAML passive rule fetch failed for %s: %s",
+                                    target_url,
+                                    exc,
+                                )
+                except Exception as exc:
+                    log.warning("[SCAN] YAML passive rule engine failed: %s", exc)
 
         # 7. Network & datastore configuration audits
         if profile_cfg.get("run_network_audits", True) and net_endpoints:

@@ -12,7 +12,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 from nexus.db.models import Finding, Severity
-from nexus.recon.runner import ToolRunner
+from nexus.recon.runner import ToolRunner, validate_cli_target, validate_port
 
 log = logging.getLogger("nexus.scanner.tls")
 
@@ -246,6 +246,8 @@ async def audit_tls(
     timeout: int = 120,
 ) -> list[Finding]:
     """Audit TLS/SSL configuration using sslyze (if present) or Python stdlib fallback."""
+    host = validate_cli_target(host, label="host")
+    port = validate_port(port)
     if ToolRunner.is_available("sslyze"):
         with tempfile.TemporaryDirectory(prefix="nexus_tls_") as td:
             json_path = Path(td) / "sslyze.json"

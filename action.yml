@@ -50,20 +50,38 @@ runs:
 
     - name: Install NEXUS
       shell: bash
-      run: pip install -e "${{ github.action_path }}"
+      env:
+        ACTION_PATH: ${{ github.action_path }}
+      run: pip install -e "$ACTION_PATH"
 
     - name: Run NEXUS Engagement & Export SARIF
       id: run-scan
       shell: bash
+      env:
+        INPUT_TARGET: ${{ inputs.target }}
+        INPUT_SCOPE_FILE: ${{ inputs.scope_file }}
+        INPUT_PROFILE: ${{ inputs.profile }}
+        INPUT_OPENAPI_SPEC: ${{ inputs.openapi_spec }}
+        INPUT_IGNORE_FILE: ${{ inputs.ignore_file }}
+        INPUT_SARIF_OUTPUT: ${{ inputs.sarif_output }}
+        INPUT_BASELINE_ID: ${{ inputs.baseline_id }}
+        INPUT_FAIL_ON_NEW: ${{ inputs.fail_on_new }}
       run: |
-        ARGS=(engage "${{ inputs.target }}" --scope "${{ inputs.scope_file }}" --profile "${{ inputs.profile }}" --no-exploit)
-        if [ -n "${{ inputs.openapi_spec }}" ]; then ARGS+=(--openapi "${{ inputs.openapi_spec }}"); fi
-        if [ -n "${{ inputs.ignore_file }}" ]; then ARGS+=(--ignore "${{ inputs.ignore_file }}"); fi
+        set -euo pipefail
+        ARGS=(engage "$INPUT_TARGET" --scope "$INPUT_SCOPE_FILE" --profile "$INPUT_PROFILE" --no-exploit)
+        if [ -n "$INPUT_OPENAPI_SPEC" ]; then ARGS+=(--openapi "$INPUT_OPENAPI_SPEC"); fi
+        if [ -n "$INPUT_IGNORE_FILE" ]; then ARGS+=(--ignore "$INPUT_IGNORE_FILE"); fi
         nexus "${ARGS[@]}"
-        ENG_ID=$(nexus engagements list | awk '/\|/ {id=$2} END {print id}')
-        nexus report -e "$ENG_ID" -f sarif -o "${{ inputs.sarif_output }}"
-        echo "engagement_id=$ENG_ID" >> "$GITHUB_OUTPUT"
-        echo "sarif_file=${{ inputs.sarif_output }}" >> "$GITHUB_OUTPUT"
-        if [ -n "${{ inputs.baseline_id }}" ]; then
-          nexus diff "${{ inputs.baseline_id }}" "$ENG_ID" --fail-on-new "${{ inputs.fail_on_new }}"
+        ENG_ID=$(python3 -c "from nexus.core.config import NexusConfig; from nexus.db.store import EngagementStore; engs = EngagementStore(NexusConfig.load().db_path).list_engagements(); print(engs[0].id if engs else '')")
+        if [ -z "$ENG_ID" ]; then
+          echo "::error::Failed to resolve latest NEXUS engagement ID"
+          exit 1
+        fi
+        nexus report -e "$ENG_ID" -f sarif -o "$INPUT_SARIF_OUTPUT"
+        {
+          echo "engagement_id=$ENG_ID"
+          echo "sarif_file=$INPUT_SARIF_OUTPUT"
+        } >> "$GITHUB_OUTPUT"
+        if [ -n "$INPUT_BASELINE_ID" ]; then
+          nexus diff "$INPUT_BASELINE_ID" "$ENG_ID" --fail-on-new "$INPUT_FAIL_ON_NEW"
         fi

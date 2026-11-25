@@ -469,3 +469,35 @@ def test_postgres_store_contract_with_mocked_psycopg(tmp_path):
     pg.add_proxy_entry(pe)
     assert len(pg.get_proxy_history(eng.id)) == 1
     assert pg.get_proxy_entry(pe.id) is not None
+
+
+def test_secret_cipher_xor2_and_legacy_xor1_compat():
+    import base64
+    import hashlib
+    import hmac
+    import secrets
+
+    import pytest
+
+    from nexus.db.store import _SecretCipher
+
+    cipher = _SecretCipher(b"unit-test-secret-key")
+    # Force fallback HMAC-CTR v2 path (without Fernet)
+    cipher._fernet = None
+    enc_v2 = cipher.encrypt("p@ssw0rd-v2")
+    assert enc_v2.startswith("enc:xor2:")
+    assert cipher.decrypt(enc_v2) == "p@ssw0rd-v2"
+
+    # Legacy enc:xor1: ciphertext still decrypts cleanly
+    raw_secret = b"legacy-pw"
+    nonce = secrets.token_bytes(16)
+    ks = cipher._keystream(cipher._raw_key, nonce, len(raw_secret))
+    ct = bytes(a ^ b for a, b in zip(raw_secret, ks))
+    tag = hmac.new(cipher._raw_key, nonce + ct, hashlib.sha256).digest()[:16]
+    enc_v1 = "enc:xor1:" + base64.urlsafe_b64encode(nonce + tag + ct).decode("ascii")
+    assert cipher.decrypt(enc_v1) == "legacy-pw"
+
+    # Tampering fails MAC check
+    tampered = enc_v2[:-4] + ("AAAA" if enc_v2[-4:] != "AAAA" else "BBBB")
+    with pytest.raises(ValueError, match="integrity check failed"):
+        cipher.decrypt(tampered)

@@ -415,3 +415,17 @@ def test_proxy_and_engage_wave_b_cli_flags():
     assert res_engage.exit_code == 0
     assert "--unrestricted-scope" in res_engage.output
     assert "--login-url" in res_engage.output
+
+
+def test_cli_ai_setup_rejects_invalid_model_name(cli_env, monkeypatch):
+    import shutil
+
+    from nexus.ai.ollama_client import OllamaClient
+
+    monkeypatch.setattr(OllamaClient, "is_alive", lambda self: False)
+    monkeypatch.setattr(shutil, "which", lambda cmd: "/usr/bin/ollama" if cmd == "ollama" else None)
+
+    runner = CliRunner()
+    res = runner.invoke(cli, ["ai", "setup", "--model", "-evil-flag"])
+    assert res.exit_code == 2
+    assert "Invalid Ollama model name" in res.output

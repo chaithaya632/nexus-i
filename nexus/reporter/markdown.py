@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any
 
+from nexus.correlator.prioritize import build_remediation_plan
+
 if TYPE_CHECKING:
     from nexus.reporter.generator import ReportData
 
@@ -193,6 +195,29 @@ def render_markdown(data: ReportData) -> str:
         w("")
     else:
         w("No targets enumerated.")
+        w("")
+
+    # Prioritized Remediation Backlog
+    plan = build_remediation_plan(data.findings, data.chains, top_n=10)
+    if plan["top_items"]:
+        w("## Prioritized Remediation Backlog")
+        w("")
+        w(
+            f"- **Actionable Findings:** {plan['total_actionable']} | "
+            f"**CISA KEV Flagged:** {plan['kev_flagged']} | "
+            f"**Chain-Linked:** {plan['chain_linked']} | "
+            f"**Avg Confidence:** {plan['average_confidence']}%"
+        )
+        w("")
+        w("| Priority | Confidence | KEV | Severity | Finding | OWASP / CWE |")
+        w("| :---: | :---: | :---: | :--- | :--- | :--- |")
+        for item in plan["top_items"]:
+            kev_flag = "YES" if item["is_kev"] else "-"
+            cat = item["owasp_category"] or item["cwe_id"] or "-"
+            w(
+                f"| {item['priority_score']}/100 | {item['confidence_score']}% | {kev_flag} "
+                f"| {_md_cell(str(item['severity']).upper())} | {_md_cell(item['title'])} | {_md_cell(cat)} |"
+            )
         w("")
 
     # Footer

@@ -16,6 +16,7 @@ from nexus.correlator.graph import (
     ExpertEngineLike,
     build_attack_chains,
 )
+from nexus.correlator.prioritize import rank_findings_by_priority
 from nexus.db.models import AttackChain, Finding
 
 log = logging.getLogger("nexus.correlator.engine")
@@ -56,4 +57,10 @@ def correlate(
         len(findings),
         len(chains),
     )
+
+    # Step 4: Rank actionable findings by composite priority (KEV + chain + confidence)
+    prioritized = rank_findings_by_priority(findings, chains)
+    fp_findings = [f for f in findings if f.false_positive]
+    findings = [pf.finding for pf in prioritized] + fp_findings
+
     return findings, chains

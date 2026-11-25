@@ -31,12 +31,19 @@ COPY --from=go-builder /usr/local/bin/katana /usr/local/bin/
 COPY --from=go-builder /usr/local/bin/ffuf /usr/local/bin/
 COPY --from=go-builder /usr/local/bin/amass /usr/local/bin/
 
-# Update nuclei templates when network allows
-RUN nuclei -update-templates 2>/dev/null || true
+# Create unprivileged runtime user
+RUN groupadd --system nexus && useradd --system --gid nexus --create-home --home-dir /home/nexus nexus
 
 WORKDIR /opt/nexus
 COPY . .
-RUN pip install --no-cache-dir -e ".[full]"
+RUN pip install --no-cache-dir -e ".[full]" && \
+    chown -R nexus:nexus /opt/nexus /home/nexus
+
+USER nexus
+ENV NEXUS_DATA_DIR=/home/nexus/.nexus
+
+# Update nuclei templates as non-root user when network allows
+RUN nuclei -update-templates 2>/dev/null || true
 
 ENTRYPOINT ["nexus"]
 CMD ["--help"]

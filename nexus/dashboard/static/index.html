@@ -108,6 +108,24 @@ tr:hover{background:#141828}
       </div>
       <pre id="proxy-diff-out" style="display:none;margin-top:10px;background:#0d1120;padding:10px;border-radius:4px;font-size:12px;overflow:auto;max-height:280px"></pre>
     </div>
+    <div class="card" style="margin-bottom:14px">
+      <h3>HTTP Repeater (Scope-Enforced)</h3>
+      <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-top:8px">
+        <select id="rep-method" class="btn">
+          <option value="GET">GET</option>
+          <option value="POST">POST</option>
+          <option value="PUT">PUT</option>
+          <option value="PATCH">PATCH</option>
+          <option value="DELETE">DELETE</option>
+          <option value="HEAD">HEAD</option>
+          <option value="OPTIONS">OPTIONS</option>
+        </select>
+        <input id="rep-url" type="url" placeholder="https://target.example.com/api" class="btn" style="flex:1;min-width:260px;background:#0a0e17;color:#fff;text-align:left">
+        <button id="proxy-repeater-send" class="btn">Send Replay</button>
+      </div>
+      <textarea id="rep-body" rows="3" placeholder="Optional request body..." style="width:100%;margin-top:8px;background:#0a0e17;color:#e0e0e0;border:1px solid #1e2a4a;border-radius:4px;padding:8px;font-family:monospace;font-size:12px"></textarea>
+      <pre id="rep-out" style="margin-top:8px;background:#0d1120;padding:10px;border-radius:4px;font-size:12px;overflow:auto;max-height:260px"></pre>
+    </div>
     <div id="proxy-view"><div class="empty">No proxy exchanges captured yet. Run: nexus proxy</div></div>
   </div>
 
@@ -660,6 +678,29 @@ loadEngagements();
 setInterval(loadStatus, 15000);
 setInterval(loadEngagements, 15000);
 connectWs();
+
+const repBtn = document.getElementById('proxy-repeater-send');
+if (repBtn) {
+  repBtn.addEventListener('click', async () => {
+    const out = document.getElementById('rep-out');
+    const method = document.getElementById('rep-method').value;
+    const url = document.getElementById('rep-url').value.trim();
+    const body = document.getElementById('rep-body').value;
+    out.textContent = 'Sending...';
+    try {
+      const r = await apiFetch('/api/proxy/replay', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({method, url, body})
+      });
+      const d = await r.json();
+      out.textContent = JSON.stringify(d, null, 2);
+      if (r.ok) loadProxyHistory();
+    } catch (e) {
+      out.textContent = 'Replay failed: ' + e.message;
+    }
+  });
+}
 </script>
 </body>
 </html>

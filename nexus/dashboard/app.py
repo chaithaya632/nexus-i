@@ -27,7 +27,7 @@ from pathlib import Path
 from typing import Any
 
 try:
-    from fastapi import FastAPI, Request, WebSocket, WebSocketDisconnect
+    from fastapi import FastAPI, Query, Request, WebSocket, WebSocketDisconnect
     from fastapi.middleware.cors import CORSMiddleware
     from fastapi.responses import HTMLResponse, JSONResponse, Response
     from fastapi.staticfiles import StaticFiles
@@ -197,6 +197,17 @@ class DashboardApp:
             except ValueError as exc:
                 return JSONResponse({"error": str(exc)}, status_code=404)
 
+        @app.get("/api/engagements/{eng_id}/priority")
+        async def get_engagement_priority(eng_id: str, top_n: int = Query(15, ge=1, le=200)):
+            from nexus.correlator.prioritize import build_remediation_plan
+
+            db = self._require_db()
+            if not db.get_engagement(eng_id):
+                return JSONResponse({"error": "not found"}, status_code=404)
+            findings = db.get_findings(eng_id)
+            chains = db.get_chains(eng_id)
+            return build_remediation_plan(findings, chains, top_n=top_n)
+
         @app.get("/api/engagements/{eng_id}/chains")
         async def get_chains(eng_id: str):
             db = self._require_db()
@@ -214,7 +225,7 @@ class DashboardApp:
             return [t.model_dump() if hasattr(t, "model_dump") else t for t in targets]
 
         @app.get("/api/engagements/{eng_id}/proxy")
-        async def get_engagement_proxy(eng_id: str, limit: int = 200):
+        async def get_engagement_proxy(eng_id: str, limit: int = Query(200, ge=1, le=1000)):
             db = self._require_db()
             if not db.get_engagement(eng_id):
                 return JSONResponse({"error": "not found"}, status_code=404)
@@ -224,7 +235,7 @@ class DashboardApp:
             return [e.model_dump(mode="json") if hasattr(e, "model_dump") else e for e in entries]
 
         @app.get("/api/proxy/history")
-        async def get_all_proxy_history(limit: int = 200):
+        async def get_all_proxy_history(limit: int = Query(200, ge=1, le=1000)):
             db = self._require_db()
             if not hasattr(db, "get_proxy_history"):
                 return []
@@ -257,6 +268,104 @@ class DashboardApp:
                 "status_changed": e_left.status_code != e_right.status_code,
                 "diff": "\n".join(diff_lines[:300]),
             }
+
+        @app.post("/api/proxy/replay")
+        async def replay_proxy_exchange(request: Request):
+            """Scope-enforced HTTP Repeater endpoint: replay or mutate a captured request."""
+            import httpx
+
+            from nexus.core.scope import ScopeViolation
+            from nexus.db.models import ProxyEntry
+            from nexus.recon.runner import validate_headers
+            from nexus.scanner._http import make_http_client, parse_url_target, redact_headers
+
+            try:
+                payload = await request.json()
+            except ValueError:
+                return JSONResponse({"error": "Valid JSON body required"}, status_code=400)
+            if not isinstance(payload, dict):
+                return JSONResponse({"error": "JSON object body required"}, status_code=400)
+
+            db = self._require_db()
+            base_entry = None
+            entry_id = str(payload.get("entry_id") or "").strip()
+            if entry_id and hasattr(db, "get_proxy_entry"):
+                base_entry = db.get_proxy_entry(entry_id)
+                if base_entry is None:
+                    return JSONResponse({"error": "proxy entry not found"}, status_code=404)
+
+            method = str(
+                payload.get("method") or (base_entry.method if base_entry else "GET")
+            ).upper()
+            if method not in {"GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS"}:
+                return JSONResponse(
+                    {"error": f"Unsupported HTTP method: {method}"}, status_code=400
+                )
+
+            url = str(payload.get("url") or (base_entry.url if base_entry else "")).strip()
+            if not url.startswith(("http://", "https://")):
+                return JSONResponse({"error": "Valid http(s) URL required"}, status_code=400)
+
+            host, port, _ = parse_url_target(url)
+            if not host:
+                return JSONResponse({"error": "Valid http(s) host required"}, status_code=400)
+            if self.engine.scope is not None:
+                try:
+                    self.engine.scope.enforce(host, port, check_dns=True)
+                except ScopeViolation as exc:
+                    return JSONResponse({"error": str(exc)}, status_code=403)
+            else:
+                return JSONResponse(
+                    {"error": "Active engagement scope required before replaying requests"},
+                    status_code=403,
+                )
+
+            req_headers = dict(base_entry.request_headers) if base_entry else {}
+            if isinstance(payload.get("headers"), dict):
+                req_headers.update({str(k): str(v) for k, v in payload["headers"].items()})
+            try:
+                req_headers = validate_headers(req_headers)
+            except ValueError as exc:
+                return JSONResponse({"error": str(exc)}, status_code=400)
+
+            req_body = (
+                str(payload["body"])
+                if "body" in payload and payload["body"] is not None
+                else (base_entry.request_body if base_entry else "")
+            )
+
+            try:
+                async with make_http_client(timeout=20.0, follow_redirects=False) as client:
+                    resp = await client.request(
+                        method,
+                        url,
+                        headers=req_headers or None,
+                        content=req_body.encode("utf-8") if req_body else None,
+                    )
+            except httpx.HTTPError as exc:
+                return JSONResponse({"error": f"Upstream request failed: {exc}"}, status_code=502)
+
+            eng_id = str(
+                payload.get("engagement_id")
+                or (base_entry.engagement_id if base_entry else "")
+                or (self.engine._current_engagement or "")
+            )
+            recorded = ProxyEntry(
+                engagement_id=eng_id,
+                method=method,
+                url=url,
+                host=host,
+                port=port or 80,
+                status_code=resp.status_code,
+                request_headers=redact_headers(req_headers),
+                request_body=req_body[:20_000],
+                response_headers=redact_headers(dict(resp.headers)),
+                response_body=resp.text[:50_000],
+            )
+            if hasattr(db, "add_proxy_entry"):
+                db.add_proxy_entry(recorded)
+
+            return recorded.model_dump(mode="json")
 
         # ── WebSocket ─────────────────────────────────────────────
 

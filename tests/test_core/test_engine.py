@@ -1170,6 +1170,17 @@ paths:
                 severity=Severity.MEDIUM,
                 tool_source="owasp_zap",
             )
+            fake_http_resp = MagicMock()
+            fake_http_resp.status_code = 500
+            fake_http_resp.headers = {"Content-Type": "text/html"}
+            fake_http_resp.text = (
+                "You're seeing this error because you have <code>DEBUG = True</code>"
+            )
+            fake_http_client = MagicMock()
+            fake_http_client.get = AsyncMock(return_value=fake_http_resp)
+            fake_http_client.__aenter__ = AsyncMock(return_value=fake_http_client)
+            fake_http_client.__aexit__ = AsyncMock(return_value=False)
+
             with (
                 patch("nexus.core.engine.crawl_web", AsyncMock(return_value=([], []))),
                 patch("nexus.core.engine.nuclei_scan", AsyncMock(return_value=[])),
@@ -1179,6 +1190,7 @@ paths:
                 ) as hdr_mock,
                 patch("nexus.core.engine.audit_exposed_artifacts", AsyncMock(return_value=[])),
                 patch("nexus.core.engine.audit_graphql_introspection", AsyncMock(return_value=[])),
+                patch("nexus.scanner._http.make_http_client", return_value=fake_http_client),
                 patch(
                     "nexus.core.engine.ToolRunner.is_available",
                     side_effect=lambda t: "zap" in str(t),
@@ -1195,6 +1207,7 @@ paths:
                 findings = await eng_mgr.run_scan(eng.id, "app.example.test")
 
             assert any(f.tool_source == "owasp_zap" for f in findings)
+            assert any(f.tool_source == "yaml_rule:django-debug-page" for f in findings)
             assert "https://app.example.test/from-proxy" in hdr_mock.await_args.args[0]
         finally:
             eng_mgr.shutdown()

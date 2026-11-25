@@ -252,3 +252,12 @@ class TestSshAuditor:
 
         assert len(findings) == 1
         assert "Password Authentication" in findings[0].title
+
+    @pytest.mark.asyncio
+    async def test_audit_tls_validates_host_and_port(self) -> None:
+        from nexus.scanner.tls import audit_tls
+
+        with pytest.raises(ValueError):
+            await audit_tls("-evil.example.com", 443)
+        with pytest.raises(ValueError):
+            await audit_tls("example.com", 70000)

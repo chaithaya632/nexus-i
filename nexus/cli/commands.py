@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import re
 import shutil
 import sys
 from pathlib import Path
@@ -728,7 +729,10 @@ def ai_setup(model):
         console.print("  Install: curl -fsSL https://ollama.com/install.sh | sh")
         raise SystemExit(1)
 
-    res = subprocess.run(["ollama", "pull", model], check=False)
+    if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._:/-]{0,127}", model or ""):
+        console.print(f"[red]✗ Invalid Ollama model name: {model!r}[/]")
+        raise SystemExit(2)
+    res = subprocess.run(["ollama", "pull", "--", model], check=False)
     if res.returncode != 0:
         raise SystemExit(res.returncode)
 

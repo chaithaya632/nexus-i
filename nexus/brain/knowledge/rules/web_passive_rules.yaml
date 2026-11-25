@@ -28,3 +28,72 @@ rules:
     status_codes: [200]
     body_regex: "(SwaggerUIBundle|swagger-ui|Redoc\\.init|openapi)"
     confirmed: true
+
+  - id: js-sourcemap-exposed
+    title: JavaScript Source Map Reference Disclosed
+    severity: low
+    cwe_id: CWE-540
+    description: Response exposes a JavaScript source map reference or source map payload that can reveal original unminified frontend source code.
+    remediation: Disable source map generation in production builds or restrict .map files to internal error-tracking systems.
+    status_codes: [200]
+    body_regex: '(//#\s*sourceMappingURL=[^\s]+\.map|"sourcesContent"\s*:\s*\[)'
+    confirmed: true
+
+  - id: django-debug-page
+    title: Django Debug Mode Enabled in Production
+    severity: high
+    cwe_id: CWE-489
+    description: Django DEBUG mode error page is exposed, revealing settings, URL patterns, and environment metadata.
+    remediation: Set DEBUG = False in Django production settings and configure ALLOWED_HOSTS properly.
+    status_codes: [404, 500]
+    body_regex: "You're seeing this error because you have <code>DEBUG = True</code>"
+    confirmed: true
+
+  - id: directory-listing-enabled
+    title: Web Server Directory Listing Enabled
+    severity: medium
+    cwe_id: CWE-548
+    description: Web server returns an auto-generated directory index listing files in the directory.
+    remediation: Disable directory indexing (Options -Indexes in Apache, autoindex off in Nginx).
+    status_codes: [200]
+    body_regex: "(<title>Index of /|<title>Directory listing for /)"
+    confirmed: true
+
+  - id: cors-wildcard-credentials
+    title: Misconfigured CORS Wildcard with Credentials
+    severity: high
+    cwe_id: CWE-942
+    description: Response combines Access-Control-Allow-Origin wildcard with Access-Control-Allow-Credentials true, indicating broken CORS policy configuration.
+    remediation: Replace wildcard origins with an explicit allowlist of trusted origins when credentials are enabled.
+    header_regex: "(?s)(Access-Control-Allow-Origin\\s*:\\s*\\*.*Access-Control-Allow-Credentials\\s*:\\s*true|Access-Control-Allow-Credentials\\s*:\\s*true.*Access-Control-Allow-Origin\\s*:\\s*\\*)"
+    confirmed: true
+
+  - id: framework-version-header
+    title: Detailed Framework Version Disclosed in Response Header
+    severity: info
+    cwe_id: CWE-200
+    description: Response header exposes exact backend runtime or framework version strings (e.g., X-Powered-By, X-AspNet-Version).
+    remediation: Remove X-Powered-By and X-AspNet-Version headers at the application or reverse proxy layer.
+    header_regex: "(X-Powered-By|X-AspNet-Version|X-AspNetMvc-Version)\\s*:\\s*[^\\r\\n]+\\d+\\.\\d+"
+    confirmed: true
+
+  - id: graphql-ide-public
+    title: Public GraphQL Interactive IDE (GraphiQL / Playground) Exposed
+    severity: low
+    cwe_id: CWE-200
+    description: Interactive GraphQL IDE is accessible publicly, simplifying schema exploration.
+    remediation: Disable GraphiQL and GraphQL Playground in production environments.
+    url_regex: "/(graphql|graphiql|playground)(/|$)"
+    status_codes: [200]
+    body_regex: "(GraphiQL|GraphQL Playground|graphql-playground-react)"
+    confirmed: true
+
+  - id: spring-whitelabel-error
+    title: Spring Boot Whitelabel Error Page Exposed
+    severity: low
+    cwe_id: CWE-209
+    description: Default Spring Boot Whitelabel Error Page is enabled, confirming framework stack and potentially leaking exception details.
+    remediation: Disable server.error.whitelabel.enabled and serve custom generic error pages.
+    status_codes: [400, 404, 500]
+    body_regex: "Whitelabel Error Page"
+    confirmed: true

@@ -161,13 +161,17 @@ def _chmod_0600(path: Path) -> None:
 
 
 class _SecretCipher:
-    """Encrypt/decrypt sensitive credential columns at rest using Fernet or HMAC-XOR."""
+    """Encrypt/decrypt sensitive credential columns at rest using Fernet or domain-separated HMAC-CTR."""
 
     _FERNET_PREFIX = "enc:v1:"
-    _XOR_PREFIX = "enc:xor1:"
+    _XOR_PREFIX_V2 = "enc:xor2:"
+    _XOR_PREFIX_LEGACY = "enc:xor1:"
 
     def __init__(self, raw_key: bytes) -> None:
         self._raw_key = hashlib.sha256(raw_key).digest()
+        # Separate domain-derived subkeys for fallback encryption vs authentication
+        self._enc_key = hmac.new(self._raw_key, b"nexus-cred-enc-v2", hashlib.sha256).digest()
+        self._mac_key = hmac.new(self._raw_key, b"nexus-cred-mac-v2", hashlib.sha256).digest()
         self._fernet = None
         try:
             from cryptography.fernet import Fernet  # type: ignore[import-untyped]
@@ -183,7 +187,7 @@ class _SecretCipher:
         if self._fernet is not None:
             token = self._fernet.encrypt(plaintext.encode("utf-8")).decode("ascii")
             return f"{self._FERNET_PREFIX}{token}"
-        return self._xor_encrypt(plaintext)
+        return self._xor_encrypt_v2(plaintext)
 
     def decrypt(self, ciphertext: str) -> str:
         if not ciphertext:
@@ -195,38 +199,51 @@ class _SecretCipher:
                 )
             token = ciphertext[len(self._FERNET_PREFIX) :].encode("ascii")
             return self._fernet.decrypt(token).decode("utf-8")
-        if ciphertext.startswith(self._XOR_PREFIX):
-            return self._xor_decrypt(ciphertext)
+        if ciphertext.startswith(self._XOR_PREFIX_V2):
+            return self._xor_decrypt_v2(ciphertext)
+        if ciphertext.startswith(self._XOR_PREFIX_LEGACY):
+            return self._xor_decrypt_legacy(ciphertext)
         # Legacy unencrypted row fallback
         return ciphertext
 
-    def _keystream(self, nonce: bytes, length: int) -> bytes:
+    def _keystream(self, key: bytes, nonce: bytes, length: int, domain: bytes = b"") -> bytes:
         out = bytearray()
         counter = 0
         while len(out) < length:
             blk = hmac.new(
-                self._raw_key, nonce + counter.to_bytes(4, "big"), hashlib.sha256
+                key, domain + nonce + counter.to_bytes(4, "big"), hashlib.sha256
             ).digest()
             out.extend(blk)
             counter += 1
         return bytes(out[:length])
 
-    def _xor_encrypt(self, plaintext: str) -> str:
+    def _xor_encrypt_v2(self, plaintext: str) -> str:
         nonce = secrets.token_bytes(16)
         data = plaintext.encode("utf-8")
-        ks = self._keystream(nonce, len(data))
+        ks = self._keystream(self._enc_key, nonce, len(data), domain=b"ctr:")
         cipher = bytes(a ^ b for a, b in zip(data, ks))
-        tag = hmac.new(self._raw_key, nonce + cipher, hashlib.sha256).digest()[:16]
+        tag = hmac.new(self._mac_key, b"mac:" + nonce + cipher, hashlib.sha256).digest()
         blob = base64.urlsafe_b64encode(nonce + tag + cipher).decode("ascii")
-        return f"{self._XOR_PREFIX}{blob}"
+        return f"{self._XOR_PREFIX_V2}{blob}"
 
-    def _xor_decrypt(self, ciphertext: str) -> str:
-        raw = base64.urlsafe_b64decode(ciphertext[len(self._XOR_PREFIX) :].encode("ascii"))
+    def _xor_decrypt_v2(self, ciphertext: str) -> str:
+        raw = base64.urlsafe_b64decode(ciphertext[len(self._XOR_PREFIX_V2) :].encode("ascii"))
+        if len(raw) < 48:
+            raise ValueError("Truncated encrypted credential")
+        nonce, tag, cipher = raw[:16], raw[16:48], raw[48:]
+        expected = hmac.new(self._mac_key, b"mac:" + nonce + cipher, hashlib.sha256).digest()
+        if not hmac.compare_digest(tag, expected):
+            raise ValueError("Credential integrity check failed")
+        ks = self._keystream(self._enc_key, nonce, len(cipher), domain=b"ctr:")
+        return bytes(a ^ b for a, b in zip(cipher, ks)).decode("utf-8")
+
+    def _xor_decrypt_legacy(self, ciphertext: str) -> str:
+        raw = base64.urlsafe_b64decode(ciphertext[len(self._XOR_PREFIX_LEGACY) :].encode("ascii"))
         nonce, tag, cipher = raw[:16], raw[16:32], raw[32:]
         expected = hmac.new(self._raw_key, nonce + cipher, hashlib.sha256).digest()[:16]
         if not hmac.compare_digest(tag, expected):
             raise ValueError("Credential integrity check failed")
-        ks = self._keystream(nonce, len(cipher))
+        ks = self._keystream(self._raw_key, nonce, len(cipher))
         return bytes(a ^ b for a, b in zip(cipher, ks)).decode("utf-8")
 
 
