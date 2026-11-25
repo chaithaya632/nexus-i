@@ -49,7 +49,7 @@ cves:
     description: "OpenSSH ssh-agent RCE via forwarded agent"
     severity: critical
     cvss: 9.8
-    products: ["openssh"]
+    products: ["openssh-5.5-9.3"]
     cwe: "CWE-426"
     exploit_tools: ["custom"]
     fingerprints: ["OpenSSH"]

@@ -3,11 +3,79 @@
 from __future__ import annotations
 
 import os
+import re
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
 import yaml
+
+
+_VER_RE = re.compile(r"(\d+(?:\.\d+)+)")
+
+
+def _parse_version(raw: str) -> tuple[int, ...] | None:
+    """Extract numeric version tuple (e.g. 'Apache/2.4.49' -> (2, 4, 49))."""
+    m = _VER_RE.search(raw or "")
+    if not m:
+        return None
+    return tuple(int(x) for x in m.group(1).split("."))
+
+
+def _cmp_versions(a: tuple[int, ...], b: tuple[int, ...]) -> int:
+    """Compare two version tuples padding shorter tail with zeros (-1, 0, 1)."""
+    length = max(len(a), len(b))
+    pa = a + (0,) * (length - len(a))
+    pb = b + (0,) * (length - len(b))
+    return (pa > pb) - (pa < pb)
+
+
+def _version_in_range(ver_str: str, range_spec: str) -> bool:
+    """Check whether *ver_str* satisfies *range_spec*.
+
+    Supports:
+      - Exact/prefix product spec: 'apache-httpd-2.4.49' -> matches 2.4.49
+      - Hyphenated bounds: 'openssh-8.5-9.7' or '2.0-2.14.1' -> inclusive range
+      - Comma comparators: '<2.4.51', '>=8.5,<9.8', '<=1.0.1'
+      - Fallback prefix: 'apache-httpd-2.4' (2 parts) -> major.minor match
+    """
+    ver = _parse_version(ver_str)
+    if ver is None or not range_spec:
+        return False
+
+    spec = range_spec.strip()
+    # Comparator clauses: "<2.4.51", ">=8.5,<9.8"
+    if any(op in spec for op in ("<", ">", "=")):
+        clauses = [c.strip() for c in spec.split(",") if c.strip()]
+        for cl in clauses:
+            for op, fn in (
+                ("<=", lambda v, b: _cmp_versions(v, b) <= 0),
+                (">=", lambda v, b: _cmp_versions(v, b) >= 0),
+                ("<", lambda v, b: _cmp_versions(v, b) < 0),
+                (">", lambda v, b: _cmp_versions(v, b) > 0),
+                ("==", lambda v, b: _cmp_versions(v, b) == 0),
+                ("=", lambda v, b: _cmp_versions(v, b) == 0),
+            ):
+                if cl.startswith(op):
+                    bound = _parse_version(cl[len(op):])
+                    if bound is None or not fn(ver, bound):
+                        return False
+                    break
+        return True
+
+    # Find all version segments inside spec (e.g. 'openssh-8.5-9.7' -> ['8.5', '9.7'])
+    parts = _VER_RE.findall(spec)
+    if len(parts) >= 2:
+        low = tuple(int(x) for x in parts[-2].split("."))
+        high = tuple(int(x) for x in parts[-1].split("."))
+        return _cmp_versions(ver, low) >= 0 and _cmp_versions(ver, high) <= 0
+    if len(parts) == 1:
+        target = tuple(int(x) for x in parts[0].split("."))
+        # Exact match when full X.Y.Z specified; major.minor prefix if only X.Y
+        if len(target) >= 3:
+            return _cmp_versions(ver, target) == 0
+        return ver[:len(target)] == target
+    return False
 
 
 @dataclass
@@ -190,14 +258,66 @@ class KnowledgeGraph:
         return None
 
     def get_vulns_for_service(self, service_name: str, version: str = "") -> list[VulnEntry]:
-        """Get vulnerabilities for a service, optionally filtered by version."""
+        """Get vulnerabilities for a service, filtered by version/range if supplied."""
         sk = self.lookup_service(service_name)
         if not sk:
             return []
         if not version:
             return sk.vulns
-        # Filter by version range (simple string contains for now)
-        return [v for v in sk.vulns if not v.affected_versions or version in v.affected_versions]
+        matched: list[VulnEntry] = []
+        for v in sk.vulns:
+            if not v.affected_versions:
+                matched.append(v)
+                continue
+            specs = [s.strip() for s in v.affected_versions.split(",") if s.strip()]
+            if any(_version_in_range(version, s) for s in specs) or version in v.affected_versions:
+                matched.append(v)
+        return matched
+
+    def match_banner_vulns(self, service: str = "", version: str = "") -> list[tuple[str, VulnEntry]]:
+        """Match an observed service banner + version against all loaded CVEs.
+
+        Uses fingerprint/product matching plus SemVer/range comparison so patched
+        newer versions do not trigger false positives.
+        """
+        banner_text = f"{service} {version}".strip().lower()
+        if not banner_text:
+            return []
+
+        has_num_ver = _parse_version(version or service) is not None
+        seen_cves: set[str] = set()
+        matches: list[tuple[str, VulnEntry]] = []
+
+        # Product token hints derived from service + version banner
+        banner_tokens = {
+            tok for tok in re.split(r"[^a-z0-9]+", banner_text) if len(tok) >= 3
+        }
+
+        for svc_name, sk in self._services.items():
+            # Match either service name tokens or known banner fingerprints
+            svc_tokens = [t for t in re.split(r"[^a-z0-9]+", svc_name.lower()) if len(t) >= 3 and not t.isdigit()]
+            fp_match = any(fp.lower() in banner_text for fp in sk.fingerprints)
+            tok_match = bool(svc_tokens) and all(t in banner_tokens or t in banner_text for t in svc_tokens[:1]) and (
+                len(svc_tokens) == 1 or any(t in banner_text for t in svc_tokens[1:])
+            )
+            if not (fp_match or tok_match):
+                continue
+
+            for entry in sk.vulns:
+                if entry.cve in seen_cves:
+                    continue
+                specs = [s.strip() for s in entry.affected_versions.split(",") if s.strip()]
+                # If a version string is present on the port banner, require a matching version range
+                spec_has_ver = any(_VER_RE.search(s) for s in specs)
+                if has_num_ver:
+                    if not spec_has_ver or not any(_version_in_range(version or service, s) for s in specs):
+                        continue
+                elif spec_has_ver and not fp_match:
+                    continue
+                seen_cves.add(entry.cve)
+                matches.append((svc_name, entry))
+
+        return matches
 
     def search(self, query: str) -> list[tuple[str, VulnEntry]]:
         """Search CVEs by keyword across all fields."""

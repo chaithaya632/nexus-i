@@ -101,3 +101,36 @@ def test_cli_report_generation(cli_env, tmp_path: Path):
     res_show = runner.invoke(cli, ["engagements", "show", e.id])
     assert res_show.exit_code == 0
     assert "target.local" in res_show.output
+
+
+def test_cli_engage_help_and_validation(cli_env):
+    runner = CliRunner()
+    res_help = runner.invoke(cli, ["engage", "--help"])
+    assert res_help.exit_code == 0
+    assert "--profile" in res_help.output
+    assert "--resume" in res_help.output
+
+    res_missing = runner.invoke(cli, ["engage"])
+    assert res_missing.exit_code != 0
+    assert "TARGET" in res_missing.output or "--resume" in res_missing.output
+
+
+def test_cli_engage_passes_profile_and_resume(cli_env, monkeypatch):
+    from unittest.mock import AsyncMock
+    from nexus.core.engine import NexusEngine
+
+    mock_engage = AsyncMock(return_value="eng_resumed_01")
+    monkeypatch.setattr(NexusEngine, "engage", mock_engage)
+
+    runner = CliRunner()
+    res = runner.invoke(cli, ["engage", "--profile", "quick", "--resume", "eng_resumed_01", "--no-exploit"])
+    assert res.exit_code == 0
+    assert "eng_resumed_01" in res.output
+    mock_engage.assert_awaited_once_with(
+        "",
+        name="",
+        scope_file=None,
+        skip_exploit=True,
+        profile="quick",
+        resume_id="eng_resumed_01",
+    )

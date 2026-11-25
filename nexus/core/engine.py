@@ -11,7 +11,14 @@ from typing import Any
 from rich.console import Console
 
 from nexus.core.audit import AuditLogger
-from nexus.core.config import NexusConfig, Tier, get_config, set_config
+from nexus.core.config import (
+    NexusConfig,
+    SCAN_PROFILE_SETTINGS,
+    ScanProfile,
+    Tier,
+    get_config,
+    set_config,
+)
 from nexus.core.hardware import HardwareInfo, auto_select_tier, detect_hardware
 from nexus.core.scheduler import TaskScheduler
 from nexus.core.scope import ScopeEnforcer
@@ -35,6 +42,8 @@ from nexus.recon.osint import gather_osint
 from nexus.scanner.nuclei import nuclei_scan
 from nexus.scanner.web import ffuf_scan
 from nexus.scanner.nikto import nikto_scan
+from nexus.scanner.ssh_audit import audit_ssh
+from nexus.scanner.tls import audit_tls
 from nexus.correlator.engine import correlate as correlate_findings
 from nexus.exploit.executor import ExploitExecutor, ExploitResult
 from nexus.exploit.sqli import sqlmap_scan
@@ -72,6 +81,57 @@ _STEALTH_MAP: dict[str, str] = {
     "normal": "normal",
     "quiet": "quiet",
     "ghost": "ghost",
+}
+
+_SEV_STR_MAP: dict[str, Severity] = {
+    "critical": Severity.CRITICAL,
+    "high": Severity.HIGH,
+    "medium": Severity.MEDIUM,
+    "low": Severity.LOW,
+    "info": Severity.INFO,
+}
+
+_TECH_NUCLEI_TAGS: dict[str, str] = {
+    "wordpress": "wordpress",
+    "drupal": "drupal",
+    "joomla": "joomla",
+    "tomcat": "tomcat",
+    "apache": "apache",
+    "nginx": "nginx",
+    "iis": "iis",
+    "jenkins": "jenkins",
+    "gitlab": "gitlab",
+    "spring": "springboot",
+    "struts": "struts",
+    "php": "php",
+    "graphql": "graphql",
+    "swagger": "swagger",
+    "openapi": "openapi",
+    "laravel": "laravel",
+    "django": "django",
+    "express": "nodejs",
+    "node": "nodejs",
+    "flask": "flask",
+    "grafana": "grafana",
+    "kibana": "kibana",
+    "elastic": "elasticsearch",
+    "redis": "redis",
+    "weblogic": "weblogic",
+    "citrix": "citrix",
+    "confluence": "confluence",
+    "jira": "jira",
+    "sharepoint": "sharepoint",
+    "exchange": "exchange",
+}
+
+_PHASE_ORDER: dict[EngagementPhase, int] = {
+    EngagementPhase.INIT: 0,
+    EngagementPhase.RECON: 1,
+    EngagementPhase.SCAN: 2,
+    EngagementPhase.CORRELATE: 3,
+    EngagementPhase.EXPLOIT: 4,
+    EngagementPhase.REPORT: 5,
+    EngagementPhase.COMPLETE: 6,
 }
 
 
@@ -200,6 +260,31 @@ class NexusEngine:
         self.remediation = RemediationDB()
         if kb_dir and kb_dir.is_dir():
             self.remediation.load_from_yaml(kb_dir / "remediations")
+
+        # Populate Vector Search index from Knowledge Graph CVEs & Remediations
+        if self.vector:
+            for cve_id, (svc_name, entry) in self.knowledge._cve_index.items():
+                self.vector.add_entry(
+                    id=cve_id,
+                    text=f"{cve_id} {svc_name} {entry.description} {entry.affected_versions}",
+                    metadata={
+                        "type": "cve",
+                        "service": svc_name,
+                        "severity": entry.severity,
+                        "cvss": entry.cvss,
+                    },
+                )
+            for rem in self.remediation._by_id.values():
+                self.vector.add_entry(
+                    id=f"rem:{rem.id}",
+                    text=f"{rem.id} {rem.title} {rem.short_fix} {' '.join(rem.tags)}",
+                    metadata={
+                        "type": "remediation",
+                        "id": rem.id,
+                        "severity": rem.severity,
+                    },
+                )
+            self.vector.build_index()
 
         # Stealth controller — map config levels to controller profiles
         stealth_profile = _STEALTH_MAP.get(self.config.stealth.value, "normal")
@@ -348,12 +433,18 @@ class NexusEngine:
 
         all_findings: list[Finding] = []
         stealth = self._active_stealth_profile()
+        profile_cfg = SCAN_PROFILE_SETTINGS.get(
+            self.config.profile.value, SCAN_PROFILE_SETTINGS[ScanProfile.FULL.value]
+        )
 
         # 1. Subdomain enumeration (use bounded passive mode; filter by scope)
-        log.info("[RECON] Subdomain enumeration for %s (stealth=%s)", target, stealth)
+        log.info(
+            "[RECON] Subdomain enumeration for %s (stealth=%s, profile=%s)",
+            target, stealth, self.config.profile.value,
+        )
         raw_targets = await enumerate_subdomains(
             target,
-            use_amass=(stealth in ("loud", "normal")),
+            use_amass=bool(profile_cfg.get("use_amass", True)) and (stealth in ("loud", "normal")),
             passive_only=(stealth in ("quiet", "ghost")),
             timeout=90,
         )
@@ -388,64 +479,110 @@ class NexusEngine:
 
         # 3. Port scanning (bounded parallelism; stealth-ordered if needed)
         scan_targets = self.stealth.shuffle_targets(targets) if self.stealth else targets
-        log.info("[RECON] Port scanning %d targets", len(scan_targets))
-        for t in scan_targets:
-            scan_target = t.ip or t.host
-            if not scan_target or not self._is_in_scope(scan_target):
+        in_scope_targets = [
+            (t, t.ip or t.host)
+            for t in scan_targets
+            if (t.ip or t.host) and self._is_in_scope(t.ip or t.host)
+        ]
+        log.info("[RECON] Port scanning %d targets", len(in_scope_targets))
+
+        async def _scan_target_ports(t: Target, scan_target: str) -> tuple[Target, str, dict[str, Any]]:
+            result = await nmap_scan(scan_target, stealth=stealth)
+            return t, scan_target, result
+
+        scan_tasks = [
+            (f"nmap:{scan_target}", _scan_target_ports(t, scan_target))
+            for t, scan_target in in_scope_targets
+        ]
+        task_results = await self.scheduler.run_parallel(scan_tasks) if scan_tasks else []
+
+        seen_banner_cves: set[tuple[str, int, str]] = set()
+        for tr in task_results:
+            if tr.error or tr.result is None:
+                log.warning("[RECON] nmap failed (%s): %s", tr.name, tr.error)
                 continue
-            try:
-                result = await nmap_scan(scan_target, stealth=stealth)
-                for scanned_t in result["targets"]:
-                    if scanned_t.os_guess and not t.os_guess:
-                        t.os_guess = scanned_t.os_guess
-                    if scanned_t.is_live:
-                        t.is_live = True
-                self.db.add_target(t)
-                for port in result["ports"]:
-                    if not self._is_in_scope(scan_target, port.port):
-                        continue
-                    port.target_id = t.id
-                    self.db.add_port(port)
-                for f in result["findings"]:
-                    if f.port and not self._is_in_scope(f.host or scan_target, f.port):
-                        continue
-                    f.engagement_id = eng_id
-                    all_findings.append(f)
-            except Exception as exc:
-                log.warning("[RECON] nmap failed for %s: %s", scan_target, exc)
+            t, scan_target, result = tr.result
+            for scanned_t in result["targets"]:
+                if scanned_t.os_guess and not t.os_guess:
+                    t.os_guess = scanned_t.os_guess
+                if scanned_t.is_live:
+                    t.is_live = True
+            self.db.add_target(t)
+            for port in result["ports"]:
+                if not self._is_in_scope(scan_target, port.port):
+                    continue
+                port.target_id = t.id
+                self.db.add_port(port)
+                if self.knowledge and port.state.lower().startswith("open") and (port.service or port.version):
+                    banner = f"{port.service} {port.version}".strip()
+                    for svc_name, entry in self.knowledge.match_banner_vulns(port.service, port.version):
+                        dedup_key = (t.host, port.port, entry.cve)
+                        if dedup_key in seen_banner_cves:
+                            continue
+                        seen_banner_cves.add(dedup_key)
+                        all_findings.append(Finding(
+                            engagement_id=eng_id,
+                            host=t.host,
+                            port=port.port,
+                            protocol=port.protocol or port.service or "tcp",
+                            title=f"{entry.cve}: {entry.description or svc_name}",
+                            description=(
+                                f"Discovered service banner '{banner}' on port {port.port} matched "
+                                f"{entry.cve} (affected: {entry.affected_versions})."
+                            ),
+                            severity=_SEV_STR_MAP.get(entry.severity.lower(), Severity.MEDIUM),
+                            cvss_score=float(entry.cvss or 0.0),
+                            cve_ids=[entry.cve],
+                            cwe_id=entry.vuln_type if entry.vuln_type.startswith("CWE-") else "",
+                            evidence=f"Detected service banner: {banner}",
+                            remediation=entry.remediation,
+                            tool_source="knowledge_banner",
+                            confirmed=False,
+                        ))
+            for f in result["findings"]:
+                if f.port and not self._is_in_scope(f.host or scan_target, f.port):
+                    continue
+                f.engagement_id = eng_id
+                all_findings.append(f)
 
         # 4. Tech-stack detection
         log.info("[RECON] Tech-stack detection")
         targets = await detect_tech_stack(targets)
 
         # 5. WAF detection
-        log.info("[RECON] WAF detection")
-        targets, waf_findings = await detect_waf(targets)
-        for f in waf_findings:
-            f.engagement_id = eng_id
-        all_findings.extend(waf_findings)
+        if profile_cfg.get("run_waf", True):
+            log.info("[RECON] WAF detection")
+            targets, waf_findings = await detect_waf(targets)
+            for f in waf_findings:
+                f.engagement_id = eng_id
+            all_findings.extend(waf_findings)
 
-        # Feed WAF results into brain
-        if self.waf:
-            for t in targets:
-                if t.waf_detected and self.expert:
-                    self.expert.add_fact(
-                        f"waf_{t.waf_detected.lower().replace(' ', '_')}",
-                        True, source="wafw00f",
-                    )
+            # Feed WAF results into brain
+            if self.waf:
+                for t in targets:
+                    if t.waf_detected and self.expert:
+                        self.expert.add_fact(
+                            f"waf_{t.waf_detected.lower().replace(' ', '_')}",
+                            True, source="wafw00f",
+                        )
+        else:
+            log.info("[RECON] Skipping WAF detection for profile=%s", self.config.profile.value)
 
         # 6. OSINT gathering (filter new targets against scope)
-        log.info("[RECON] OSINT gathering")
-        osint_targets, osint_findings = await gather_osint(target)
-        for t2 in osint_targets:
-            h_l = t2.host.lower().strip()
-            if h_l and h_l not in seen_hosts and self._is_in_scope(h_l):
-                seen_hosts.add(h_l)
-                t2.engagement_id = eng_id
-                targets.append(t2)
-        for f in osint_findings:
-            f.engagement_id = eng_id
-        all_findings.extend(osint_findings)
+        if profile_cfg.get("run_osint", True):
+            log.info("[RECON] OSINT gathering")
+            osint_targets, osint_findings = await gather_osint(target)
+            for t2 in osint_targets:
+                h_l = t2.host.lower().strip()
+                if h_l and h_l not in seen_hosts and self._is_in_scope(h_l):
+                    seen_hosts.add(h_l)
+                    t2.engagement_id = eng_id
+                    targets.append(t2)
+            for f in osint_findings:
+                f.engagement_id = eng_id
+            all_findings.extend(osint_findings)
+        else:
+            log.info("[RECON] Skipping OSINT gathering for profile=%s", self.config.profile.value)
 
         # 7. Plugin recon modules
         if self.plugins and self.plugins.registry.recon_modules:
@@ -485,12 +622,21 @@ class NexusEngine:
         return all_findings
 
     async def run_scan(self, eng_id: str, target: str) -> list[Finding]:
-        """Run scanning phase — nuclei, ffuf, nikto on discovered targets."""
+        """Run scanning phase — brain-routed web, TLS, and SSH checks on discovered targets."""
         self._require_boot()
         assert self.audit is not None
         assert self.db is not None
+        assert self.scheduler is not None
         self._advance_phase(eng_id, EngagementPhase.SCAN)
-        self.audit.log_action("scan_start", target=target, extra={"id": eng_id})
+
+        profile_cfg = SCAN_PROFILE_SETTINGS.get(
+            self.config.profile.value, SCAN_PROFILE_SETTINGS[ScanProfile.FULL.value]
+        )
+        self.audit.log_action(
+            "scan_start",
+            target=target,
+            extra={"id": eng_id, "profile": self.config.profile.value},
+        )
 
         all_findings: list[Finding] = []
         stealth = self._active_stealth_profile()
@@ -498,29 +644,86 @@ class NexusEngine:
 
         url_set: list[str] = []
         seen_urls: set[str] = set()
+        tls_endpoints: list[tuple[str, int]] = []
+        seen_tls: set[tuple[str, int]] = set()
+        ssh_endpoints: list[tuple[str, int]] = []
+        seen_ssh: set[tuple[str, int]] = set()
+        tech_tokens: set[str] = set()
+        wafs_detected: set[str] = set()
+        discovered_services: set[str] = set()
 
         def _add_url(u: str) -> None:
             if u not in seen_urls:
                 seen_urls.add(u)
                 url_set.append(u)
 
+        if self.expert:
+            self.expert.clear_facts()
+
+        port_service_hints = {
+            445: "smb",
+            21: "ftp",
+            3306: "mysql",
+            1433: "mssql",
+            3389: "rdp",
+            25: "smtp",
+            53: "dns",
+        }
+
         for t in targets_db:
             host = t.host
             if not host or not self._is_in_scope(host):
                 continue
+            for tech in t.tech_stack:
+                tok = tech.lower().strip()
+                if tok:
+                    tech_tokens.add(tok)
+            if t.waf_detected:
+                wafs_detected.add(t.waf_detected)
+
             open_ports = self.db.get_ports(t.id)
             if open_ports:
                 for p in open_ports:
+                    if p.state and not p.state.lower().startswith("open"):
+                        continue
                     if not self._is_in_scope(host, p.port):
                         continue
-                    svc = p.service.lower()
-                    if p.port in (443, 8443, 4443) or "https" in svc or "ssl" in svc:
-                        scheme = "https"
+                    svc = p.service.lower().strip()
+                    if self.expert:
+                        self.expert.add_fact(f"port_{p.port}", True, source="db")
+                        if svc:
+                            self.expert.add_fact(f"service_{svc}", True, source="db")
+
+                    if p.port in (443, 8443, 4443) or "https" in svc or "ssl" in svc or "tls" in svc:
                         suffix = "" if p.port == 443 else f":{p.port}"
-                        _add_url(f"{scheme}://{host}{suffix}")
+                        _add_url(f"https://{host}{suffix}")
+                        if (host, p.port) not in seen_tls:
+                            seen_tls.add((host, p.port))
+                            tls_endpoints.append((host, p.port))
+                        if self.expert:
+                            self.expert.add_fact("service_https", True, source="db")
+                        discovered_services.add("https" if not svc or "http" in svc else svc)
                     elif p.port in (80, 8000, 8080, 8081, 8888, 3000, 5000, 9000) or "http" in svc:
                         suffix = "" if p.port == 80 else f":{p.port}"
                         _add_url(f"http://{host}{suffix}")
+                        if self.expert:
+                            self.expert.add_fact("service_http", True, source="db")
+                        discovered_services.add("http" if not svc else svc)
+
+                    if p.port == 22 or "ssh" in svc:
+                        if (host, p.port) not in seen_ssh:
+                            seen_ssh.add((host, p.port))
+                            ssh_endpoints.append((host, p.port))
+                        if self.expert:
+                            self.expert.add_fact("service_ssh", True, source="db")
+                        discovered_services.add("ssh")
+
+                    hint = port_service_hints.get(p.port)
+                    for alias in ("smb", "ftp", "mysql", "mssql", "rdp", "smtp", "dns"):
+                        if alias == hint or alias in svc:
+                            if self.expert:
+                                self.expert.add_fact(f"service_{alias}", True, source="db")
+                            discovered_services.add(alias)
             else:
                 _add_url(f"http://{host}")
                 _add_url(f"https://{host}")
@@ -529,41 +732,95 @@ class NexusEngine:
             _add_url(f"http://{target}")
             _add_url(f"https://{target}")
 
+        # Populate Expert RuleEngine, query ServiceRouter & WAFBypassLibrary
+        effective_stealth = stealth
+        waf_bypass_count = 0
+        if self.expert:
+            if tech_tokens:
+                self.expert.add_fact("tech_stack", " ".join(sorted(tech_tokens)), source="recon")
+            if wafs_detected:
+                self.expert.add_fact("waf_status", ", ".join(sorted(wafs_detected)), source="wafw00f")
+                for w in wafs_detected:
+                    self.expert.add_fact(f"waf_{w.lower().replace(' ', '_')}", True, source="wafw00f")
+            else:
+                self.expert.add_fact("waf_status", "none", source="wafw00f")
+
+        if wafs_detected:
+            if stealth in ("loud", "normal"):
+                effective_stealth = "quiet"
+            if self.waf:
+                for w in wafs_detected:
+                    waf_bypass_count += len(self.waf.get_bypasses(w))
+            log.info(
+                "[SCAN] WAF detected (%s) — throttling stealth %s -> %s (%d bypass techniques)",
+                ", ".join(sorted(wafs_detected)), stealth, effective_stealth, waf_bypass_count,
+            )
+
+        expert_recs = self.expert.evaluate() if self.expert else []
+        service_routes = (
+            {svc: self.router.route(svc) for svc in sorted(discovered_services)}
+            if self.router else {}
+        )
+        self.audit.log_action("routing_plan", target=target, extra={
+            "id": eng_id,
+            "profile": self.config.profile.value,
+            "effective_stealth": effective_stealth,
+            "wafs_detected": sorted(wafs_detected),
+            "waf_bypass_techniques": waf_bypass_count,
+            "expert_rules": [{"rule": name, "actions": actions} for name, actions in expert_recs],
+            "service_routes": service_routes,
+        })
+
         urls = url_set
 
-        # 1. Nuclei vulnerability scan
-        if ToolRunner.is_available("nuclei") and urls:
-            log.info("[SCAN] Running nuclei on %d URLs", len(urls))
+        # 1. Nuclei vulnerability scan (profile + tech-tag aware)
+        if profile_cfg.get("run_nuclei", True) and ToolRunner.is_available("nuclei") and urls:
+            nuclei_extra: list[str] | None = None
+            if profile_cfg.get("targeted_nuclei", False):
+                matched_tags = {
+                    tag for key, tag in _TECH_NUCLEI_TAGS.items()
+                    if any(key in tok for tok in tech_tokens)
+                }
+                if self.config.profile == ScanProfile.API:
+                    matched_tags.update({"api", "graphql", "swagger"})
+                if matched_tags:
+                    nuclei_extra = ["-tags", ",".join(sorted(matched_tags))]
+
+            log.info("[SCAN] Running nuclei on %d URLs (stealth=%s, tags=%s)",
+                     len(urls), effective_stealth, nuclei_extra)
             try:
                 nuclei_findings = await nuclei_scan(
-                    urls, stealth=stealth,
+                    urls,
+                    stealth=effective_stealth,
                     severity_filter=["critical", "high", "medium", "low"],
+                    extra_args=nuclei_extra,
                 )
                 for f in nuclei_findings:
                     f.engagement_id = eng_id
                 all_findings.extend(nuclei_findings)
             except Exception as exc:
                 log.warning("[SCAN] nuclei failed: %s", exc)
-        elif urls:
+        elif profile_cfg.get("run_nuclei", True) and urls:
             log.warning("[SCAN] nuclei not found — skipping vulnerability scan")
 
         # 2. ffuf directory brute-force (base URLs discovered, fallback to target)
         ffuf_targets = urls[:4] if urls else ([f"http://{target}", f"https://{target}"] if self._is_in_scope(target) else [])
-        if ToolRunner.is_available("ffuf") and ffuf_targets:
+        if profile_cfg.get("run_ffuf", True) and ToolRunner.is_available("ffuf") and ffuf_targets:
+            ffuf_wl = str(profile_cfg.get("ffuf_wordlist", "common"))
             for base in ffuf_targets:
-                log.info("[SCAN] Running ffuf on %s", base)
+                log.info("[SCAN] Running ffuf on %s (wordlist=%s, stealth=%s)", base, ffuf_wl, effective_stealth)
                 try:
-                    ffuf_findings = await ffuf_scan(base, stealth=stealth)
+                    ffuf_findings = await ffuf_scan(base, wordlist_name=ffuf_wl, stealth=effective_stealth)
                     for f in ffuf_findings:
                         f.engagement_id = eng_id
                     all_findings.extend(ffuf_findings)
                 except Exception as exc:
                     log.warning("[SCAN] ffuf failed on %s: %s", base, exc)
-        elif ffuf_targets:
+        elif profile_cfg.get("run_ffuf", True) and ffuf_targets:
             log.warning("[SCAN] ffuf not found — skipping directory scan")
 
         # 3. Nikto web server scan
-        if ToolRunner.is_available("nikto") and ffuf_targets:
+        if profile_cfg.get("run_nikto", True) and ToolRunner.is_available("nikto") and ffuf_targets:
             for base in ffuf_targets[:2]:
                 log.info("[SCAN] Running nikto on %s", base)
                 try:
@@ -573,8 +830,42 @@ class NexusEngine:
                     all_findings.extend(nikto_findings)
                 except Exception as exc:
                     log.warning("[SCAN] nikto failed on %s: %s", base, exc)
-        elif ffuf_targets:
+        elif profile_cfg.get("run_nikto", True) and ffuf_targets:
             log.warning("[SCAN] nikto not found — skipping web server scan")
+
+        # 4. TLS configuration & certificate audit
+        if profile_cfg.get("run_tls", True) and tls_endpoints:
+            log.info("[SCAN] Auditing TLS on %d endpoint(s)", len(tls_endpoints))
+            tls_tasks = [
+                (f"tls:{h}:{p}", audit_tls(h, p))
+                for h, p in tls_endpoints
+                if self._is_in_scope(h, p)
+            ]
+            tls_results = await self.scheduler.run_parallel(tls_tasks) if tls_tasks else []
+            for tr in tls_results:
+                if tr.error or tr.result is None:
+                    log.warning("[SCAN] audit_tls failed (%s): %s", tr.name, tr.error)
+                    continue
+                for f in tr.result:
+                    f.engagement_id = eng_id
+                    all_findings.append(f)
+
+        # 5. SSH configuration & crypto audit
+        if profile_cfg.get("run_ssh", True) and ssh_endpoints:
+            log.info("[SCAN] Auditing SSH on %d endpoint(s)", len(ssh_endpoints))
+            ssh_tasks = [
+                (f"ssh:{h}:{p}", audit_ssh(h, p))
+                for h, p in ssh_endpoints
+                if self._is_in_scope(h, p)
+            ]
+            ssh_results = await self.scheduler.run_parallel(ssh_tasks) if ssh_tasks else []
+            for tr in ssh_results:
+                if tr.error or tr.result is None:
+                    log.warning("[SCAN] audit_ssh failed (%s): %s", tr.name, tr.error)
+                    continue
+                for f in tr.result:
+                    f.engagement_id = eng_id
+                    all_findings.append(f)
 
         # 4. Plugin scanners
         if self.plugins and self.plugins.registry.scanners:
@@ -784,67 +1075,98 @@ class NexusEngine:
 
     async def engage(
         self,
-        target: str,
+        target: str = "",
         name: str = "",
         scope_file: str | None = None,
         skip_exploit: bool = False,
+        profile: str | None = None,
+        resume_id: str | None = None,
     ) -> str:
         """Run the complete engagement pipeline: Recon → Scan → Correlate → Exploit → Report.
 
+        Supports scan profiles (quick/web/network/api/full) and phase resume via resume_id.
         Returns the engagement ID.
         """
         self._require_boot()
         assert self.audit is not None
+        assert self.db is not None
 
-        eng = self.create_engagement(target, name, scope_file)
-        eng_id = eng.id
+        if profile:
+            self.config.profile = ScanProfile(profile)
 
-        self.audit.log_action("engage_start", target=target,
-                              extra={"id": eng_id, "skip_exploit": skip_exploit})
+        if resume_id:
+            eng = self.resume_engagement(resume_id)
+            if not eng:
+                raise ValueError(f"Engagement '{resume_id}' not found.")
+            eng_id = eng.id
+            target = eng.target
+            start_phase = eng.phase
+        else:
+            if not target:
+                raise ValueError("Target is required when not resuming an engagement.")
+            eng = self.create_engagement(target, name, scope_file)
+            eng_id = eng.id
+            start_phase = EngagementPhase.INIT
+
+        start_idx = _PHASE_ORDER.get(start_phase, 0)
+        self.audit.log_action("engage_start", target=target, extra={
+            "id": eng_id,
+            "skip_exploit": skip_exploit,
+            "profile": self.config.profile.value,
+            "resume_from": start_phase.value if resume_id else None,
+        })
 
         try:
+            if start_idx >= _PHASE_ORDER[EngagementPhase.COMPLETE]:
+                log.info("[ENGAGE] Engagement %s is already complete", eng_id)
+                return eng_id
+
             # Phase 1: Recon
-            await self.run_recon(eng_id, target)
+            if start_idx <= _PHASE_ORDER[EngagementPhase.RECON]:
+                await self.run_recon(eng_id, target)
 
             # Phase 2: Scan
-            await self.run_scan(eng_id, target)
+            if start_idx <= _PHASE_ORDER[EngagementPhase.SCAN]:
+                await self.run_scan(eng_id, target)
 
             # Phase 3: Correlate
-            await self.run_correlate(eng_id)
+            if start_idx <= _PHASE_ORDER[EngagementPhase.CORRELATE]:
+                await self.run_correlate(eng_id)
 
             # Phase 4: Exploit (optional)
-            if not skip_exploit:
+            if not skip_exploit and start_idx <= _PHASE_ORDER[EngagementPhase.EXPLOIT]:
                 await self.run_exploit(eng_id)
 
             # Phase 5: Report
-            self._advance_phase(eng_id, EngagementPhase.REPORT)
+            if start_idx <= _PHASE_ORDER[EngagementPhase.REPORT]:
+                self._advance_phase(eng_id, EngagementPhase.REPORT)
 
-            # AI executive summary (optional, silent fallback)
-            ai_summary = ""
-            if self.ai_boost and self.ai_boost.available:
-                try:
-                    sev_counts = self.db.count_findings_by_severity(eng_id)
-                    chains_list = self.db.get_chains(eng_id)
-                    creds_list = self.db.get_credentials(eng_id)
-                    ai_summary = self.ai_boost.executive_summary(
-                        target=target,
-                        total_findings=sum(sev_counts.values()),
-                        severity_counts=sev_counts,
-                        chains_count=len(chains_list),
-                        credentials_count=len(creds_list),
-                    )
-                    if ai_summary:
-                        log.info("[REPORT] AI executive summary generated (%d chars)", len(ai_summary))
-                except Exception as exc:
-                    log.debug("[REPORT] AI summary skipped: %s", exc)
+                # AI executive summary (optional, silent fallback)
+                ai_summary = ""
+                if self.ai_boost and self.ai_boost.available:
+                    try:
+                        sev_counts = self.db.count_findings_by_severity(eng_id)
+                        chains_list = self.db.get_chains(eng_id)
+                        creds_list = self.db.get_credentials(eng_id)
+                        ai_summary = self.ai_boost.executive_summary(
+                            target=target,
+                            total_findings=sum(sev_counts.values()),
+                            severity_counts=sev_counts,
+                            chains_count=len(chains_list),
+                            credentials_count=len(creds_list),
+                        )
+                        if ai_summary:
+                            log.info("[REPORT] AI executive summary generated (%d chars)", len(ai_summary))
+                    except Exception as exc:
+                        log.debug("[REPORT] AI summary skipped: %s", exc)
 
-            report_dir = self.config.data_dir / "reports" / eng_id
-            generated = generate_report(
-                self.db, eng_id, report_dir,
-                formats=["md", "html"],
-                ai_summary=ai_summary,
-            )
-            log.info("[REPORT] Generated %d reports: %s", len(generated), generated)
+                report_dir = self.config.data_dir / "reports" / eng_id
+                generated = generate_report(
+                    self.db, eng_id, report_dir,
+                    formats=["md", "html"],
+                    ai_summary=ai_summary,
+                )
+                log.info("[REPORT] Generated %d reports: %s", len(generated), generated)
 
             # Complete
             self._advance_phase(eng_id, EngagementPhase.COMPLETE)
@@ -867,6 +1189,8 @@ class NexusEngine:
             stats["expert_rules"] = self.expert.rule_count
         if self.knowledge:
             stats["knowledge_cves"] = self.knowledge.cve_count
+        if self.vector:
+            stats["vector_entries"] = self.vector.entry_count
         if self.chains:
             stats.update(self.chains.stats())
         if self.payloads:

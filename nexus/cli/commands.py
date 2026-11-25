@@ -14,7 +14,7 @@ from rich.table import Table
 from rich.text import Text
 
 from nexus import __version__, __codename__
-from nexus.core.config import NexusConfig, Tier, StealthLevel
+from nexus.core.config import NexusConfig, ScanProfile, Tier, StealthLevel
 from nexus.core.engine import NexusEngine
 from nexus.core.hardware import detect_hardware, auto_select_tier, tier_description
 from nexus.db.models import Severity
@@ -50,32 +50,55 @@ def _run_async(coro):
 
 
 @click.command()
-@click.argument("target")
+@click.argument("target", required=False, default="")
 @click.option("--name", "-n", default="", help="Engagement name.")
 @click.option("--scope", "-s", type=click.Path(exists=True), help="Path to scope.yaml.")
 @click.option("--stealth", type=click.Choice([s.value for s in StealthLevel]), default="medium")
 @click.option("--tier", type=click.Choice([t.value for t in Tier]), default=None)
+@click.option(
+    "--profile",
+    "-p",
+    type=click.Choice([p.value for p in ScanProfile]),
+    default="full",
+    show_default=True,
+    help="Scan profile (quick, web, network, api, full).",
+)
+@click.option("--resume", default=None, help="Resume an existing engagement by ID.")
 @click.option("--no-exploit", is_flag=True, help="Skip exploitation phase.")
 @click.pass_context
-def engage(ctx, target, name, scope, stealth, tier, no_exploit):
-    """Start a full penetration test engagement against TARGET."""
+def engage(ctx, target, name, scope, stealth, tier, profile, resume, no_exploit):
+    """Start or resume a penetration test engagement against TARGET."""
+    if not target and not resume:
+        raise click.UsageError("Provide TARGET or pass --resume <engagement_id>.")
+
     engine = _get_engine(ctx)
 
     if stealth:
         engine.config.stealth = StealthLevel(stealth)
     if tier:
         engine.config.tier = Tier(tier)
+    if profile:
+        engine.config.profile = ScanProfile(profile)
 
+    display_target = target or f"resume:{resume}"
     console.print(Panel(
         f"[bold green]NEXUS Engagement[/]\n"
-        f"Target: [cyan]{target}[/]\n"
+        f"Target: [cyan]{display_target}[/]\n"
+        f"Profile: {engine.config.profile.value}\n"
         f"Stealth: {engine.config.stealth.value}\n"
         f"Tier: {engine.config.tier.value}\n"
         f"Scope: {scope or 'unrestricted'}",
-        title="🎯 New Engagement",
+        title="🎯 Resuming Engagement" if resume else "🎯 New Engagement",
     ))
 
-    eng_id = _run_async(engine.engage(target, name=name, scope_file=scope, skip_exploit=no_exploit))
+    eng_id = _run_async(engine.engage(
+        target,
+        name=name,
+        scope_file=scope,
+        skip_exploit=no_exploit,
+        profile=profile,
+        resume_id=resume,
+    ))
     console.print(f"\n[bold green]✓[/] Engagement complete — ID: [cyan]{eng_id}[/]")
 
 

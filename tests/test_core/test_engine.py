@@ -190,4 +190,182 @@ class TestEngineIntegrationContracts:
     def test_plugins_and_cves_loaded_on_boot(self, engine: NexusEngine) -> None:
         stats = engine.brain_stats()
         assert stats.get("knowledge_cves", 0) >= 20
+        assert stats.get("vector_entries", 0) >= 20
         assert "plugins" in stats
+
+    @pytest.mark.asyncio
+    async def test_run_recon_parallel_and_banner_cve(self, engine: NexusEngine) -> None:
+        from unittest.mock import patch, AsyncMock
+        from nexus.core.config import ScanProfile
+        from nexus.db.models import Port, Target
+
+        engine.config.profile = ScanProfile.QUICK
+        eng = engine.create_engagement("multi.local")
+
+        async def _fake_nmap(host: str, stealth: str = "normal"):
+            if host == "web.multi.local":
+                return {
+                    "targets": [Target(host="web.multi.local", ip="10.0.0.10", is_live=True)],
+                    "ports": [Port(port=80, protocol="tcp", state="open", service="http", version="Apache/2.4.49")],
+                    "findings": [],
+                    "raw_xml": "",
+                }
+            return {
+                "targets": [Target(host="ssh.multi.local", ip="10.0.0.11", is_live=True)],
+                "ports": [Port(port=22, protocol="tcp", state="open", service="ssh", version="OpenSSH 8.9p1")],
+                "findings": [],
+                "raw_xml": "",
+            }
+
+        with (
+            patch(
+                "nexus.core.engine.enumerate_subdomains",
+                AsyncMock(return_value=[Target(host="web.multi.local"), Target(host="ssh.multi.local")]),
+            ),
+            patch("nexus.core.engine.enumerate_dns", AsyncMock(side_effect=lambda ts: (ts, []))),
+            patch("nexus.core.engine.nmap_scan", AsyncMock(side_effect=_fake_nmap)),
+            patch("nexus.core.engine.detect_tech_stack", AsyncMock(side_effect=lambda ts: ts)),
+            patch("nexus.core.engine.detect_waf", AsyncMock(side_effect=lambda ts: (ts, []))) as mock_waf,
+            patch("nexus.core.engine.gather_osint", AsyncMock(return_value=([], []))) as mock_osint,
+        ):
+            findings = await engine.run_recon(eng.id, "multi.local")
+
+        # QUICK profile skips WAF & OSINT
+        mock_waf.assert_not_called()
+        mock_osint.assert_not_called()
+        all_cves = {c for f in findings for c in f.cve_ids}
+        assert "CVE-2021-41773" in all_cves
+        assert "CVE-2024-6387" in all_cves
+        assert all(f.tool_source == "knowledge_banner" for f in findings if f.cve_ids)
+
+    @pytest.mark.asyncio
+    async def test_run_scan_dynamic_routing_and_waf_throttle(self, engine: NexusEngine) -> None:
+        from unittest.mock import patch, AsyncMock
+        from nexus.core.config import ScanProfile
+        from nexus.db.models import Finding, Port, Severity, Target
+
+        engine.config.profile = ScanProfile.WEB
+        eng = engine.create_engagement("web.local")
+        t = Target(
+            engagement_id=eng.id,
+            host="web.local",
+            ip="10.0.0.20",
+            is_live=True,
+            tech_stack=["WordPress", "PHP"],
+            waf_detected="Cloudflare",
+        )
+        engine.db.add_target(t)
+        engine.db.add_port(Port(target_id=t.id, port=443, protocol="tcp", state="open", service="https"))
+        engine.db.add_port(Port(target_id=t.id, port=22, protocol="tcp", state="open", service="ssh"))
+
+        nuclei_mock = AsyncMock(return_value=[])
+        ffuf_mock = AsyncMock(return_value=[])
+        tls_mock = AsyncMock(return_value=[
+            Finding(host="web.local", port=443, protocol="https", title="TLS Check", severity=Severity.LOW, tool_source="sslyze")
+        ])
+        ssh_mock = AsyncMock(return_value=[
+            Finding(host="web.local", port=22, protocol="ssh", title="SSH Check", severity=Severity.LOW, tool_source="nmap_ssh")
+        ])
+
+        with (
+            patch(
+                "nexus.core.engine.ToolRunner.is_available",
+                side_effect=lambda name: name in ("nuclei", "ffuf"),
+            ),
+            patch("nexus.core.engine.nuclei_scan", nuclei_mock),
+            patch("nexus.core.engine.ffuf_scan", ffuf_mock),
+            patch("nexus.core.engine.audit_tls", tls_mock),
+            patch("nexus.core.engine.audit_ssh", ssh_mock),
+        ):
+            findings = await engine.run_scan(eng.id, "web.local")
+
+        # WEB profile runs nuclei & TLS, skips SSH
+        assert len(findings) == 1
+        assert findings[0].tool_source == "sslyze"
+        tls_mock.assert_awaited_once_with("web.local", 443)
+        ssh_mock.assert_not_awaited()
+
+        # Cloudflare WAF should throttle stealth to quiet and apply targeted tags
+        assert nuclei_mock.call_args.kwargs["stealth"] == "quiet"
+        assert nuclei_mock.call_args.kwargs["extra_args"] == ["-tags", "php,wordpress"]
+        assert ffuf_mock.call_args.kwargs["stealth"] == "quiet"
+
+        # Audit log should capture routing_plan with RuleEngine decisions
+        import json
+        ok, _ = engine.audit.verify_chain()
+        assert ok is True
+        entries = [
+            json.loads(line)
+            for line in engine.audit._path.read_text(encoding="utf-8").splitlines()
+            if line.strip()
+        ]
+        routing_entries = [e for e in entries if e.get("action") == "routing_plan"]
+        assert len(routing_entries) == 1
+        plan = routing_entries[0]["extra"]
+        assert plan["effective_stealth"] == "quiet"
+        rule_names = {r["rule"] for r in plan["expert_rules"]}
+        assert "https_detected" in rule_names
+        assert "wordpress_detected" in rule_names
+        assert "waf_cloudflare" in rule_names
+
+    @pytest.mark.asyncio
+    async def test_run_scan_network_profile_skips_web_and_runs_ssh_tls(self, engine: NexusEngine) -> None:
+        from unittest.mock import patch, AsyncMock
+        from nexus.core.config import ScanProfile
+        from nexus.db.models import Finding, Port, Severity, Target
+
+        engine.config.profile = ScanProfile.NETWORK
+        eng = engine.create_engagement("net.local")
+        t = Target(engagement_id=eng.id, host="net.local", ip="10.0.0.30", is_live=True)
+        engine.db.add_target(t)
+        engine.db.add_port(Port(target_id=t.id, port=443, protocol="tcp", state="open", service="https"))
+        engine.db.add_port(Port(target_id=t.id, port=22, protocol="tcp", state="open", service="ssh"))
+
+        nuclei_mock = AsyncMock(return_value=[])
+        tls_mock = AsyncMock(return_value=[
+            Finding(host="net.local", port=443, protocol="https", title="TLS Test", severity=Severity.LOW, tool_source="sslyze")
+        ])
+        ssh_mock = AsyncMock(return_value=[
+            Finding(host="net.local", port=22, protocol="ssh", title="SSH Test", severity=Severity.LOW, tool_source="nmap_ssh")
+        ])
+
+        with (
+            patch("nexus.core.engine.ToolRunner.is_available", return_value=True),
+            patch("nexus.core.engine.nuclei_scan", nuclei_mock),
+            patch("nexus.core.engine.audit_tls", tls_mock),
+            patch("nexus.core.engine.audit_ssh", ssh_mock),
+        ):
+            findings = await engine.run_scan(eng.id, "net.local")
+
+        nuclei_mock.assert_not_awaited()
+        assert {f.tool_source for f in findings} == {"sslyze", "nmap_ssh"}
+
+    @pytest.mark.asyncio
+    async def test_engage_resume_skips_completed_phases(self, engine: NexusEngine, tmp_path: Path) -> None:
+        from unittest.mock import patch, AsyncMock
+        from nexus.db.models import EngagementPhase
+
+        eng = engine.create_engagement("resume.local")
+        engine._advance_phase(eng.id, EngagementPhase.CORRELATE)
+
+        recon_mock = AsyncMock(return_value=[])
+        scan_mock = AsyncMock(return_value=[])
+        correlate_mock = AsyncMock(return_value=[])
+        exploit_mock = AsyncMock(return_value=[])
+
+        with (
+            patch.object(engine, "run_recon", recon_mock),
+            patch.object(engine, "run_scan", scan_mock),
+            patch.object(engine, "run_correlate", correlate_mock),
+            patch.object(engine, "run_exploit", exploit_mock),
+            patch("nexus.core.engine.generate_report", return_value=[tmp_path / "r.md"]) as mock_rep,
+        ):
+            resumed_id = await engine.engage(skip_exploit=True, profile="quick", resume_id=eng.id)
+
+        assert resumed_id == eng.id
+        recon_mock.assert_not_awaited()
+        scan_mock.assert_not_awaited()
+        correlate_mock.assert_awaited_once_with(eng.id)
+        exploit_mock.assert_not_awaited()
+        mock_rep.assert_called_once()
+        assert engine.db.get_engagement(eng.id).phase == EngagementPhase.COMPLETE

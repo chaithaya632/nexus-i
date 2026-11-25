@@ -7,7 +7,15 @@ from pathlib import Path
 import pytest
 import yaml
 
-from nexus.core.config import NexusConfig, Tier, StealthLevel, get_config, set_config
+from nexus.core.config import (
+    NexusConfig,
+    SCAN_PROFILE_SETTINGS,
+    ScanProfile,
+    Tier,
+    StealthLevel,
+    get_config,
+    set_config,
+)
 
 
 class TestNexusConfig:
@@ -60,3 +68,9 @@ class TestNexusConfig:
     def test_stealth_levels(self):
         assert StealthLevel.PARANOID.value == "paranoid"
         assert StealthLevel.OFF.value == "off"
+
+    def test_scan_profiles(self):
+        assert set(SCAN_PROFILE_SETTINGS.keys()) == {p.value for p in ScanProfile}
+        assert SCAN_PROFILE_SETTINGS[ScanProfile.NETWORK.value]["run_nuclei"] is False
+        assert SCAN_PROFILE_SETTINGS[ScanProfile.NETWORK.value]["run_tls"] is True
+        assert SCAN_PROFILE_SETTINGS[ScanProfile.API.value]["ffuf_wordlist"] == "api"

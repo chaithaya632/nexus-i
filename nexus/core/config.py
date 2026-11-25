@@ -26,6 +26,49 @@ class StealthLevel(str, Enum):
     PARANOID = "paranoid"
 
 
+class ScanProfile(str, Enum):
+    QUICK = "quick"
+    WEB = "web"
+    NETWORK = "network"
+    API = "api"
+    FULL = "full"
+
+
+# Behavior flags per ScanProfile (kept lightweight & explicit)
+SCAN_PROFILE_SETTINGS: dict[str, dict[str, Any]] = {
+    "quick": {
+        "use_amass": False, "run_osint": False, "run_waf": False,
+        "run_nuclei": True, "targeted_nuclei": True,
+        "run_ffuf": False, "run_nikto": False,
+        "run_tls": True, "run_ssh": True,
+    },
+    "web": {
+        "use_amass": True, "run_osint": False, "run_waf": True,
+        "run_nuclei": True, "targeted_nuclei": True,
+        "run_ffuf": True, "ffuf_wordlist": "common", "run_nikto": True,
+        "run_tls": True, "run_ssh": False,
+    },
+    "network": {
+        "use_amass": False, "run_osint": True, "run_waf": False,
+        "run_nuclei": False, "targeted_nuclei": False,
+        "run_ffuf": False, "run_nikto": False,
+        "run_tls": True, "run_ssh": True,
+    },
+    "api": {
+        "use_amass": False, "run_osint": False, "run_waf": True,
+        "run_nuclei": True, "targeted_nuclei": True,
+        "run_ffuf": True, "ffuf_wordlist": "api", "run_nikto": False,
+        "run_tls": True, "run_ssh": False,
+    },
+    "full": {
+        "use_amass": True, "run_osint": True, "run_waf": True,
+        "run_nuclei": True, "targeted_nuclei": False,
+        "run_ffuf": True, "ffuf_wordlist": "common", "run_nikto": True,
+        "run_tls": True, "run_ssh": True,
+    },
+}
+
+
 class NexusConfig(BaseModel):
     """Central configuration for NEXUS."""
 
@@ -34,6 +77,7 @@ class NexusConfig(BaseModel):
     scope_file: Path | None = None
     stealth: StealthLevel = StealthLevel.MEDIUM
     tier: Tier = Tier.MINIMAL
+    profile: ScanProfile = ScanProfile.FULL
     ollama_host: str = "http://127.0.0.1:11434"
     model_name: str = "dolphin-mistral"
     max_threads: int = 5
