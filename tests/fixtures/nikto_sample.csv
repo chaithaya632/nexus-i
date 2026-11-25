@@ -1,0 +1,5 @@
+# Nikto 2.5.0 CSV output
+"host","ip","port","osvdb","method","uri","description"
+"app.example.test","192.0.2.10","443","OSVDB-3268","GET","/icons/","Directory indexing found on web server."
+"app.example.test","192.0.2.10","443","OSVDB-3092","GET","/admin/","Admin login directory detected; administrative interface exposed."
+"app.example.test","192.0.2.10","443","OSVDB-0","GET","/backup.sql","Backup file /backup.sql publicly accessible on server."

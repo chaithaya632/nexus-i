@@ -15,26 +15,36 @@ from nexus.scanner.passive_dast import (
     audit_auth_enforcement,
     audit_graphql_introspection,
 )
+from nexus.scanner.proxy import NexusMitmAddon, NexusProxyRecorder
 from nexus.scanner.ssh_audit import audit_ssh
 from nexus.scanner.tls import audit_tls
 from nexus.scanner.web import ffuf_scan
+from nexus.scanner.yaml_rules import PassiveRule, YamlPassiveRuleEngine
+from nexus.scanner.zap import build_zap_automation_plan, parse_zap_json_report, zap_scan
 
 __all__ = [
-    "nuclei_scan",
-    "ffuf_scan",
-    "nikto_scan",
-    "import_file",
-    "audit_tls",
-    "audit_ssh",
-    "crawl_web",
+    "NexusMitmAddon",
+    "NexusProxyRecorder",
+    "PassiveRule",
+    "YamlPassiveRuleEngine",
+    "analyze_html_passive",
+    "audit_auth_enforcement",
     "audit_exposed_artifacts",
+    "audit_graphql_introspection",
+    "audit_host_packages",
     "audit_http_security",
     "audit_network_service",
-    "wpscan_audit",
     "audit_openapi_spec",
+    "audit_ssh",
+    "audit_tls",
+    "build_zap_automation_plan",
+    "crawl_web",
+    "ffuf_scan",
+    "import_file",
+    "nikto_scan",
+    "nuclei_scan",
     "parse_openapi_spec",
-    "analyze_html_passive",
-    "audit_graphql_introspection",
-    "audit_auth_enforcement",
-    "audit_host_packages",
+    "parse_zap_json_report",
+    "wpscan_audit",
+    "zap_scan",
 ]

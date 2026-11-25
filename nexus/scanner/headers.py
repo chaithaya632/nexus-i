@@ -238,8 +238,8 @@ async def audit_http_security(
                     url, headers={"Origin": _TEST_CORS_ORIGIN}, follow_redirects=False
                 )
                 cors_hdrs = cors_resp.headers
-            except Exception:
-                pass
+            except Exception as exc:
+                log.debug("CORS pre-probe failed for %s: %s", url, exc)
 
             resp_url = str(resp.url)
             set_cookies = (

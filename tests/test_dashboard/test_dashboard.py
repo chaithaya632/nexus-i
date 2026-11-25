@@ -322,3 +322,60 @@ class TestDashboardApp:
         mock_uv.assert_called_once()
         err = capsys.readouterr().err
         assert "auto-generated dashboard token" in err
+
+    def test_proxy_history_endpoints_diff_and_fallback_auth_ui(self, engine):
+        from nexus.db.models import ProxyEntry
+
+        eng = engine.create_engagement("proxy.example.test")
+        e1 = ProxyEntry(
+            engagement_id=eng.id,
+            method="GET",
+            url="https://proxy.example.test/items?id=1",
+            host="proxy.example.test",
+            port=443,
+            status_code=200,
+            response_body="alpha\nbeta\n",
+        )
+        e2 = ProxyEntry(
+            engagement_id=eng.id,
+            method="GET",
+            url="https://proxy.example.test/items?id=2",
+            host="proxy.example.test",
+            port=443,
+            status_code=403,
+            response_body="alpha\ngamma\n",
+        )
+        engine.db.add_proxy_entry(e1)
+        engine.db.add_proxy_entry(e2)
+
+        dash = DashboardApp(engine)
+        client = TestClient(dash.app)
+
+        r_eng = client.get(f"/api/engagements/{eng.id}/proxy")
+        assert r_eng.status_code == 200
+        assert len(r_eng.json()) == 2
+
+        r_all = client.get("/api/proxy/history")
+        assert r_all.status_code == 200
+        assert len(r_all.json()) >= 2
+
+        r_diff = client.get(f"/api/proxy/diff?left={e1.id}&right={e2.id}")
+        assert r_diff.status_code == 200
+        diff_data = r_diff.json()
+        assert diff_data["left"]["status_code"] == 200
+        assert diff_data["right"]["status_code"] == 403
+        assert "-beta" in diff_data["diff"]
+        assert "+gamma" in diff_data["diff"]
+
+        r_missing = client.get("/api/proxy/diff?left=missing1&right=missing2")
+        assert r_missing.status_code == 404
+
+        from nexus.dashboard.app import _fallback_html
+
+        fallback = _fallback_html()
+        assert "X-Nexus-Token" in fallback
+        assert "sessionStorage" in fallback
+        assert "'auth'" in fallback
+
+        index_html = client.get("/").text
+        assert "Proxy History" in index_html or "/api/proxy/diff" in index_html

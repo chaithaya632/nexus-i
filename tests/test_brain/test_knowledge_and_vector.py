@@ -181,3 +181,15 @@ class TestWave6ExtendedCatalogAndKevSync:
             assert "CVE-2024-99992" not in patched
         finally:
             eng.shutdown()
+
+    def test_bundled_cisa_kev_snapshot_enriches_without_banner_false_positives(self) -> None:
+        cfg = NexusConfig()
+        kg = KnowledgeGraph()
+        kg.load_from_directory(cfg.knowledge_dir)
+
+        assert kg.cve_count >= 1500
+        assert kg.has_cve("CVE-2021-44228")
+
+        # Unversioned KEV entries must not false-positive on patched banners
+        patched_cves = {e.cve for _, e in kg.match_banner_vulns("http", "Apache/2.4.62")}
+        assert "CVE-2021-41773" not in patched_cves

@@ -134,6 +134,13 @@ def _run_async(coro):
 )
 @click.option("--no-exploit", is_flag=True, help="Skip exploitation phase.")
 @click.option("--yes", "-y", is_flag=True, help="Confirm active exploitation without prompting.")
+@click.option(
+    "--unrestricted-scope",
+    is_flag=True,
+    help="LAB ONLY: disable default target scoping when no --scope file is passed.",
+)
+@click.option("--login-url", default="", help="Optional stateful login POST URL before scanning.")
+@click.option("--login-body", default="", help="Optional JSON body string for --login-url POST.")
 @click.pass_context
 def engage(
     ctx,
@@ -154,6 +161,9 @@ def engage(
     local_audit,
     no_exploit,
     yes,
+    unrestricted_scope,
+    login_url,
+    login_body,
 ):
     """Start or resume a penetration test engagement against TARGET."""
     if not target and not resume:
@@ -180,6 +190,17 @@ def engage(
         config.ssh_key_path = Path(ssh_key)
     if local_audit:
         config.local_pkg_audit = True
+    if unrestricted_scope:
+        config.unrestricted_scope = True
+    if login_url:
+        config.auth_login_url = login_url
+    if login_body:
+        try:
+            parsed_body = json.loads(login_body)
+            if isinstance(parsed_body, dict):
+                config.auth_login_body = parsed_body
+        except json.JSONDecodeError as exc:
+            raise click.BadParameter(f"Invalid JSON for --login-body: {exc}") from exc
     if yes:
         config.auto_confirm_exploits = True
     elif not no_exploit and not config.auto_confirm_exploits and sys.stdin.isatty():
@@ -876,6 +897,50 @@ def diff(old_id, new_id, fmt, fail_on_new):
                 raise SystemExit(2)
 
 
+# ── proxy ─────────────────────────────────────────────────────────
+
+
+@click.command("proxy")
+@click.option("--host", default="127.0.0.1", show_default=True, help="Proxy listen host.")
+@click.option("--port", "-p", default=8080, show_default=True, type=int, help="Proxy listen port.")
+@click.option(
+    "--scope", "-s", type=click.Path(exists=True), default=None, help="Path to scope.yaml."
+)
+@click.option(
+    "--engagement", "-e", default="", help="Optional engagement ID to attach history & findings."
+)
+def proxy_cmd(host, port, scope, engagement):
+    """Start scoped MITM HTTP proxy with live passive DAST + Dashboard history."""
+    from nexus.core.scope import ScopeEnforcer
+    from nexus.scanner.proxy import NexusProxyRecorder, build_mitmproxy_master
+
+    cfg, store = _get_store()
+    enforcer = ScopeEnforcer.from_file(scope) if scope else None
+    if engagement and enforcer is None:
+        eng = store.get_engagement(engagement)
+        if eng and eng.scope_file:
+            enforcer = ScopeEnforcer.from_file(eng.scope_file)
+        elif eng and eng.target:
+            enforcer = ScopeEnforcer.for_target(eng.target)
+
+    rules_dir = cfg.knowledge_dir / "rules" if cfg.knowledge_dir else None
+    recorder = NexusProxyRecorder(
+        engagement_id=engagement,
+        scope=enforcer,
+        store=store,
+        rules_dir=rules_dir,
+    )
+    try:
+        master, _ = build_mitmproxy_master(listen_host=host, listen_port=port, recorder=recorder)
+    except ImportError as exc:
+        console.print(f"[red]✗ {exc}[/]")
+        raise SystemExit(1)
+
+    console.print(f"[bold cyan]🕵️  NEXUS MITM Proxy[/] listening on http://{host}:{port}")
+    console.print("[dim]Press Ctrl+C to stop capturing.[/]")
+    _run_async(master.run())
+
+
 # ── Collect all commands ──────────────────────────────────────────
 
 ALL_COMMANDS = [
@@ -885,6 +950,7 @@ ALL_COMMANDS = [
     exploit,
     report,
     diff,
+    proxy_cmd,
     engagements,
     kb,
     ai,

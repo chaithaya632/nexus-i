@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import gzip
+import json
 import logging
 import re
 from dataclasses import dataclass, field
@@ -180,12 +182,24 @@ class KnowledgeGraph:
         return len(self._fingerprint_index)
 
     def load_from_directory(self, knowledge_dir: Path) -> None:
-        """Load all YAML knowledge files from the cves/ subdirectory."""
+        """Load all YAML and compressed JSON.gz CVE knowledge files from cves/."""
         cve_dir = knowledge_dir / "cves"
         if not cve_dir.is_dir():
             return
         for yaml_file in sorted(cve_dir.glob("*.yaml")):
             self._load_file(yaml_file)
+        for gz_file in sorted(cve_dir.glob("*.json.gz")):
+            self._load_gzip_json(gz_file)
+
+    def _load_gzip_json(self, path: Path) -> None:
+        try:
+            with gzip.open(path, "rt", encoding="utf-8") as f:
+                raw = json.load(f)
+        except (OSError, ValueError) as exc:
+            log.warning("Failed to load compressed CVE snapshot %s: %s", path, exc)
+            return
+        if isinstance(raw, dict) and isinstance(raw.get("cves"), dict):
+            self._load_flat_cves(raw["cves"])
 
     def _load_file(self, path: Path) -> None:
         try:
@@ -368,14 +382,14 @@ class KnowledgeGraph:
                 specs = entry.version_specs or [
                     s.strip() for s in entry.affected_versions.split(",") if s.strip()
                 ]
-                # If a version string is present on the port banner, require a matching version range
+                # Require a versioned spec for banner CVE matching so unversioned KEV catalog entries don't false-positive
                 spec_has_ver = any(_VER_RE.search(s) for s in specs)
+                if not spec_has_ver:
+                    continue
                 if has_num_ver:
-                    if not spec_has_ver or not any(
-                        _version_in_range(version or service, s) for s in specs
-                    ):
+                    if not any(_version_in_range(version or service, s) for s in specs):
                         continue
-                elif spec_has_ver and not fp_match:
+                elif not fp_match:
                     continue
                 seen_cves.add(entry.cve)
                 matches.append((svc_name, entry))

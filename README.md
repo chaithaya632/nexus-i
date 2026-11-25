@@ -15,7 +15,7 @@
 
 NEXUS is an **open-source, AI-optional** autonomous penetration testing framework designed for **Kali Linux** and all Linux distributions. It wraps 25+ existing security tools into a unified engine with:
 
-- **500MB Expert System** — Rule engine + CVE knowledge graph + Dijkstra attack chain builder. Zero AI, zero GPU, fully functional on 2GB RAM.
+- **Lightweight Expert System** — Rule engine, bundled YAML KB (80 CVEs, 7 attack chains, 9 remediations, 5 WAF profiles), compressed CISA KEV snapshot (1,796 CVEs), and Dijkstra attack chain builder. Zero AI, zero GPU required.
 - **100% Free** — No paid tools, no subscriptions, no cloud dependencies.
 - **AI is Optional** — Works perfectly without any LLM. When you want AI, it uses uncensored local models (dolphin-mistral, WhiteRabbitNeo) via Ollama that never refuse security tasks.
 - **4-Tier Resource System** — Runs on everything from 2GB VMs to 12GB+ workstations.
@@ -90,6 +90,13 @@ nexus engagements show <engagement_id>
 # Launch web dashboard (supports --token or auto-generates one on non-loopback binds)
 nexus dashboard --token "$DASH_TOKEN"
 
+# Start scoped passive MITM inspection proxy (requires pip install 'nexus-pt[proxy]')
+nexus proxy --host 127.0.0.1 --port 8080 --scope scope.yaml
+
+# Docker all-in-one usage (with pre-installed Kali/ProjectDiscovery binaries)
+docker build -t nexus-pt .
+docker run --rm nexus-pt --version
+
 # AI status (optional)
 nexus ai status
 ```
@@ -127,8 +134,11 @@ notes: "Authorized pentest — contract #12345"
 
 ### 🔎 Scanning (Phase 2)
 - **Vulnerability Scanning** — Nuclei JSONL parser, severity filtering
+- **OWASP ZAP Automation** — Scoped Automation Framework YAML plan builder & JSON report parser (`nexus/scanner/zap.py`)
 - **Directory Brute-Force** — ffuf with stealth-aware concurrency
 - **Web Server Scanning** — Nikto CSV parser
+- **Declarative YAML Passive Rules** — Custom passive rules in `nexus/brain/knowledge/rules/` (`YamlPassiveRuleEngine`)
+- **Scoped Passive MITM Proxy** — Embedded `mitmproxy` addon (`nexus proxy`) persisting HTTP history & running passive analyzers
 - **Import External Scans** — Nessus XML, Burp XML, CSV importers
 
 ### 🔗 Correlation (Phase 3)
@@ -175,7 +185,7 @@ notes: "Authorized pentest — contract #12345"
 
 | Tier | Free RAM Threshold | AI | Use Case |
 |------|--------------------|----|----------|
-| **Minimal** | < 2,500 MB (< 2.5 GB) | None | Expert System only (~550MB) — full functionality |
+| **Minimal** | < 2,500 MB (< 2.5 GB) | None | Lightweight Expert System + bundled KB — full functionality |
 | **Light** | >= 2,500 MB (>= 2.5 GB) | Qwen 2.5 0.5B | Small AI boost (~950MB) |
 | **Standard** | >= 6,000 MB (>= 6 GB) | dolphin-mistral 7B | Full AI analysis (~5GB), uncensored |
 | **Full** | >= 12,000 MB (>= 12 GB) | WhiteRabbitNeo 13B | Maximum AI (~8.5GB) — best reasoning quality |
@@ -188,9 +198,11 @@ nexus/
 │   ├── config.py       — YAML + env var config with Pydantic
 │   ├── hardware.py     — Cross-platform RAM/CPU/GPU detection, auto tier selection
 │   ├── scope.py        — Non-bypassable scope enforcement (fail-closed)
-│   ├── audit.py        — Hash-chained immutable audit trail
+│   ├── audit.py        — Hash-chained immutable audit trail (strict AuditIntegrityError verification)
+│   ├── auth.py         — Stateful login & session token refresh manager
 │   ├── scheduler.py    — Async parallel task execution
-│   └── engine.py       — Central orchestrator (all phases wired)
+│   ├── phases/         — Modular phase runners (recon, scan, correlate, exploit)
+│   └── engine.py       — Central orchestrator delegating to phase runners
 ├── brain/          # Expert System (zero AI)
 │   ├── expert.py       — Forward-chaining production rule engine
 │   ├── knowledge_graph.py — CVE→Exploit YAML mappings
@@ -233,6 +245,9 @@ nexus/
 │   ├── passive_dast.py — GraphQL introspection & API auth-diff checks
 │   ├── network_services.py — SMB, FTP, Redis, DB, Docker, Memcached probes
 │   ├── host_audit.py   — Credentialed SSH / local OS package patch audit
+│   ├── zap.py          — OWASP ZAP Automation Framework YAML wrapper & parser
+│   ├── yaml_rules.py   — Declarative YAML passive inspection rule engine
+│   ├── proxy.py        — Scoped mitmproxy passive recorder & HTTP history feed
 │   └── importer.py     — Nessus/Burp/CSV importers
 ├── correlator/     # Finding correlation engine
 │   ├── dedup.py        — Cross-tool deduplication
@@ -261,9 +276,10 @@ nexus/
 ├── cli/            # Click CLI + Rich TUI
 │   ├── commands.py     — All CLI commands
 │   └── tui.py          — Rich terminal UI
-├── db/             # SQLite persistence
+├── db/             # SQLite / PostgreSQL persistence
 │   ├── models.py       — Pydantic data models
-│   └── store.py        — CRUD operations & encrypted credential storage
+│   ├── store.py        — SQLite CRUD operations & encrypted credential storage
+│   └── pg_store.py     — Optional PostgreSQL backend (`nexus-pt[postgres]`)
 └── plugins/        # Plugin system (__init__.py + community/)
 ```
 
@@ -274,7 +290,7 @@ NEXUS wraps these Kali tools (all auto-detected, graceful fallback when missing)
 | Category | Tools |
 |----------|-------|
 | **Recon** | nmap, subfinder, amass, httpx, whatweb, dnsx, dig, wafw00f, theHarvester |
-| **Scanning** | nuclei, ffuf, nikto |
+| **Scanning** | nuclei, ffuf, nikto, OWASP ZAP (`zap.sh`/`zaproxy`), mitmproxy (`nexus proxy`) |
 | **Exploitation** | sqlmap, hydra, msfconsole |
 | **Import** | Nessus XML, Burp Suite XML, CSV |
 
@@ -319,6 +335,15 @@ The AI boost layer enhances (never replaces) the expert system:
 | `NEXUS_OUTPUT_DIR` | Report output directory | `./nexus_output` |
 | `NEXUS_WPSCAN_API_TOKEN` | WPScan API token (also checks `WPSCAN_API_TOKEN`) | none |
 | `NEXUS_DASHBOARD_TOKEN` | Dashboard Bearer / `X-Nexus-Token` secret | none |
+| `NEXUS_DB_URL` | Optional PostgreSQL DSN (`postgresql://...`) | SQLite |
+| `NEXUS_ZAP_PATH` | OWASP ZAP executable (`zap.sh` / `zaproxy`) | `zap.sh` |
+| `NEXUS_ZAP_API_URL` | Optional ZAP API URL | none |
+| `NEXUS_AUTH_LOGIN_URL` | Stateful login endpoint URL for authenticated scans | none |
+| `NEXUS_UNRESTRICTED_SCOPE` | Lab-only bypass allowing unrestricted scope | `false` |
+
+## Reusable GitHub Action
+
+Repository root includes `action.yml` and `.github/workflows/nexus-reusable-scan.yml` to run scoped API/web scans, generate SARIF 2.1.0 output, and upload results to GitHub Code Scanning.
 
 ## Development
 

@@ -365,7 +365,8 @@ async def _playwright_browser_crawl(
 
     try:
         from playwright.async_api import async_playwright
-    except Exception:
+    except Exception as exc:
+        log.debug("CDP pre-connect probe skipped for %s: %s", target_url, exc)
         return [], []
 
     base_host, base_port, base_proto = parse_url_target(target_url)
@@ -511,7 +512,8 @@ async def _cdp_browser_crawl(
         writer.close()
         with contextlib.suppress(Exception):
             await writer.wait_closed()
-    except Exception:
+    except Exception as exc:
+        log.debug("CDP pre-connect probe skipped for %s: %s", target_url, exc)
         return [], []
 
     discovered, _keep = _make_url_keeper(base_host, base_proto, base_port)
@@ -579,8 +581,8 @@ async def _cdp_browser_crawl(
                                 break
                         if page_ws:
                             break
-                except Exception:
-                    pass
+                except Exception as exc:
+                    log.debug("CDP /json/list poll retry for %s: %s", target_url, exc)
                 await asyncio.sleep(0.1)
         if not page_ws:
             return [], []
@@ -767,8 +769,8 @@ async def _cdp_browser_crawl(
                                 task = asyncio.create_task(_handle_paused(ev_params))
                                 bg_tasks.add(task)
                                 task.add_done_callback(bg_tasks.discard)
-                except Exception:
-                    pass
+                except Exception as exc:
+                    log.debug("CDP websocket reader ended for %s: %s", target_url, exc)
                 finally:
                     settled.set()
                     for fut in list(pending.values()):

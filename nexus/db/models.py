@@ -153,3 +153,19 @@ class ReportMeta(BaseModel):
     low_count: int = 0
     info_count: int = 0
     chains_found: int = 0
+
+
+class ProxyEntry(BaseModel):
+    id: str = Field(default_factory=_new_id)
+    engagement_id: str = ""
+    method: str = "GET"
+    url: str = ""
+    host: str = ""
+    port: int = Field(default=80, ge=0, le=65535)
+    request_headers: dict[str, str] = Field(default_factory=dict)
+    request_body: str = ""
+    status_code: int = 0
+    response_headers: dict[str, str] = Field(default_factory=dict)
+    response_body: str = ""
+    findings_count: int = 0
+    captured_at: datetime = Field(default_factory=_now)

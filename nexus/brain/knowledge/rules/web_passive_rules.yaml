@@ -1,0 +1,30 @@
+rules:
+  - id: debug-stacktrace-leak
+    title: Application Stack Trace / Debug Output Disclosed
+    severity: medium
+    cwe_id: CWE-209
+    description: HTTP response body contains an unhandled exception traceback or debug dump that reveals internal file paths or framework internals.
+    remediation: Disable verbose debug error pages in production and return generic error responses.
+    status_codes: [500, 502, 503, 200]
+    body_regex: "(Traceback \\(most recent call last\\)|System\\.NullReferenceException|Fatal error:.*on line \\d+|org\\.springframework\\.web\\.)"
+    confirmed: true
+
+  - id: internal-rfc1918-ip-leak
+    title: Internal RFC1918 IP Address Disclosed in HTTP Header
+    severity: low
+    cwe_id: CWE-200
+    description: A response header reveals an internal private IPv4 address (reverse proxy/backend topology disclosure).
+    remediation: Strip internal host/backend headers such as X-Backend-Server or Content-Location internal IPs at the edge proxy.
+    header_regex: "(X-Backend-Server|X-Server-IP|X-Forwarded-Server|Content-Location)\\s*:\\s*(?:https?://)?(10\\.\\d+|172\\.(1[6-9]|2\\d|3[01])|192\\.168\\.\\d+)\\."
+    confirmed: true
+
+  - id: swagger-ui-public
+    title: Interactive API Documentation (Swagger/OpenAPI UI) Exposed
+    severity: info
+    cwe_id: CWE-200
+    description: Publicly accessible Swagger/OpenAPI UI endpoint aids API endpoint discovery.
+    remediation: Restrict interactive API documentation endpoints to authenticated internal networks in production.
+    url_regex: "/(swagger-ui|api-docs|redoc)(/|$)"
+    status_codes: [200]
+    body_regex: "(SwaggerUIBundle|swagger-ui|Redoc\\.init|openapi)"
+    confirmed: true

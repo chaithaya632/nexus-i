@@ -177,3 +177,23 @@ class TestScopeEnforcer:
         assert not enforcer.is_in_scope("api.prod.example.com")
         assert not enforcer.is_in_scope("prod.example.com")
         assert enforcer.is_in_scope("dev.example.com")
+
+    def test_url_normalization_and_dns_excluded_cidr(self, tmp_path):
+        from unittest.mock import patch
+
+        p = self._write_scope(
+            tmp_path,
+            {
+                "allowed_domains": ["*.example.com"],
+                "excluded_targets": ["10.0.0.0/28"],
+            },
+        )
+        enforcer = ScopeEnforcer.from_file(p)
+        assert enforcer.is_in_scope("https://api.example.com:8443/v1/users?q=1")
+
+        # When DNS resolves to an excluded CIDR, check_dns=True blocks it
+        fake_addr = [(2, 1, 6, "", ("10.0.0.5", 0))]
+        with patch("nexus.core.scope.socket.getaddrinfo", return_value=fake_addr):
+            assert not enforcer.is_in_scope("rebind.example.com", check_dns=True)
+            with pytest.raises(ScopeViolation):
+                enforcer.enforce("rebind.example.com", check_dns=True)

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import ipaddress
 import re
+import socket
 from dataclasses import dataclass, field
 from pathlib import Path
 from urllib.parse import urlparse
@@ -169,6 +170,36 @@ class ScopeEnforcer:
             )
         )
 
+    @staticmethod
+    def _normalize_target_host(target: str) -> str:
+        """Normalize URL, host:port, [IPv6]:port, or domain into a bare host/IP string."""
+        raw = target.strip()
+        if not raw:
+            return ""
+        if "://" in raw:
+            parsed = urlparse(raw)
+            return (parsed.hostname or "").strip().strip("[]").rstrip(".").lower()
+        if raw.startswith("["):
+            parsed = urlparse(f"http://{raw}")
+            return (parsed.hostname or "").strip().strip("[]").rstrip(".").lower()
+        try:
+            ipaddress.ip_address(raw)
+            return raw.lower()
+        except ValueError:
+            pass
+        if "/" in raw:
+            try:
+                ipaddress.ip_network(raw, strict=False)
+                return raw.lower()
+            except ValueError:
+                raw = raw.split("/", 1)[0]
+        head = raw.split("?", 1)[0].split("#", 1)[0]
+        if head.count(":") == 1:
+            host_part, port_part = head.split(":", 1)
+            if port_part.isdigit():
+                head = host_part
+        return head.strip().rstrip(".").lower()
+
     def _is_excluded(
         self, raw_target: str, addr: ipaddress.IPv4Address | ipaddress.IPv6Address | None
     ) -> bool:
@@ -182,9 +213,27 @@ class ScopeEnforcer:
             return True
         return any(pat.match(dom) for pat in self._excluded_domain_patterns)
 
-    def is_in_scope(self, target: str) -> bool:
-        """Check whether a target (domain, IP, or CIDR) is in scope."""
-        raw_target = target.strip()
+    def _resolved_ips_excluded(self, host: str) -> bool:
+        """Resolve *host* via DNS and verify no returned IP hits excluded IPs/CIDRs."""
+        if not host or (not self._excluded and not self._excluded_networks):
+            return False
+        try:
+            infos = socket.getaddrinfo(host, None, type=socket.SOCK_STREAM)
+        except OSError:
+            return False
+        for info in infos:
+            ip_raw = info[4][0].split("%", 1)[0]
+            try:
+                resolved_addr = ipaddress.ip_address(ip_raw)
+            except ValueError:
+                continue
+            if self._is_excluded(str(resolved_addr), resolved_addr):
+                return True
+        return False
+
+    def is_in_scope(self, target: str, *, check_dns: bool = False) -> bool:
+        """Check whether a target (URL, domain, IP, or CIDR) is in scope."""
+        raw_target = self._normalize_target_host(target)
         if not raw_target:
             return False
 
@@ -212,6 +261,9 @@ class ScopeEnforcer:
         if not target_domain:
             return False
 
+        if check_dns and self._resolved_ips_excluded(target_domain):
+            return False
+
         for pat in self._domain_patterns:
             if pat.match(target_domain):
                 return True
@@ -223,9 +275,9 @@ class ScopeEnforcer:
             return True
         return port in self._scope.allowed_ports
 
-    def enforce(self, target: str, port: int | None = None) -> None:
+    def enforce(self, target: str, port: int | None = None, *, check_dns: bool = False) -> None:
         """Raise ScopeViolation if target is out of scope. Call before EVERY action."""
-        if not self.is_in_scope(target):
+        if not self.is_in_scope(target, check_dns=check_dns):
             raise ScopeViolation(
                 f"SCOPE VIOLATION: Target '{target}' is NOT in the authorized scope. "
                 f"Add it to scope.yaml to proceed."

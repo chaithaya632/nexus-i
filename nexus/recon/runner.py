@@ -108,6 +108,9 @@ def validate_cli_target(
     return cleaned
 
 
+sanitize_target_arg = validate_cli_target
+
+
 def sanitize_header_value(value: str, *, name: str = "") -> str:
     """Validate an HTTP header value (and optional name) against CRLF/NUL injection."""
     if not isinstance(value, str):

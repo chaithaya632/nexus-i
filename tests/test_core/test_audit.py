@@ -260,3 +260,39 @@ class TestTaskScheduler:
         assert len(results) == 1
         assert results[0].status == TaskStatus.FAILED
         assert not caught
+
+
+def test_audit_strict_mode_raises_on_corrupt_tail_and_verify_or_raise(tmp_path):
+    import json
+
+    import pytest
+
+    from nexus.core.audit import AuditIntegrityError, AuditLogger
+
+    log_path = tmp_path / "audit.jsonl"
+    logger = AuditLogger(log_path)
+    logger.log_action("recon_start", target="app.example.test")
+    logger.log_action("scan_done", target="app.example.test")
+    assert logger.verify_or_raise() == 2
+
+    # Appending malformed JSON causes strict=True init & verify_or_raise() to fail loudly
+    with log_path.open("a", encoding="utf-8") as f:
+        f.write("{corrupt-json-line\n")
+
+    with pytest.raises(AuditIntegrityError):
+        AuditLogger(log_path, strict=True)
+
+    with pytest.raises(AuditIntegrityError):
+        logger.verify_or_raise()
+
+    # Replace tail with syntactically valid JSON that breaks hash linkage -> AuditIntegrityError
+    lines = log_path.read_text(encoding="utf-8").splitlines()[:-1]
+    bad_entry = {
+        "ts": "2026-01-01T00:00:00Z",
+        "action": "tamper",
+        "prev_hash": "f" * 64,
+        "hash": "0" * 64,
+    }
+    log_path.write_text("\n".join(lines + [json.dumps(bad_entry)]) + "\n", encoding="utf-8")
+    with pytest.raises(AuditIntegrityError):
+        logger.verify_or_raise()

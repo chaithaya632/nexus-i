@@ -23,13 +23,14 @@ from nexus.db.models import (
     EngagementPhase,
     Finding,
     Port,
+    ProxyEntry,
     Severity,
     Target,
 )
 
 log = logging.getLogger("nexus.db.store")
 
-_SCHEMA_VERSION = 2
+_SCHEMA_VERSION = 3
 
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS engagements (
@@ -123,6 +124,22 @@ CREATE TABLE IF NOT EXISTS chains (
     FOREIGN KEY (engagement_id) REFERENCES engagements(id)
 );
 
+CREATE TABLE IF NOT EXISTS proxy_history (
+    id TEXT PRIMARY KEY,
+    engagement_id TEXT DEFAULT '',
+    method TEXT DEFAULT 'GET',
+    url TEXT DEFAULT '',
+    host TEXT DEFAULT '',
+    port INTEGER DEFAULT 80,
+    request_headers TEXT DEFAULT '{}',
+    request_body TEXT DEFAULT '',
+    status_code INTEGER DEFAULT 0,
+    response_headers TEXT DEFAULT '{}',
+    response_body TEXT DEFAULT '',
+    findings_count INTEGER DEFAULT 0,
+    captured_at TEXT
+);
+
 CREATE INDEX IF NOT EXISTS idx_findings_engagement ON findings(engagement_id);
 CREATE INDEX IF NOT EXISTS idx_findings_severity ON findings(severity);
 CREATE INDEX IF NOT EXISTS idx_findings_host ON findings(host);
@@ -130,6 +147,7 @@ CREATE INDEX IF NOT EXISTS idx_targets_engagement ON targets(engagement_id);
 CREATE INDEX IF NOT EXISTS idx_ports_target ON ports(target_id);
 CREATE INDEX IF NOT EXISTS idx_credentials_engagement ON credentials(engagement_id);
 CREATE INDEX IF NOT EXISTS idx_chains_engagement ON chains(engagement_id);
+CREATE INDEX IF NOT EXISTS idx_proxy_engagement ON proxy_history(engagement_id);
 """
 
 
@@ -232,6 +250,18 @@ class EngagementStore:
             return env_key.encode("utf-8")
         if self._is_memory:
             return secrets.token_bytes(32)
+        key_id = f"db:{self._path.resolve()}"
+        try:
+            import keyring  # type: ignore[import-untyped]
+
+            stored = keyring.get_password("nexus-pt", key_id)
+            if stored:
+                return stored.strip().encode("utf-8")
+            generated = base64.urlsafe_b64encode(secrets.token_bytes(32)).decode("ascii")
+            keyring.set_password("nexus-pt", key_id, generated)
+            return generated.encode("utf-8")
+        except Exception as exc:
+            log.debug("OS keyring unavailable, using 0600 local keyfile: %s", exc)
         key_path = Path(f"{self._path}.key")
         if key_path.is_file():
             _chmod_0600(key_path)
@@ -325,7 +355,12 @@ class EngagementStore:
                 "CREATE INDEX IF NOT EXISTS idx_credentials_engagement ON credentials(engagement_id)"
             )
             cur.execute("CREATE INDEX IF NOT EXISTS idx_chains_engagement ON chains(engagement_id)")
-            cur.execute(f"PRAGMA user_version = {_SCHEMA_VERSION}")
+
+        if version < 3:
+            cur.execute(
+                "CREATE INDEX IF NOT EXISTS idx_proxy_engagement ON proxy_history(engagement_id)"
+            )
+        cur.execute(f"PRAGMA user_version = {_SCHEMA_VERSION}")
 
     # --- Engagements ---
 
@@ -664,6 +699,64 @@ class EngagementStore:
                 results.append(AttackChain(**d))
             return results
 
+    # --- Proxy History ---
+
+    def add_proxy_entry(self, entry: ProxyEntry) -> str:
+        with self._cursor() as cur:
+            cur.execute(
+                "INSERT OR REPLACE INTO proxy_history "
+                "(id, engagement_id, method, url, host, port, request_headers, request_body, "
+                "status_code, response_headers, response_body, findings_count, captured_at) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                (
+                    entry.id,
+                    entry.engagement_id,
+                    entry.method,
+                    entry.url,
+                    entry.host,
+                    entry.port,
+                    json.dumps(entry.request_headers),
+                    entry.request_body[:16000],
+                    entry.status_code,
+                    json.dumps(entry.response_headers),
+                    entry.response_body[:32000],
+                    entry.findings_count,
+                    entry.captured_at.isoformat(),
+                ),
+            )
+        return entry.id
+
+    def get_proxy_history(self, eng_id: str = "", limit: int = 200) -> list[ProxyEntry]:
+        with self._cursor() as cur:
+            if eng_id:
+                cur.execute(
+                    "SELECT * FROM proxy_history WHERE engagement_id = ? ORDER BY captured_at DESC LIMIT ?",
+                    (eng_id, max(1, limit)),
+                )
+            else:
+                cur.execute(
+                    "SELECT * FROM proxy_history ORDER BY captured_at DESC LIMIT ?",
+                    (max(1, limit),),
+                )
+            results: list[ProxyEntry] = []
+            for r in cur.fetchall():
+                d = dict(r)
+                d["request_headers"] = json.loads(d.get("request_headers") or "{}")
+                d["response_headers"] = json.loads(d.get("response_headers") or "{}")
+                results.append(ProxyEntry(**d))
+            return results
+
+    def get_proxy_entry(self, entry_id: str) -> ProxyEntry | None:
+        with self._cursor() as cur:
+            cur.execute("SELECT * FROM proxy_history WHERE id = ?", (entry_id,))
+            row = cur.fetchone()
+            if not row:
+                return None
+            d = dict(row)
+            d["request_headers"] = json.loads(d.get("request_headers") or "{}")
+            d["response_headers"] = json.loads(d.get("response_headers") or "{}")
+            return ProxyEntry(**d)
+
     # --- Export ---
 
     def export_engagement_json(self, eng_id: str) -> dict[str, Any]:
@@ -693,3 +786,13 @@ class EngagementStore:
             "chains": [c.model_dump(mode="json") for c in self.get_chains(eng_id)],
             "severity_counts": self.count_findings_by_severity(eng_id),
         }
+
+
+def create_store(db_path: Path | str, db_url: str | None = None) -> Any:
+    """Factory returning PostgresEngagementStore when db_url is postgresql://, else SQLite."""
+    url = (db_url or os.environ.get("NEXUS_DB_URL") or "").strip()
+    if url.startswith(("postgresql://", "postgres://")):
+        from nexus.db.pg_store import PostgresEngagementStore
+
+        return PostgresEngagementStore(url)
+    return EngagementStore(db_path)

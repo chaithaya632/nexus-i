@@ -213,6 +213,51 @@ class DashboardApp:
             targets = db.get_targets(eng_id)
             return [t.model_dump() if hasattr(t, "model_dump") else t for t in targets]
 
+        @app.get("/api/engagements/{eng_id}/proxy")
+        async def get_engagement_proxy(eng_id: str, limit: int = 200):
+            db = self._require_db()
+            if not db.get_engagement(eng_id):
+                return JSONResponse({"error": "not found"}, status_code=404)
+            if not hasattr(db, "get_proxy_history"):
+                return []
+            entries = db.get_proxy_history(eng_id, limit=limit)
+            return [e.model_dump(mode="json") if hasattr(e, "model_dump") else e for e in entries]
+
+        @app.get("/api/proxy/history")
+        async def get_all_proxy_history(limit: int = 200):
+            db = self._require_db()
+            if not hasattr(db, "get_proxy_history"):
+                return []
+            entries = db.get_proxy_history("", limit=limit)
+            return [e.model_dump(mode="json") if hasattr(e, "model_dump") else e for e in entries]
+
+        @app.get("/api/proxy/diff")
+        async def diff_proxy_exchanges(left: str, right: str):
+            import difflib
+
+            db = self._require_db()
+            if not hasattr(db, "get_proxy_entry"):
+                return JSONResponse({"error": "proxy history not supported"}, status_code=501)
+            e_left = db.get_proxy_entry(left)
+            e_right = db.get_proxy_entry(right)
+            if not e_left or not e_right:
+                return JSONResponse({"error": "proxy entry not found"}, status_code=404)
+            diff_lines = list(
+                difflib.unified_diff(
+                    e_left.response_body.splitlines(),
+                    e_right.response_body.splitlines(),
+                    fromfile=f"{e_left.method} {e_left.url} ({e_left.status_code})",
+                    tofile=f"{e_right.method} {e_right.url} ({e_right.status_code})",
+                    lineterm="",
+                )
+            )
+            return {
+                "left": e_left.model_dump(mode="json"),
+                "right": e_right.model_dump(mode="json"),
+                "status_changed": e_left.status_code != e_right.status_code,
+                "diff": "\n".join(diff_lines[:300]),
+            }
+
         # ── WebSocket ─────────────────────────────────────────────
 
         @app.websocket("/ws")
@@ -371,16 +416,38 @@ th{color:#00d4ff;font-size:13px;text-transform:uppercase}
   <div class="sub">Network EXploration & Unified Security</div>
 </div>
 <div class="container">
+  <div id="token-bar" style="display:none;margin:10px 0;padding:12px;background:#141828;border:1px solid #1e2a4a;border-radius:6px">
+    <span style="color:#ffab00;font-size:13px;margin-right:8px">Dashboard API Token Required:</span>
+    <input id="tok-input" type="password" placeholder="Enter NEXUS dashboard token" style="background:#0a0e17;color:#e0e0e0;border:1px solid #1e2a4a;padding:6px 10px;border-radius:4px">
+    <button id="tok-save" style="margin-left:6px;padding:6px 12px;background:#00d4ff;color:#0a0e17;border:none;border-radius:4px;font-weight:600;cursor:pointer">Connect</button>
+    <span id="tok-err" style="color:#ff1744;font-size:12px;margin-left:8px"></span>
+  </div>
   <div id="status">Connecting...</div>
   <div class="cards" id="stats-cards"></div>
   <h2 style="color:#00d4ff;margin:20px 0 10px">Engagements</h2>
   <div id="engagements"><div class="empty">Loading...</div></div>
 </div>
 <script>
+let apiToken=sessionStorage.getItem('nexus_token')||'';
 function esc(v){const d=document.createElement('div');d.textContent=v==null?'':String(v);return d.innerHTML}
+function authHeaders(){return apiToken?{'X-Nexus-Token':apiToken}:{}}
+async function apiFetch(url){
+  const r=await fetch(url,{headers:authHeaders()});
+  if(r.status===401){document.getElementById('token-bar').style.display='block';throw new Error('Unauthorized')}
+  document.getElementById('token-bar').style.display='none';
+  return r;
+}
+function saveToken(){
+  apiToken=document.getElementById('tok-input').value.trim();
+  if(apiToken){sessionStorage.setItem('nexus_token',apiToken)}else{sessionStorage.removeItem('nexus_token')}
+  document.getElementById('tok-err').textContent='';
+  load().then(()=>connectFallbackWs()).catch(()=>{document.getElementById('tok-err').textContent='Invalid token'});
+}
+document.getElementById('tok-save').addEventListener('click',saveToken);
+document.getElementById('tok-input').addEventListener('keydown',e=>{if(e.key==='Enter')saveToken()});
 async function load(){
   try{
-    const sr=await fetch('/api/status');const st=await sr.json();
+    const sr=await apiFetch('/api/status');if(!sr.ok)throw new Error('status');const st=await sr.json();
     document.getElementById('status').innerHTML='<span class="ok">● Connected</span> | Tier: '+esc(st.tier)+' | AI: '+(st.ai&&st.ai.available?'✓ '+esc(st.ai.model):'off');
     const b=st.brain||{};
     document.getElementById('stats-cards').innerHTML=[
@@ -389,29 +456,39 @@ async function load(){
       card('Payloads',b.payloads||0),
       card('Remediations',b.remediations||0),
     ].join('');
-    const er=await fetch('/api/engagements');const engs=await er.json();
+    const er=await apiFetch('/api/engagements');if(!er.ok)throw new Error('engs');const engs=await er.json();
     if(!engs.length){document.getElementById('engagements').innerHTML='<div class="empty">No engagements yet.  Run: nexus engage &lt;target&gt;</div>';return}
     let html='<table><tr><th>ID</th><th>Name</th><th>Target</th><th>Phase</th><th>Created</th></tr>';
     engs.forEach(e=>{html+='<tr><td>'+esc(e.id)+'</td><td>'+esc(e.name)+'</td><td>'+esc(e.target)+'</td><td>'+esc(e.phase)+'</td><td>'+esc(new Date(e.created_at).toLocaleString())+'</td></tr>'});
     html+='</table>';document.getElementById('engagements').innerHTML=html;
-  }catch(e){document.getElementById('status').innerHTML='<span class="err">● Disconnected</span>'}
+  }catch(e){
+    const msg=e&&e.message==='Unauthorized'?'● Authentication Required':'● Disconnected';
+    document.getElementById('status').innerHTML='<span class="err">'+msg+'</span>';
+  }
 }
 function card(label,value){return '<div class="card"><div class="value">'+esc(value)+'</div><div class="label">'+esc(label)+'</div></div>'}
 load();setInterval(load,10000);
 
-// WebSocket live updates with exponential backoff
-(function connectFallbackWs(){
+// WebSocket live updates with auth frame & exponential backoff
+let _ws=null;
+function connectFallbackWs(){
   let retryMs = 2000;
   function start(){
     try{
+      if(_ws&&_ws.readyState<=1)_ws.close();
       const ws=new WebSocket((location.protocol==='https:'?'wss:':'ws:')+'//' +location.host+'/ws');
-      ws.onopen=function(){retryMs=2000;};
-      ws.onmessage=function(e){try{const m=JSON.parse(e.data);if(m.event)load()}catch(x){}};
+      _ws=ws;
+      ws.onopen=function(){
+        retryMs=2000;
+        if(apiToken)ws.send(JSON.stringify({type:'auth',token:apiToken}));
+      };
+      ws.onmessage=function(e){try{const m=JSON.parse(e.data);if(m.event&&m.event!=='auth')load()}catch(x){}};
       ws.onclose=function(ev){if(ev.code!==1008){setTimeout(start,retryMs);retryMs=Math.min(retryMs*2,30000);}};
     }catch(e){}
   }
   start();
-})();
+}
+connectFallbackWs();
 </script>
 </body>
 </html>"""

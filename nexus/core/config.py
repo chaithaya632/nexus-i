@@ -137,6 +137,9 @@ class NexusConfig(BaseModel):
     tier: Tier = Tier.MINIMAL
     profile: ScanProfile = ScanProfile.FULL
     auth_headers: dict[str, str] = Field(default_factory=dict, exclude=True, repr=False)
+    auth_login_url: str | None = None
+    auth_login_body: dict[str, str] = Field(default_factory=dict, exclude=True, repr=False)
+    auth_token_field: str = "access_token"
     wpscan_api_token: str | None = Field(default=None, exclude=True, repr=False)
     dashboard_token: str | None = Field(default=None, exclude=True, repr=False)
     ssh_user: str | None = Field(default=None, exclude=True, repr=False)
@@ -144,6 +147,10 @@ class NexusConfig(BaseModel):
     local_pkg_audit: bool = False
     openapi_spec: Path | None = None
     ignore_file: Path | None = None
+    unrestricted_scope: bool = False
+    db_url: str | None = Field(default=None, exclude=True, repr=False)
+    zap_path: str = "zap.sh"
+    zap_api_url: str | None = None
     ollama_host: str = "http://127.0.0.1:11434"
     model_name: str = "dolphin-mistral"
     max_threads: int = Field(default=5, ge=1)
@@ -222,6 +229,11 @@ class NexusConfig(BaseModel):
             "NEXUS_OUTPUT_DIR": "output_dir",
             "NEXUS_WPSCAN_API_TOKEN": "wpscan_api_token",
             "NEXUS_DASHBOARD_TOKEN": "dashboard_token",
+            "NEXUS_DB_URL": "db_url",
+            "NEXUS_ZAP_PATH": "zap_path",
+            "NEXUS_ZAP_API_URL": "zap_api_url",
+            "NEXUS_UNRESTRICTED_SCOPE": "unrestricted_scope",
+            "NEXUS_AUTH_LOGIN_URL": "auth_login_url",
         }
         optional_fields = {
             "scope_file",
@@ -229,6 +241,9 @@ class NexusConfig(BaseModel):
             "ignore_file",
             "wpscan_api_token",
             "dashboard_token",
+            "db_url",
+            "zap_api_url",
+            "auth_login_url",
         }
         for env_key, cfg_key in env_map.items():
             val = os.environ.get(env_key)

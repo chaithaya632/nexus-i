@@ -339,3 +339,133 @@ class TestEngagementStore:
         assert sorted(p.port for p in ports) == [80, 443]
         with sqlite3.connect(str(db_file)) as check_conn:
             assert check_conn.execute("PRAGMA user_version").fetchone()[0] >= 2
+
+
+def test_proxy_history_crud_and_keyring_encryption(tmp_path, monkeypatch):
+    import sys
+    from types import SimpleNamespace
+
+    from nexus.db.models import Credential, Engagement, ProxyEntry
+    from nexus.db.store import EngagementStore, create_store
+
+    keyring_box: dict[tuple[str, str], str] = {}
+    fake_keyring = SimpleNamespace(
+        get_password=lambda svc, key: keyring_box.get((svc, key)),
+        set_password=lambda svc, key, val: keyring_box.__setitem__((svc, key), val),
+    )
+    monkeypatch.delenv("NEXUS_DB_KEY", raising=False)
+    monkeypatch.setitem(sys.modules, "keyring", fake_keyring)
+
+    db_file = tmp_path / "keyring_proxy.db"
+    store = create_store(db_file)
+    assert isinstance(store, EngagementStore)
+    # Key was stored in mocked OS keyring rather than left only on disk
+    assert len(keyring_box) == 1
+
+    eng = Engagement(name="DB Proxy", target="app.example.test")
+    store.create_engagement(eng)
+    store.add_credential(
+        Credential(
+            engagement_id=eng.id,
+            host="app.example.test",
+            username="admin",
+            password="s3cr3t-password",
+            hash_value="aad3b435b51404ee",
+        )
+    )
+    creds = store.get_credentials(eng.id)
+    assert creds[0].password == "s3cr3t-password"
+    assert creds[0].hash_value == "aad3b435b51404ee"
+
+    entry = ProxyEntry(
+        engagement_id=eng.id,
+        method="POST",
+        url="https://app.example.test/api/login",
+        host="app.example.test",
+        port=443,
+        status_code=200,
+        response_headers={"Content-Type": "application/json"},
+        response_body='{"ok":true}',
+        findings_count=1,
+    )
+    store.add_proxy_entry(entry)
+    history = store.get_proxy_history(eng.id)
+    assert len(history) == 1
+    assert history[0].url == "https://app.example.test/api/login"
+    fetched = store.get_proxy_entry(entry.id)
+    assert fetched is not None and fetched.method == "POST"
+
+
+def test_postgres_store_contract_with_mocked_psycopg(tmp_path):
+    import sqlite3
+
+    from nexus.db.models import Credential, Engagement, ProxyEntry
+    from nexus.db.pg_store import PostgresEngagementStore
+
+    backing_conn = sqlite3.connect(":memory:")
+    backing_conn.row_factory = sqlite3.Row
+
+    class _FakeCursor:
+        def __init__(self, inner: sqlite3.Cursor) -> None:
+            self._inner = inner
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *exc):
+            self._inner.close()
+
+        def execute(self, sql: str, params=()):
+            sql_sqlite = sql.replace("DOUBLE PRECISION", "REAL").replace("%s", "?")
+            return self._inner.execute(sql_sqlite, params)
+
+        def fetchone(self):
+            return self._inner.fetchone()
+
+        def fetchall(self):
+            return self._inner.fetchall()
+
+    class _FakeConn:
+        def cursor(self):
+            return _FakeCursor(backing_conn.cursor())
+
+        def commit(self):
+            backing_conn.commit()
+
+        def rollback(self):
+            backing_conn.rollback()
+
+        def close(self):
+            pass
+
+    fake_psycopg = type("FakePsycopg", (), {"connect": staticmethod(lambda dsn, **kw: _FakeConn())})
+    pg = PostgresEngagementStore(
+        "postgresql://nexus:secret@localhost/nexus", _psycopg_mod=fake_psycopg
+    )
+
+    eng = Engagement(name="PG Test", target="pg.example.test")
+    pg.create_engagement(eng)
+    loaded = pg.get_engagement(eng.id)
+    assert loaded is not None and loaded.target == "pg.example.test"
+
+    pg.add_credential(
+        Credential(
+            engagement_id=eng.id,
+            host="pg.example.test",
+            username="svc",
+            password="pg-encrypted-password",
+        )
+    )
+    assert pg.get_credentials(eng.id)[0].password == "pg-encrypted-password"
+
+    pe = ProxyEntry(
+        engagement_id=eng.id,
+        method="GET",
+        url="https://pg.example.test/v1",
+        host="pg.example.test",
+        port=443,
+        status_code=200,
+    )
+    pg.add_proxy_entry(pe)
+    assert len(pg.get_proxy_history(eng.id)) == 1
+    assert pg.get_proxy_entry(pe.id) is not None

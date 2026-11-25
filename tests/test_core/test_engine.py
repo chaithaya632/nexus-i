@@ -1097,3 +1097,104 @@ paths:
         assert get_config().profile == orig_profile
         assert mock_rep.call_args.args[2] == custom_out / eng_id
         assert "engage_complete" in progress_events
+
+    @pytest.mark.asyncio
+    async def test_stateful_auth_session_unrestricted_scope_and_scan_feedback(
+        self,
+        tmp_path: Path,
+    ) -> None:
+        from unittest.mock import AsyncMock, MagicMock, patch
+
+        from nexus.core.auth import StatefulAuthSession
+        from nexus.core.config import NexusConfig
+        from nexus.core.scope import ScopeEnforcer
+        from nexus.db.models import Finding, ProxyEntry, Severity, Target
+
+        # 1. StatefulAuthSession extracts token + cookies and enforces scope
+        fake_resp = MagicMock()
+        fake_resp.status_code = 200
+        fake_resp.cookies = {"sid": "abc123"}
+        fake_resp.json.return_value = {"access_token": "jwt-token-xyz"}
+
+        fake_client = MagicMock()
+        fake_client.post = AsyncMock(return_value=fake_resp)
+        fake_client.__aenter__ = AsyncMock(return_value=fake_client)
+        fake_client.__aexit__ = AsyncMock(return_value=False)
+
+        sess = StatefulAuthSession(
+            "https://app.example.test/api/login",
+            login_body={"user": "tester"},
+        )
+        with patch("nexus.core.auth.make_http_client", return_value=fake_client):
+            hdrs = await sess.authenticate(scope=ScopeEnforcer.for_target("app.example.test"))
+        assert hdrs["Authorization"] == "Bearer jwt-token-xyz"
+        assert "sid=abc123" in hdrs["Cookie"]
+
+        # Callback refresh path increments counter
+        cb_sess = StatefulAuthSession(refresh_callback=lambda: {"X-Session": "refreshed"})
+        refreshed = await cb_sess.refresh()
+        assert refreshed["X-Session"] == "refreshed"
+        assert cb_sess.refresh_count == 1
+
+        # 2. NexusEngine loads YAML rules, respects unrestricted_scope, and wires proxy + ZAP in ScanPhase
+        cfg = NexusConfig(
+            data_dir=tmp_path / "data",
+            db_path=str(tmp_path / "nexus.db"),
+            unrestricted_scope=True,
+        )
+        eng_mgr = NexusEngine(cfg)
+        eng_mgr.boot()
+        try:
+            assert eng_mgr.yaml_rules is not None
+            assert eng_mgr.yaml_rules.rule_count >= 3
+
+            eng = eng_mgr.create_engagement("app.example.test")
+            assert eng_mgr.scope is not None
+            assert eng_mgr.scope.is_in_scope("unrestricted-lab.example.test")
+
+            eng_mgr.db.add_proxy_entry(
+                ProxyEntry(
+                    engagement_id=eng.id,
+                    method="GET",
+                    url="https://app.example.test/from-proxy",
+                    host="app.example.test",
+                    port=443,
+                    status_code=200,
+                )
+            )
+            fake_zap_finding = Finding(
+                host="app.example.test",
+                port=443,
+                protocol="https",
+                title="ZAP Sample Alert",
+                severity=Severity.MEDIUM,
+                tool_source="owasp_zap",
+            )
+            with (
+                patch("nexus.core.engine.crawl_web", AsyncMock(return_value=([], []))),
+                patch("nexus.core.engine.nuclei_scan", AsyncMock(return_value=[])),
+                patch("nexus.core.engine.nikto_scan", AsyncMock(return_value=[])),
+                patch(
+                    "nexus.core.engine.audit_http_security", AsyncMock(return_value=[])
+                ) as hdr_mock,
+                patch("nexus.core.engine.audit_exposed_artifacts", AsyncMock(return_value=[])),
+                patch("nexus.core.engine.audit_graphql_introspection", AsyncMock(return_value=[])),
+                patch(
+                    "nexus.core.engine.ToolRunner.is_available",
+                    side_effect=lambda t: "zap" in str(t),
+                ),
+                patch(
+                    "nexus.core.phases.scan.zap_scan", AsyncMock(return_value=[fake_zap_finding])
+                ),
+            ):
+                eng_mgr.db.add_target(
+                    Target(
+                        engagement_id=eng.id, host="app.example.test", ip="192.0.2.10", is_live=True
+                    )
+                )
+                findings = await eng_mgr.run_scan(eng.id, "app.example.test")
+
+            assert any(f.tool_source == "owasp_zap" for f in findings)
+            assert "https://app.example.test/from-proxy" in hdr_mock.await_args.args[0]
+        finally:
+            eng_mgr.shutdown()

@@ -63,11 +63,16 @@ def import_file(path: str | Path, *, max_bytes: int = MAX_IMPORT_BYTES) -> list[
         if content.strip().startswith("<"):
             try:
                 return import_nessus(content)
-            except Exception:
+            except Exception as exc:
                 try:
                     return import_burp_xml(content)
-                except Exception:
-                    pass
+                except Exception as burp_exc:
+                    log.debug(
+                        "XML auto-detect fallback to CSV for %s (nessus=%s, burp=%s)",
+                        p,
+                        exc,
+                        burp_exc,
+                    )
         return import_csv(content)
 
 

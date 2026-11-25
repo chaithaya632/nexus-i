@@ -92,7 +92,7 @@ async def nmap_scan(
     xml_path = ToolRunner.make_temp_path(".xml")
     profile = list(SCAN_PROFILES.get(stealth, SCAN_PROFILES["normal"]))
 
-    args = [*profile, "-p", clean_ports, "-oX", xml_path, *safe_extra, clean_target]
+    args = [*profile, "-p", clean_ports, "-oX", xml_path, *safe_extra, "--", clean_target]
 
     try:
         out = await ToolRunner.run("nmap", args, timeout=timeout)
@@ -112,6 +112,7 @@ async def nmap_scan(
                 "-oX",
                 xml_path,
                 *safe_extra,
+                "--",
                 clean_target,
             ]
             out = await ToolRunner.run("nmap", retry_args, timeout=timeout)

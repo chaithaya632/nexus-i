@@ -71,6 +71,7 @@ tr:hover{background:#141828}
     <div class="tab" data-tab="findings" onclick="showTab('findings', this)">Findings</div>
     <div class="tab" data-tab="chains" onclick="showTab('chains', this)">Chains</div>
     <div class="tab" data-tab="targets" onclick="showTab('targets', this)">Targets</div>
+    <div class="tab" data-tab="proxy" onclick="showTab('proxy', this); loadProxyHistory();">Proxy History</div>
     <div class="tab" data-tab="diff" onclick="showTab('diff', this)">Diff</div>
     <div class="tab" data-tab="brain" onclick="showTab('brain', this)">Brain Stats</div>
   </div>
@@ -93,6 +94,21 @@ tr:hover{background:#141828}
   <!-- Targets Tab -->
   <div class="tab-content" id="tab-targets">
     <div id="targets-view"><div class="empty">Select an engagement to view discovered targets.</div></div>
+  </div>
+
+  <!-- Proxy History & Diff Tab -->
+  <div class="tab-content" id="tab-proxy">
+    <div class="card" style="margin-bottom:14px">
+      <h3>MITM Proxy History & Response Diff</h3>
+      <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-top:8px">
+        <button class="btn" onclick="loadProxyHistory()">Refresh History</button>
+        <label>Left: <select id="proxy-left" class="btn"></select></label>
+        <label>Right: <select id="proxy-right" class="btn"></select></label>
+        <button class="btn" onclick="diffProxyEntries()">Diff Responses</button>
+      </div>
+      <pre id="proxy-diff-out" style="display:none;margin-top:10px;background:#0d1120;padding:10px;border-radius:4px;font-size:12px;overflow:auto;max-height:280px"></pre>
+    </div>
+    <div id="proxy-view"><div class="empty">No proxy exchanges captured yet. Run: nexus proxy</div></div>
   </div>
 
   <!-- Diff Tab -->
@@ -449,6 +465,58 @@ async function loadTargets(engId) {
     out.innerHTML = html;
   } catch (e) {
     out.innerHTML = '<div class="empty">Failed to load targets.</div>';
+  }
+}
+
+async function loadProxyHistory() {
+  const out = document.getElementById('proxy-view');
+  if (!out) return;
+  try {
+    const endpoint = currentEngId
+      ? '/api/engagements/' + encodeURIComponent(currentEngId) + '/proxy'
+      : '/api/proxy/history';
+    const r = await apiFetch(endpoint);
+    if (!r.ok) {
+      out.innerHTML = '<div class="empty">Failed to load proxy history (' + esc(r.status) + ').</div>';
+      return;
+    }
+    const items = await r.json();
+    const selL = document.getElementById('proxy-left');
+    const selR = document.getElementById('proxy-right');
+    if (selL && selR) {
+      const opts = (Array.isArray(items) ? items : []).map(x => '<option value="' + esc(x.id) + '">' + esc(x.method + ' ' + x.url + ' (' + x.status_code + ')') + '</option>').join('');
+      selL.innerHTML = opts;
+      selR.innerHTML = opts;
+    }
+    if (!Array.isArray(items) || !items.length) {
+      out.innerHTML = '<div class="empty">No HTTP exchanges captured yet. Start proxy: nexus proxy</div>';
+      return;
+    }
+    let html = '<table><tr><th>Method</th><th>URL</th><th>Status</th><th>Findings</th><th>Captured</th></tr>';
+    items.forEach(p => {
+      html += '<tr><td>' + esc(p.method) + '</td><td>' + esc(p.url) + '</td><td>' + esc(p.status_code) + '</td><td>' + esc(p.findings_count || 0) + '</td><td>' + esc(p.captured_at ? new Date(p.captured_at).toLocaleString() : '-') + '</td></tr>';
+    });
+    html += '</table>';
+    out.innerHTML = html;
+  } catch (e) {
+    out.innerHTML = '<div class="empty">Failed to load proxy history.</div>';
+  }
+}
+
+async function diffProxyEntries() {
+  const left = (document.getElementById('proxy-left') || {}).value;
+  const right = (document.getElementById('proxy-right') || {}).value;
+  const pre = document.getElementById('proxy-diff-out');
+  if (!left || !right || !pre) return;
+  try {
+    const r = await apiFetch('/api/proxy/diff?left=' + encodeURIComponent(left) + '&right=' + encodeURIComponent(right));
+    if (!r.ok) { pre.style.display = 'block'; pre.textContent = 'Diff failed: HTTP ' + r.status; return; }
+    const data = await r.json();
+    pre.style.display = 'block';
+    pre.textContent = data.diff || '(No response body differences)';
+  } catch (e) {
+    pre.style.display = 'block';
+    pre.textContent = 'Error loading diff';
   }
 }
 

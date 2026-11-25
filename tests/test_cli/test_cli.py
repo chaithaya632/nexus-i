@@ -400,3 +400,18 @@ def test_cli_exploit_requires_confirmation(cli_env, monkeypatch):
     res_yes = runner.invoke(cli, ["exploit", "-e", e.id, "--yes"])
     assert res_yes.exit_code == 0
     exp_mock.assert_awaited_once_with(e.id, confirm=True)
+
+
+def test_proxy_and_engage_wave_b_cli_flags():
+    runner = CliRunner()
+    res_proxy = runner.invoke(cli, ["proxy", "--help"])
+    assert res_proxy.exit_code == 0
+    assert "--host" in res_proxy.output
+    assert "--port" in res_proxy.output
+    assert "--scope" in res_proxy.output
+    assert "--engagement" in res_proxy.output
+
+    res_engage = runner.invoke(cli, ["engage", "--help"])
+    assert res_engage.exit_code == 0
+    assert "--unrestricted-scope" in res_engage.output
+    assert "--login-url" in res_engage.output

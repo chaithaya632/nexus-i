@@ -1,0 +1,69 @@
+name: "NEXUS Security Scan"
+description: "Run an AI-optional NEXUS DevSecOps scan, emit SARIF, and optionally diff against a baseline engagement."
+inputs:
+  target:
+    description: "Target domain, URL, or host in authorized scope"
+    required: true
+  scope_file:
+    description: "Path to scope.yaml"
+    required: true
+  profile:
+    description: "Scan profile (quick, web, network, api, full)"
+    required: false
+    default: "api"
+  openapi_spec:
+    description: "Optional path to OpenAPI/Swagger spec"
+    required: false
+    default: ""
+  ignore_file:
+    description: "Optional path to .nexusignore file"
+    required: false
+    default: ""
+  sarif_output:
+    description: "Output SARIF v2.1.0 file path"
+    required: false
+    default: "nexus-results.sarif"
+  baseline_id:
+    description: "Optional baseline engagement ID for nexus diff regression gating"
+    required: false
+    default: ""
+  fail_on_new:
+    description: "Comma-separated severities that fail diff check (e.g. critical,high)"
+    required: false
+    default: "critical,high"
+
+outputs:
+  sarif_file:
+    description: "Path to generated SARIF report"
+    value: ${{ steps.run-scan.outputs.sarif_file }}
+  engagement_id:
+    description: "Completed NEXUS engagement ID"
+    value: ${{ steps.run-scan.outputs.engagement_id }}
+
+runs:
+  using: "composite"
+  steps:
+    - name: Set up Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: "3.12"
+
+    - name: Install NEXUS
+      shell: bash
+      run: pip install -e "${{ github.action_path }}"
+
+    - name: Run NEXUS Engagement & Export SARIF
+      id: run-scan
+      shell: bash
+      run: |
+        ARGS=(engage "${{ inputs.target }}" --scope "${{ inputs.scope_file }}" --profile "${{ inputs.profile }}" --no-exploit)
+        if [ -n "${{ inputs.openapi_spec }}" ]; then ARGS+=(--openapi "${{ inputs.openapi_spec }}"); fi
+        if [ -n "${{ inputs.ignore_file }}" ]; then ARGS+=(--ignore "${{ inputs.ignore_file }}"); fi
+        nexus "${ARGS[@]}"
+        ENG_ID=$(nexus engagements list | awk '/\|/ {id=$2} END {print id}')
+        nexus report -e "$ENG_ID" -f sarif -o "${{ inputs.sarif_output }}"
+        echo "engagement_id=$ENG_ID" >> "$GITHUB_OUTPUT"
+        echo "sarif_file=${{ inputs.sarif_output }}" >> "$GITHUB_OUTPUT"
+        if [ -n "${{ inputs.baseline_id }}" ]; then
+          nexus diff "${{ inputs.baseline_id }}" "$ENG_ID" --fail-on-new "${{ inputs.fail_on_new }}"
+        fi

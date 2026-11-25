@@ -15,6 +15,10 @@ log = logging.getLogger("nexus.core.audit")
 _GENESIS_HASH = "0" * 64
 
 
+class AuditIntegrityError(RuntimeError):
+    """Raised when hash-chained audit log tampering or corruption is detected."""
+
+
 class AuditLogger:
     """Append-only, hash-chained audit trail.
 
@@ -22,12 +26,15 @@ class AuditLogger:
     an integrity chain that detects tampering.
     """
 
-    def __init__(self, log_path: Path) -> None:
+    def __init__(self, log_path: Path, *, strict: bool = False) -> None:
         self._path = Path(log_path)
         self._path.parent.mkdir(parents=True, exist_ok=True)
         self._lock = threading.Lock()
         self._corrupted = False
+        self._strict = strict
         self._prev_hash = self._compute_last_hash()
+        if strict and self._corrupted:
+            raise AuditIntegrityError(f"Audit log integrity check failed on load: {self._path}")
 
     @property
     def corrupted(self) -> bool:
@@ -146,3 +153,12 @@ class AuditLogger:
                     count += 1
 
             return True, count
+
+    def verify_or_raise(self) -> int:
+        """Verify full chain integrity and raise AuditIntegrityError if tampered."""
+        valid, count = self.verify_chain()
+        if not valid or self._corrupted:
+            raise AuditIntegrityError(
+                f"Audit log tampering or corruption detected in {self._path} (verified {count} entries)"
+            )
+        return count

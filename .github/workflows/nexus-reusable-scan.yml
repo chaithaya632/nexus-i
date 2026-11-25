@@ -1,0 +1,39 @@
+# Reusable GitHub Actions DevSecOps workflow template using NEXUS
+# Copy or call this workflow from target application repositories.
+name: NEXUS DevSecOps Gate
+
+on:
+  workflow_dispatch:
+    inputs:
+      target:
+        description: "Authorized staging URL or host"
+        required: true
+      scope_file:
+        description: "Path to scope.yaml in repo"
+        required: false
+        default: "scope.yaml"
+
+jobs:
+  nexus-api-scan:
+    runs-on: ubuntu-latest
+    permissions:
+      security-events: write
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Run NEXUS Scan
+        id: nexus
+        uses: ./
+        with:
+          target: ${{ inputs.target }}
+          scope_file: ${{ inputs.scope_file }}
+          profile: api
+          sarif_output: nexus-results.sarif
+
+      - name: Upload SARIF to GitHub Code Scanning
+        if: always() && hashFiles('nexus-results.sarif') != ''
+        uses: github/codeql-action/upload-sarif@v3
+        with:
+          sarif_file: nexus-results.sarif
+          category: nexus-dast
