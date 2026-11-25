@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import fnmatch
 import logging
-import os
 import shlex
 from collections.abc import Iterable
 from dataclasses import dataclass, field
@@ -128,9 +127,9 @@ def _parse_text_line(line: str) -> IgnoreRule | None:
     if not stripped:
         return None
     rule = IgnoreRule(raw=stripped)
-    use_posix = os.name != "nt"
     try:
-        tokens = shlex.split(stripped, posix=use_posix)
+        # Preserve backslashes consistently on POSIX and Windows (e.g. C:\inetpub\wwwroot)
+        tokens = shlex.split(stripped, posix=False)
     except ValueError:
         tokens = stripped.split()
 
