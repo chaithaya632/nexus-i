@@ -259,13 +259,73 @@ class TestHttpSecurityHeadersAndCors:
             findings = await audit_http_security([
                 f"http://127.0.0.1:{port}/page1",
                 f"http://127.0.0.1:{port}/page2",
+                f"http://127.0.0.1:{port}/page1",
             ])
         finally:
             srv.shutdown()
             srv.server_close()
 
         cors_hits = [f for f in findings if "CORS:" in f.title]
-        # Cross-route deduplication keeps one verified finding per host+port+title
-        assert len(cors_hits) == 1
+        # Per-URL deduplication keeps one verified finding per (host, port, url, title)
+        assert len(cors_hits) == 2
         assert cors_hits[0].severity == Severity.MEDIUM
         assert any("HttpOnly" in f.title for f in findings)
+
+    def test_non_html_empty_ctype_and_cookie_token_samesite(self) -> None:
+        # Empty content-type should not trigger missing CSP/Clickjacking HTML checks
+        findings_empty = analyze_security_headers("https://api.local/health", {})
+        titles_empty = [f.title for f in findings_empty]
+        assert not any("Missing Content-Security-Policy" in t for t in titles_empty)
+        assert not any("Missing Clickjacking" in t for t in titles_empty)
+
+        # Cookie named httponly_test=1 must NOT satisfy HttpOnly or SameSite checks
+        findings_ck = analyze_security_headers(
+            "https://secure.local/login",
+            {"content-type": "text/html"},
+            set_cookies=["session_token=httponly_secure_samesite; Path=/"],
+        )
+        ck_titles = [f.title for f in findings_ck if "Session Cookie" in f.title]
+        assert len(ck_titles) == 1
+        assert "HttpOnly" in ck_titles[0] and "Secure" in ck_titles[0] and "SameSite" in ck_titles[0]
+
+    def test_openapi_ssrf_guard_and_http_stealth_integration(self, tmp_path: Path) -> None:
+        from nexus.scanner._http import make_http_client
+        from nexus.stealth.controller import StealthController
+
+        spec = tmp_path / "ssrf.yaml"
+        spec.write_text(
+            """
+openapi: 3.0.3
+info:
+  title: SSRF Spec
+  version: "1.0"
+servers:
+  - url: http://169.254.169.254/latest/meta-data
+  - url: http://127.0.0.1:8080/internal
+  - url: https://api.public.example
+paths:
+  /ping:
+    get:
+      responses:
+        "200":
+          description: ok
+""",
+            encoding="utf-8",
+        )
+        parsed = parse_openapi_spec(spec)
+        assert parsed["base_urls"] == ["https://api.public.example"]
+
+        # StealthController integration in make_http_client
+        ctrl = StealthController("quiet")
+        cli = make_http_client(stealth=ctrl)
+        assert cli.headers["User-Agent"] != "NEXUS-Security-Scanner/1.0"
+        assert len(cli.event_hooks["request"]) == 1
+
+    def test_extract_js_endpoints_enforces_scheme_and_port(self) -> None:
+        js = """
+        fetch("http://app.local/downgrade");
+        fetch("https://app.local:8443/altport");
+        fetch("https://app.local/sameorigin");
+        """
+        eps, _ = extract_js_endpoints_and_secrets(js, "https://app.local/app.js")
+        assert eps == ["https://app.local/sameorigin"]

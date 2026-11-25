@@ -1,14 +1,18 @@
-"""Default credentials database — 50,000+ entries across 500+ products."""
+"""Default credentials database — built-in core entries with YAML extensibility."""
 
 from __future__ import annotations
 
+import copy
+import logging
 from pathlib import Path
 from typing import Any
 
 import yaml
 
+log = logging.getLogger("nexus.brain.credentials")
 
-# Core default credentials (always available, ~500 most critical entries)
+
+# Core default credentials (always available built-in entries)
 BUILTIN_CREDENTIALS: list[dict[str, str]] = [
     # Network devices
     {"service": "ssh", "product": "cisco", "username": "admin", "password": "admin"},
@@ -65,11 +69,24 @@ class CredentialDB:
     """Searchable default credential database."""
 
     def __init__(self) -> None:
-        self._entries: list[dict[str, str]] = list(BUILTIN_CREDENTIALS)
+        self._entries: list[dict[str, str]] = copy.deepcopy(BUILTIN_CREDENTIALS)
 
     @property
     def count(self) -> int:
         return len(self._entries)
+
+    @staticmethod
+    def _normalize_entry(raw_entry: Any, default_product: str = "") -> dict[str, str] | None:
+        if not isinstance(raw_entry, dict):
+            return None
+        if "username" not in raw_entry and "password" not in raw_entry:
+            return None
+        return {
+            "service": str(raw_entry.get("service") or "").strip(),
+            "product": str(raw_entry.get("product") or default_product).strip(),
+            "username": str(raw_entry.get("username") if raw_entry.get("username") is not None else ""),
+            "password": str(raw_entry.get("password") if raw_entry.get("password") is not None else ""),
+        }
 
     def load_from_directory(self, knowledge_dir: Path) -> None:
         """Load additional credentials from YAML files."""
@@ -79,16 +96,25 @@ class CredentialDB:
         for yaml_file in sorted(cred_dir.glob("*.yaml")):
             try:
                 raw = yaml.safe_load(yaml_file.read_text(encoding="utf-8"))
-            except (yaml.YAMLError, OSError):
+            except (yaml.YAMLError, OSError) as exc:
+                log.warning("Failed to load credentials file %s: %s", yaml_file, exc)
                 continue
             if isinstance(raw, list):
-                self._entries.extend(raw)
+                for item in raw:
+                    norm = self._normalize_entry(item)
+                    if norm is not None:
+                        self._entries.append(norm)
+                    else:
+                        log.warning("Skipping invalid credential entry in %s", yaml_file)
             elif isinstance(raw, dict):
                 for product, creds in raw.items():
                     if isinstance(creds, list):
-                        for c in creds:
-                            c.setdefault("product", product)
-                            self._entries.append(c)
+                        for item in creds:
+                            norm = self._normalize_entry(item, default_product=str(product))
+                            if norm is not None:
+                                self._entries.append(norm)
+                            else:
+                                log.warning("Skipping invalid credential entry for %s in %s", product, yaml_file)
 
     def lookup(self, service: str = "", product: str = "") -> list[dict[str, str]]:
         """Find credentials for a service/product."""
@@ -117,12 +143,16 @@ class CredentialDB:
         return sorted(set(c.get("password", "") for c in creds))
 
     def to_hydra_format(self, service: str = "", product: str = "") -> str:
-        """Export as user:pass lines for hydra -C flag."""
+        """Export as user:pass lines for hydra -C flag (skipping empty user/pass pairs)."""
         creds = self.lookup(service, product)
         lines = []
         seen = set()
         for c in creds:
-            pair = f"{c.get('username', '')}:{c.get('password', '')}"
+            user = c.get("username", "")
+            pw = c.get("password", "")
+            if not user or not pw:
+                continue
+            pair = f"{user}:{pw}"
             if pair not in seen:
                 lines.append(pair)
                 seen.add(pair)

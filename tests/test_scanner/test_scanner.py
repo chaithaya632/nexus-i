@@ -85,11 +85,11 @@ from nexus.scanner.nikto import _parse_csv_line, _classify_severity
 
 
 def test_parse_csv_line():
-    line = '"host","1.2.3.4","80","0","GET","/","Description here"'
+    line = '"host","1.2.3.4","80","0","GET","/","Description, ""quoted"" here"'
     parts = _parse_csv_line(line)
     assert len(parts) == 7
-    assert parts[0] == '"host"'
-    assert parts[6] == '"Description here"'
+    assert parts[0] == "host"
+    assert parts[6] == 'Description, "quoted" here'
 
 
 def test_classify_severity_high():
@@ -279,3 +279,92 @@ def test_import_file_autodetects_all_formats(tmp_path):
 
     with pytest.raises(FileNotFoundError):
         import_file(tmp_path / "missing.xml")
+
+
+@pytest.mark.asyncio
+async def test_ffuf_adds_ac_and_stealth_rate_limits():
+    from unittest.mock import AsyncMock
+    from nexus.recon.runner import ToolOutput
+
+    mock_run = AsyncMock(return_value=ToolOutput(tool="ffuf", args=[], returncode=0, stdout="", stderr=""))
+    with patch.object(ToolRunner, "run", mock_run):
+        await ffuf_scan("https://app.local", wordlist="dummy.txt", stealth="ghost")
+
+    args = mock_run.await_args.args[1]
+    assert "-ac" in args
+    assert "-rate" in args and args[args.index("-rate") + 1] == "2"
+    assert "-p" in args and args[args.index("-p") + 1] == "1.0"
+
+
+def test_importer_size_guard_and_xxe_rejection(tmp_path):
+    from nexus.scanner.importer import import_file
+
+    small_csv = tmp_path / "big.csv"
+    small_csv.write_text(SAMPLE_CSV, encoding="utf-8")
+    with pytest.raises(ValueError, match="exceeds limit"):
+        import_file(small_csv, max_bytes=10)
+
+    xxe_nessus = '<?xml version="1.0"?><!DOCTYPE foo [<!ENTITY xxe SYSTEM "file:///etc/passwd">]><NessusClientData_v2><ReportHost name="&xxe;"/></NessusClientData_v2>'
+    assert import_nessus(xxe_nessus) == []
+    assert import_burp_xml(xxe_nessus) == []
+
+
+@pytest.mark.asyncio
+async def test_sqli_per_parameter_reset_risk_cap_and_credential_hardening(tmp_path):
+    from unittest.mock import AsyncMock
+    from nexus.exploit.credential import hydra_attack, test_default_creds
+    from nexus.exploit.sqli import sqlmap_scan
+    from nexus.recon.runner import ToolOutput
+
+    # 1. sqlmap resets injectable per Parameter:, ignores 'not injectable', caps risk <= 2
+    stdout = "\n".join([
+        "Parameter: id (GET)",
+        "Parameter 'id' is vulnerable.",
+        "Type: error-based",
+        "Payload: id=1'",
+        "Parameter: page (GET)",
+        "Parameter 'page' does not seem to be injectable",
+        "Payload: should_not_trigger",
+    ])
+    mock_sql = AsyncMock(return_value=ToolOutput(tool="sqlmap", args=[], returncode=0, stdout=stdout, stderr=""))
+    with patch("nexus.exploit.sqli.ToolRunner.run", mock_sql):
+        findings = await sqlmap_scan("http://app.local/items?id=1&page=2", risk=3)
+
+    assert len(findings) == 1
+    assert "error-based" in findings[0].title
+    sql_args = mock_sql.await_args.args[1]
+    assert sql_args[sql_args.index("--risk") + 1] == "2"
+
+    # Reject CRLF / leading '-' in sqli and hydra
+    with pytest.raises(ValueError):
+        await sqlmap_scan("-u", param="id")
+    with pytest.raises(ValueError):
+        await hydra_attack("127.0.0.1", "ssh", username="-evil", password="pw")
+
+    # 2. hydra adds -f for wordlists and skips missing Linux wordlists cleanly
+    missing_c, missing_f = await hydra_attack(
+        "127.0.0.1", "ssh", user_list="/nonexistent/users.txt", pass_list="/nonexistent/pass.txt"
+    )
+    assert missing_c == [] and missing_f == []
+
+    ul = tmp_path / "u.txt"
+    pl = tmp_path / "p.txt"
+    ul.write_text("admin\n", encoding="utf-8")
+    pl.write_text("secret\n", encoding="utf-8")
+    mock_hydra = AsyncMock(return_value=ToolOutput(tool="hydra", args=[], returncode=0, stdout="", stderr=""))
+    with patch("nexus.exploit.credential.ToolRunner.run", mock_hydra):
+        await hydra_attack("127.0.0.1", "ssh", user_list=str(ul), pass_list=str(pl))
+    assert "-f" in mock_hydra.await_args.args[1]
+
+    # 3. test_default_creds applies configurable inter-attempt delay
+    sleep_calls: list[float] = []
+
+    async def _fake_sleep(d: float):
+        sleep_calls.append(d)
+
+    with (
+        patch("nexus.exploit.credential.ToolRunner.run", AsyncMock(return_value=ToolOutput(tool="hydra", args=[], returncode=0, stdout="", stderr=""))),
+        patch("nexus.exploit.credential.asyncio.sleep", side_effect=_fake_sleep),
+    ):
+        await test_default_creds("127.0.0.1", 22, "ssh", [("u1", "p1"), ("u2", "p2")], delay_s=0.25)
+    assert sleep_calls == [0.25]

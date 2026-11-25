@@ -8,7 +8,12 @@ from pathlib import Path
 from typing import Any
 
 from nexus.db.models import Finding, Severity
-from nexus.recon.runner import ToolRunner
+from nexus.recon.runner import (
+    ToolRunner,
+    validate_cli_target,
+    validate_extra_args,
+    validate_headers,
+)
 
 log = logging.getLogger("nexus.scanner.nuclei")
 
@@ -55,7 +60,11 @@ async def nuclei_scan(
     if not targets:
         return []
 
-    stdin_data = "\n".join(targets)
+    clean_targets = [validate_cli_target(t, label="target") for t in targets]
+    clean_headers = validate_headers(headers)
+    safe_extra = validate_extra_args(extra_args)
+
+    stdin_data = "\n".join(clean_targets)
     settings = _STEALTH_SETTINGS.get(stealth, _STEALTH_SETTINGS["normal"])
 
     args = [
@@ -68,17 +77,18 @@ async def nuclei_scan(
 
     if templates:
         for t in templates:
-            args.extend(["-t", t])
+            args.extend(["-t", validate_cli_target(t, label="template", allow_spaces=True)])
 
     if severity_filter:
-        args.extend(["-severity", ",".join(severity_filter)])
+        clean_sevs = [validate_cli_target(s, label="severity") for s in severity_filter]
+        args.extend(["-severity", ",".join(clean_sevs)])
 
-    if headers:
-        for k, v in headers.items():
+    if clean_headers:
+        for k, v in clean_headers.items():
             args.extend(["-H", f"{k}: {v}"])
 
-    if extra_args:
-        args.extend(extra_args)
+    if safe_extra:
+        args.extend(safe_extra)
 
     out = await ToolRunner.run("nuclei", args, timeout=timeout, stdin_data=stdin_data)
 

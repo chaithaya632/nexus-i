@@ -3,11 +3,19 @@
 from __future__ import annotations
 
 import logging
-from typing import Any
 
 from nexus.correlator.dedup import deduplicate_findings
-from nexus.correlator.enrichment import enrich_findings
-from nexus.correlator.graph import build_attack_chains
+from nexus.correlator.enrichment import (
+    KnowledgeGraphLike,
+    RemediationLike,
+    TaxonomyLike,
+    enrich_findings,
+)
+from nexus.correlator.graph import (
+    ChainBuilderLike,
+    ExpertEngineLike,
+    build_attack_chains,
+)
 from nexus.db.models import AttackChain, Finding
 
 log = logging.getLogger("nexus.correlator.engine")
@@ -16,25 +24,13 @@ log = logging.getLogger("nexus.correlator.engine")
 def correlate(
     findings: list[Finding],
     *,
-    taxonomy: Any = None,
-    remediation_db: Any = None,
-    knowledge_graph: Any = None,
-    chain_builder: Any = None,
-    expert: Any = None,
+    taxonomy: TaxonomyLike | None = None,
+    remediation_db: RemediationLike | None = None,
+    knowledge_graph: KnowledgeGraphLike | None = None,
+    chain_builder: ChainBuilderLike | None = None,
+    expert: ExpertEngineLike | None = None,
 ) -> tuple[list[Finding], list[AttackChain]]:
-    """Full correlation pipeline: dedup → enrich → chain.
-
-    Args:
-        findings: raw findings from all scanners.
-        taxonomy: TaxonomyMapper.
-        remediation_db: RemediationDB.
-        knowledge_graph: KnowledgeGraph.
-        chain_builder: ChainBuilder.
-        expert: RuleEngine.
-
-    Returns:
-        (deduplicated_enriched_findings, attack_chains)
-    """
+    """Full correlation pipeline: dedup → enrich → chain."""
     log.info("Starting correlation of %d findings", len(findings))
 
     # Step 1: Deduplicate

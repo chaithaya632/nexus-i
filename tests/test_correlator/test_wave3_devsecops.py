@@ -175,3 +175,46 @@ class TestExpandedKnowledgeAndRemediationPacks:
         j_cms_patch = {e.cve for _, e in kg.match_banner_vulns("http", "Joomla 4.2.8")}
         assert "CVE-2023-23752" in j_cms_vuln
         assert "CVE-2023-23752" not in j_cms_patch
+
+    def test_diff_distinguishes_distinct_endpoints(self, tmp_path: Path) -> None:
+        db = EngagementStore(tmp_path / "diff_ep.db")
+        e1 = Engagement(id="e1", name="old", target="app.local", phase=EngagementPhase.COMPLETE)
+        e2 = Engagement(id="e2", name="new", target="app.local", phase=EngagementPhase.COMPLETE)
+        db.create_engagement(e1)
+        db.create_engagement(e2)
+
+        db.add_finding(Finding(
+            engagement_id=e1.id, host="app.local", port=443, title="SQL Injection",
+            cwe_id="CWE-89", severity=Severity.HIGH, evidence="URL: https://app.local/login",
+        ))
+        db.add_finding(Finding(
+            engagement_id=e2.id, host="app.local", port=443, title="SQL Injection",
+            cwe_id="CWE-89", severity=Severity.HIGH, evidence="URL: https://app.local/login",
+        ))
+        db.add_finding(Finding(
+            engagement_id=e2.id, host="app.local", port=443, title="SQL Injection",
+            cwe_id="CWE-89", severity=Severity.HIGH, evidence="URL: https://app.local/admin",
+        ))
+        diff = diff_engagements(db, e1.id, e2.id)
+        assert diff["counts"]["persistent"] == 1
+        assert diff["counts"]["new"] == 1
+
+    def test_baseline_yaml_lists_comments_and_backslashes(self, tmp_path: Path) -> None:
+        ign = tmp_path / ".nexusignore"
+        ign.write_text(
+            "ignores:\n"
+            "  - cwes: ['693', 'CWE-1021']\n"
+            "    hosts: ['a.local', 'b.local']\n"
+            "  - 'CWE-200 host:c.local # inline comment'\n"
+            "  - 'title:C:\\inetpub\\wwwroot'\n",
+            encoding="utf-8",
+        )
+        rules = load_ignore_rules(ign)
+        assert len(rules) == 3
+
+        f_a = Finding(host="a.local", title="Missing CSP", cwe_id="CWE-693", severity=Severity.LOW)
+        f_c = Finding(host="c.local", title="Info leak", cwe_id="CWE-200", severity=Severity.LOW)
+        f_win = Finding(host="d.local", title="Path C:\\inetpub\\wwwroot exposed", severity=Severity.LOW)
+        _, cnt = apply_baseline_suppressions([f_a, f_c, f_win], rules)
+        assert cnt == 3
+

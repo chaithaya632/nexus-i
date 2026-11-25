@@ -28,7 +28,7 @@ from typing import Any
 
 try:
     from fastapi import FastAPI, Request, WebSocket, WebSocketDisconnect
-    from fastapi.responses import HTMLResponse, FileResponse, JSONResponse, Response
+    from fastapi.responses import HTMLResponse, JSONResponse, Response
     from fastapi.staticfiles import StaticFiles
     from fastapi.middleware.cors import CORSMiddleware
     HAS_FASTAPI = True
@@ -36,7 +36,6 @@ except ImportError:
     HAS_FASTAPI = False
 
 from nexus import __version__
-from nexus.core.config import NexusConfig
 from nexus.core.engine import NexusEngine
 from nexus.correlator.diff import diff_engagements
 from nexus.reporter.generator import ReportData, build_report_data
@@ -73,14 +72,21 @@ class DashboardApp:
 
         self.app = FastAPI(title="NEXUS Dashboard", version=__version__)
         self._ws_clients: list[WebSocket] = []
+        if getattr(self.engine, "on_progress", None) is None:
+            self.engine.on_progress = self.broadcast
         self._setup_routes()
         self.app.add_middleware(
             CORSMiddleware,
             allow_origin_regex=r"^https?://(127\.0\.0\.1|localhost)(:\d+)?$",
             allow_credentials=False,
-            allow_methods=["GET", "POST", "OPTIONS"],
+            allow_methods=["GET", "OPTIONS"],
             allow_headers=["*"],
         )
+
+    def _require_db(self):
+        if self.engine.db is None:
+            raise RuntimeError("Engine database is not initialized.")
+        return self.engine.db
 
     # ── Route Setup ───────────────────────────────────────────────
 
@@ -119,8 +125,8 @@ class DashboardApp:
 
         @app.get("/api/engagements")
         async def list_engagements():
-            assert self.engine.db is not None
-            engs = self.engine.db.list_engagements()
+            db = self._require_db()
+            engs = db.list_engagements()
             return [
                 {
                     "id": e.id,
@@ -141,8 +147,10 @@ class DashboardApp:
 
         @app.get("/api/engagements/{eng_id}/findings")
         async def get_findings(eng_id: str, include_suppressed: bool = True):
-            assert self.engine.db is not None
-            findings = self.engine.db.get_findings(eng_id)
+            db = self._require_db()
+            if not db.get_engagement(eng_id):
+                return JSONResponse({"error": "not found"}, status_code=404)
+            findings = db.get_findings(eng_id)
             if not include_suppressed:
                 findings = [f for f in findings if not getattr(f, "false_positive", False)]
             out: list[dict[str, Any]] = []
@@ -159,9 +167,9 @@ class DashboardApp:
 
         @app.get("/api/engagements/{eng_id}/sarif")
         async def get_sarif(eng_id: str):
-            assert self.engine.db is not None
+            db = self._require_db()
             try:
-                data = build_report_data(self.engine.db, eng_id)
+                data = build_report_data(db, eng_id)
             except ValueError:
                 return JSONResponse({"error": "not found"}, status_code=404)
             sarif_data = ReportData(
@@ -180,16 +188,18 @@ class DashboardApp:
 
         @app.get("/api/diff")
         async def get_diff(old: str, new: str):
-            assert self.engine.db is not None
+            db = self._require_db()
             try:
-                return diff_engagements(self.engine.db, old, new)
+                return diff_engagements(db, old, new)
             except ValueError as exc:
                 return JSONResponse({"error": str(exc)}, status_code=404)
 
         @app.get("/api/engagements/{eng_id}/chains")
         async def get_chains(eng_id: str):
-            assert self.engine.db is not None
-            chains = self.engine.db.get_chains(eng_id)
+            db = self._require_db()
+            if not db.get_engagement(eng_id):
+                return JSONResponse({"error": "not found"}, status_code=404)
+            chains = db.get_chains(eng_id)
             return [
                 c.model_dump() if hasattr(c, "model_dump") else c
                 for c in chains
@@ -197,8 +207,10 @@ class DashboardApp:
 
         @app.get("/api/engagements/{eng_id}/targets")
         async def get_targets(eng_id: str):
-            assert self.engine.db is not None
-            targets = self.engine.db.get_targets(eng_id)
+            db = self._require_db()
+            if not db.get_engagement(eng_id):
+                return JSONResponse({"error": "not found"}, status_code=404)
+            targets = db.get_targets(eng_id)
             return [
                 t.model_dump() if hasattr(t, "model_dump") else t
                 for t in targets
@@ -211,15 +223,33 @@ class DashboardApp:
             if self.api_token:
                 auth_hdr = websocket.headers.get("authorization", "")
                 bearer = auth_hdr[7:].strip() if auth_hdr.lower().startswith("bearer ") else ""
-                ws_tok = (
-                    websocket.query_params.get("token", "").strip()
-                    or bearer
-                    or websocket.headers.get("x-nexus-token", "").strip()
-                )
-                if not ws_tok or not hmac.compare_digest(ws_tok.encode("utf-8"), self.api_token.encode("utf-8")):
-                    await websocket.close(code=1008)
-                    return
-            await websocket.accept()
+                hdr_tok = bearer or websocket.headers.get("x-nexus-token", "").strip()
+                if hdr_tok:
+                    if not hmac.compare_digest(hdr_tok.encode("utf-8"), self.api_token.encode("utf-8")):
+                        await websocket.close(code=1008)
+                        return
+                    await websocket.accept()
+                else:
+                    # Reject query-string tokens so secrets never appear in URLs/logs;
+                    # require initial auth frame: {"type": "auth", "token": "..."}
+                    await websocket.accept()
+                    try:
+                        first_msg = await asyncio.wait_for(websocket.receive_text(), timeout=5.0)
+                        payload = json.loads(first_msg)
+                        frame_tok = str(payload.get("token", "")).strip() if isinstance(payload, dict) and payload.get("type") == "auth" else ""
+                    except (asyncio.TimeoutError, WebSocketDisconnect, ValueError, TypeError):
+                        try:
+                            await websocket.close(code=1008)
+                        except Exception:
+                            pass
+                        return
+                    if not frame_tok or not hmac.compare_digest(frame_tok.encode("utf-8"), self.api_token.encode("utf-8")):
+                        await websocket.close(code=1008)
+                        return
+                    await websocket.send_text(json.dumps({"event": "auth", "status": "ok"}))
+            else:
+                await websocket.accept()
+
             self._ws_clients.append(websocket)
             try:
                 while True:
@@ -228,7 +258,10 @@ class DashboardApp:
                     if data == "ping":
                         await websocket.send_text("pong")
             except WebSocketDisconnect:
-                self._ws_clients.remove(websocket)
+                pass
+            finally:
+                if websocket in self._ws_clients:
+                    self._ws_clients.remove(websocket)
 
         # ── Static files / SPA ────────────────────────────────────
 
@@ -249,13 +282,14 @@ class DashboardApp:
         """Send a JSON event to all connected WebSocket clients."""
         message = json.dumps({"event": event, "data": data})
         dead: list[WebSocket] = []
-        for ws in self._ws_clients:
+        for ws in list(self._ws_clients):
             try:
                 await ws.send_text(message)
             except Exception:
                 dead.append(ws)
         for ws in dead:
-            self._ws_clients.remove(ws)
+            if ws in self._ws_clients:
+                self._ws_clients.remove(ws)
 
 
 def create_app(engine: NexusEngine | None = None, api_token: str | None = None) -> Any:
@@ -360,12 +394,19 @@ async function load(){
 function card(label,value){return '<div class="card"><div class="value">'+esc(value)+'</div><div class="label">'+esc(label)+'</div></div>'}
 load();setInterval(load,10000);
 
-// WebSocket live updates
-try{
-  const ws=new WebSocket((location.protocol==='https:'?'wss:':'ws:')+'//' +location.host+'/ws');
-  ws.onmessage=function(e){try{const m=JSON.parse(e.data);if(m.event)load()}catch(x){}};
-  ws.onclose=function(){setTimeout(()=>location.reload(),5000)};
-}catch(e){}
+// WebSocket live updates with exponential backoff
+(function connectFallbackWs(){
+  let retryMs = 2000;
+  function start(){
+    try{
+      const ws=new WebSocket((location.protocol==='https:'?'wss:':'ws:')+'//' +location.host+'/ws');
+      ws.onopen=function(){retryMs=2000;};
+      ws.onmessage=function(e){try{const m=JSON.parse(e.data);if(m.event)load()}catch(x){}};
+      ws.onclose=function(ev){if(ev.code!==1008){setTimeout(start,retryMs);retryMs=Math.min(retryMs*2,30000);}};
+    }catch(e){}
+  }
+  start();
+})();
 </script>
 </body>
 </html>"""

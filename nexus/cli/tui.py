@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from typing import Any
+
 from rich.console import Console
 from rich.layout import Layout
 from rich.live import Live
@@ -34,8 +36,8 @@ SEVERITY_COLORS = {
 
 def severity_text(severity: str | Severity) -> Text:
     """Return a colored Rich Text for a severity level."""
-    val = severity.value if isinstance(severity, Severity) else severity
-    color = SEVERITY_COLORS.get(severity, "white")
+    val = severity.value if isinstance(severity, Severity) else str(severity or "info")
+    color = SEVERITY_COLORS.get(val.lower().strip(), "white")
     return Text(val.upper(), style=color)
 
 
@@ -106,14 +108,15 @@ def make_findings_table(
 
     for i, f in enumerate(findings[:max_rows], 1):
         sev = f.get("severity", "info")
-        color = SEVERITY_COLORS.get(sev, "white")
+        port_val = f.get("port")
+        port_str = str(port_val) if port_val is not None else "-"
         table.add_row(
             str(i),
-            Text(sev.upper(), style=color),
-            f.get("host", ""),
-            str(f.get("port", "")),
-            f.get("title", "")[:60],
-            f.get("tool_source", ""),
+            severity_text(sev),
+            str(f.get("host", "") or ""),
+            port_str,
+            str(f.get("title", "") or "")[:60],
+            str(f.get("tool_source", "") or ""),
         )
 
     if len(findings) > max_rows:
@@ -184,6 +187,7 @@ def render_tui(
     elapsed: str = "0s",
     findings: list[dict] | None = None,
     severity_counts: dict[str, int] | None = None,
+    progress_text: str = "",
 ) -> Layout:
     """Render a full TUI frame."""
     layout = make_layout()
@@ -197,9 +201,64 @@ def render_tui(
     layout["severity"].update(make_severity_bar(severity_counts or {}))
     layout["right"].update(make_findings_table(findings or []))
 
+    footer_msg = progress_text or "Press Ctrl+C to abort | 'nexus engagements list' to see all"
     layout["footer"].update(Panel(
-        Text("Press Ctrl+C to abort | 'nexus engagements list' to see all", justify="center", style="dim"),
+        Text(footer_msg, justify="center", style="dim"),
         border_style="dim",
     ))
 
     return layout
+
+
+class LiveEngagementTUI:
+    """Live-updating Rich TUI session wired to engine progress events."""
+
+    def __init__(self, target: str, tier: str = "minimal", stealth: str = "medium") -> None:
+        self.target = target
+        self.phase = "init"
+        self.tier = tier
+        self.stealth = stealth
+        self.findings: list[dict[str, Any]] = []
+        self.severity_counts: dict[str, int] = {}
+        self.progress_text = ""
+        self._live: Live | None = None
+
+    def __enter__(self) -> "LiveEngagementTUI":
+        self._live = Live(self.render(), console=console, refresh_per_second=4)
+        self._live.__enter__()
+        return self
+
+    def __exit__(self, *args: Any) -> None:
+        if self._live is not None:
+            self._live.__exit__(*args)
+            self._live = None
+
+    def update(
+        self,
+        *,
+        phase: str | None = None,
+        findings: list[dict[str, Any]] | None = None,
+        severity_counts: dict[str, int] | None = None,
+        progress_text: str | None = None,
+    ) -> None:
+        if phase is not None:
+            self.phase = phase
+        if findings is not None:
+            self.findings = findings
+        if severity_counts is not None:
+            self.severity_counts = severity_counts
+        if progress_text is not None:
+            self.progress_text = progress_text
+        if self._live is not None:
+            self._live.update(self.render())
+
+    def render(self) -> Layout:
+        return render_tui(
+            target=self.target,
+            phase=self.phase,
+            tier=self.tier,
+            stealth=self.stealth,
+            findings=self.findings,
+            severity_counts=self.severity_counts,
+            progress_text=self.progress_text,
+        )

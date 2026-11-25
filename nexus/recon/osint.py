@@ -9,7 +9,7 @@ from pathlib import Path
 from typing import Any
 
 from nexus.db.models import Finding, Severity, Target
-from nexus.recon.runner import ToolRunner
+from nexus.recon.runner import ToolRunner, validate_cli_target
 
 log = logging.getLogger("nexus.recon.osint")
 
@@ -54,32 +54,34 @@ async def theharvester_gather(
             "host_ips": {host: ip, ...},
         }
     """
+    clean_domain = validate_cli_target(domain, label="domain")
+    clean_sources = validate_cli_target(sources, label="sources")
     tool_bin = _harvester_bin() or "theHarvester"
     json_path = ToolRunner.make_temp_path(".json")
 
     args = [
-        "-d", domain,
-        "-b", sources,
+        "-d", clean_domain,
+        "-b", clean_sources,
         "-l", str(limit),
         "-f", json_path,
     ]
-
-    out = await ToolRunner.run(tool_bin, args, timeout=timeout)
 
     emails: list[str] = []
     raw_hosts: list[str] = []
     ips: list[str] = []
 
-    # Parse JSON output file
+    # Parse JSON output file (ensure temp files are always cleaned up even if ToolRunner.run raises)
     try:
-        raw = Path(json_path).read_text(encoding="utf-8", errors="replace")
-        data = json.loads(raw)
-        emails = data.get("emails", []) or []
-        raw_hosts = data.get("hosts", []) or []
-        ips = data.get("ips", []) or []
-    except (FileNotFoundError, json.JSONDecodeError):
-        # Fallback: parse stdout
-        emails, raw_hosts, ips = _parse_harvester_stdout(out.stdout)
+        out = await ToolRunner.run(tool_bin, args, timeout=timeout)
+        try:
+            raw = Path(json_path).read_text(encoding="utf-8", errors="replace")
+            data = json.loads(raw)
+            emails = data.get("emails", []) or []
+            raw_hosts = data.get("hosts", []) or []
+            ips = data.get("ips", []) or []
+        except (FileNotFoundError, json.JSONDecodeError):
+            # Fallback: parse stdout
+            emails, raw_hosts, ips = _parse_harvester_stdout(out.stdout)
     finally:
         Path(json_path).unlink(missing_ok=True)
         # theHarvester also creates .xml — clean up

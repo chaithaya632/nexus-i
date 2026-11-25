@@ -95,14 +95,22 @@ def analyze_html_passive(
     findings: list[Finding] = []
     seen_titles: set[str] = set()
 
-    def _emit(title: str, desc: str, sev: Severity, cwe: str, evidence: str) -> None:
+    def _emit(
+        title: str,
+        desc: str,
+        sev: Severity,
+        cwe: str,
+        evidence: str,
+        *,
+        confirmed: bool = True,
+    ) -> None:
         if title in seen_titles:
             return
         seen_titles.add(title)
         findings.append(Finding(
             host=host, port=port, protocol=proto,
             title=title, description=desc, severity=sev, cwe_id=cwe,
-            tool_source="passive_dast", evidence=evidence, confirmed=True,
+            tool_source="passive_dast", evidence=evidence, confirmed=confirmed,
         ))
 
     if is_html:
@@ -171,6 +179,7 @@ def analyze_html_passive(
                     "Client-Side DOM Sink Audit Candidate",
                     f"Inline script on {url} uses risky DOM sink '{m.group(0).strip()}'.",
                     Severity.INFO, "CWE-79", f"URL: {url}\nSink: {m.group(0).strip()}",
+                    confirmed=False,
                 )
 
     if is_js:
@@ -180,6 +189,7 @@ def analyze_html_passive(
                 "Client-Side DOM Sink Audit Candidate",
                 f"JavaScript asset {url} references DOM sink '{m.group(0).strip()}'.",
                 Severity.INFO, "CWE-79", f"URL: {url}\nSink: {m.group(0).strip()}",
+                confirmed=False,
             )
 
     return findings

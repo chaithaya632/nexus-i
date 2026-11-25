@@ -98,27 +98,40 @@ class NexusConfig(BaseModel):
     ignore_file: Path | None = None
     ollama_host: str = "http://127.0.0.1:11434"
     model_name: str = "dolphin-mistral"
-    max_threads: int = 5
+    max_threads: int = Field(default=5, ge=1)
+    auto_confirm_exploits: bool = False
     output_dir: Path = Field(default_factory=lambda: Path.cwd() / "nexus_output")
     api_keys: dict[str, str] = Field(default_factory=dict, exclude=True, repr=False)
     knowledge_dir: Path | None = None
 
     def model_post_init(self, __context: Any) -> None:
-        self.data_dir.mkdir(parents=True, exist_ok=True)
-        self.output_dir.mkdir(parents=True, exist_ok=True)
+        if "db_path" not in self.model_fields_set:
+            self.db_path = self.data_dir / "nexus.db"
         if self.knowledge_dir is None:
             # Default: bundled knowledge inside the package
             self.knowledge_dir = Path(__file__).resolve().parent.parent / "brain" / "knowledge"
 
+    def ensure_dirs(self) -> None:
+        """Create configured data and output directories on disk."""
+        self.data_dir.mkdir(parents=True, exist_ok=True)
+        self.output_dir.mkdir(parents=True, exist_ok=True)
+
     def save(self, path: Path | None = None) -> Path:
         dest = path or (self.data_dir / "config.yaml")
-        dest.parent.mkdir(parents=True, exist_ok=True)
+        if path is None:
+            self.ensure_dirs()
+        else:
+            dest.parent.mkdir(parents=True, exist_ok=True)
         data = self.model_dump(mode="json")
         # Convert Path objects to strings for YAML
         for key in ("data_dir", "db_path", "scope_file", "openapi_spec", "ignore_file", "output_dir", "knowledge_dir"):
             if data.get(key) is not None:
                 data[key] = str(data[key])
         dest.write_text(yaml.dump(data, default_flow_style=False, sort_keys=False), encoding="utf-8")
+        try:
+            os.chmod(dest, 0o600)
+        except OSError:
+            pass
         return dest
 
     @classmethod
@@ -137,8 +150,14 @@ class NexusConfig(BaseModel):
         env_map = {
             "NEXUS_DATA_DIR": "data_dir",
             "NEXUS_DB_PATH": "db_path",
+            "NEXUS_SCOPE_FILE": "scope_file",
             "NEXUS_STEALTH": "stealth",
             "NEXUS_TIER": "tier",
+            "NEXUS_PROFILE": "profile",
+            "NEXUS_KNOWLEDGE_DIR": "knowledge_dir",
+            "NEXUS_IGNORE_FILE": "ignore_file",
+            "NEXUS_LOCAL_PKG_AUDIT": "local_pkg_audit",
+            "NEXUS_AUTO_CONFIRM_EXPLOITS": "auto_confirm_exploits",
             "NEXUS_OLLAMA_HOST": "ollama_host",
             "NEXUS_MODEL": "model_name",
             "NEXUS_MAX_THREADS": "max_threads",
@@ -146,9 +165,18 @@ class NexusConfig(BaseModel):
             "NEXUS_WPSCAN_API_TOKEN": "wpscan_api_token",
             "NEXUS_DASHBOARD_TOKEN": "dashboard_token",
         }
+        optional_fields = {
+            "scope_file",
+            "knowledge_dir",
+            "ignore_file",
+            "wpscan_api_token",
+            "dashboard_token",
+        }
         for env_key, cfg_key in env_map.items():
             val = os.environ.get(env_key)
             if val is not None:
+                if cfg_key in optional_fields and not val.strip():
+                    continue
                 data[cfg_key] = val
         if not data.get("wpscan_api_token"):
             wp_tok = os.environ.get("WPSCAN_API_TOKEN")

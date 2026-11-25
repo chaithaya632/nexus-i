@@ -15,7 +15,7 @@ from typing import Any
 log = logging.getLogger("nexus.ai.guard")
 
 # CVE format: CVE-YYYY-NNNNN (4 digits year, 4-7 digits ID)
-_CVE_PATTERN = re.compile(r"CVE-\d{4}-\d{4,7}")
+_CVE_PATTERN = re.compile(r"CVE-\d{4}-\d{4,7}", re.IGNORECASE)
 
 
 @dataclass
@@ -50,27 +50,31 @@ class AIGuard:
         """
         result = GuardResult(text=ai_output)
 
-        # 1. Validate CVE references
-        cve_ids = _CVE_PATTERN.findall(ai_output)
-        if cve_ids and self.knowledge:
-            for cve_id in cve_ids:
-                if self.knowledge.has_cve(cve_id):
-                    result.verified_cves.append(cve_id)
+        # 1. Validate CVE references (deduplicate preserving order, case-insensitive)
+        raw_matches = _CVE_PATTERN.findall(ai_output)
+        unique_cves = list(dict.fromkeys(m.upper() for m in raw_matches))
+        if unique_cves and self.knowledge:
+            unverified_upper: set[str] = set()
+            for cve_norm in unique_cves:
+                if self.knowledge.has_cve(cve_norm):
+                    result.verified_cves.append(cve_norm)
                 else:
-                    result.stripped_cves.append(cve_id)
+                    result.stripped_cves.append(cve_norm)
+                    unverified_upper.add(cve_norm)
                     result.warnings.append(
-                        f"Unverified CVE reference: {cve_id} — not in knowledge base"
+                        f"Unverified CVE reference: {cve_norm} — not in knowledge base"
                     )
 
-            # Strip unverified CVEs from the output text
-            if result.stripped_cves:
-                sanitized = ai_output
-                for cve in result.stripped_cves:
-                    sanitized = sanitized.replace(
-                        cve, f"[UNVERIFIED: {cve}]"
-                    )
-                result.text = sanitized
-                # Confidence penalty: 10% per fabricated CVE, floor at 0.3
+            # Single-pass replacement (no duplicate wrapping or prefix corruption)
+            if unverified_upper:
+                # Preserve longest-first order if ever needed; _CVE_PATTERN.sub replaces each token once
+                result.text = _CVE_PATTERN.sub(
+                    lambda m: f"[UNVERIFIED: {m.group(0)}]"
+                    if m.group(0).upper() in unverified_upper
+                    else m.group(0),
+                    ai_output,
+                )
+                # Confidence penalty: 10% per unverified CVE, floor at 0.3
                 penalty = len(result.stripped_cves) * 0.1
                 result.confidence = max(0.3, 1.0 - penalty)
 
@@ -92,7 +96,7 @@ class AIGuard:
         text_lower = result.text.lower()
         if "critical" in text_lower and "cve" not in text_lower:
             # Claims critical with no CVE backing — flag it
-            if "remote code execution" not in text_lower and "rce" not in text_lower:
+            if "remote code execution" not in text_lower and not re.search(r"\brce\b", text_lower):
                 result.warnings.append(
                     "AI claims critical severity without CVE or RCE evidence"
                 )
@@ -126,5 +130,16 @@ class AIGuard:
         return result
 
     def is_trustworthy(self, result: GuardResult) -> bool:
-        """Return True if the guarded output is trustworthy enough to use."""
-        return result.confidence >= 0.5 and len(result.stripped_cves) == 0
+        """Return True if the guarded output is trustworthy enough to use.
+
+        Valid non-CVE analysis is preserved even when an external CVE isn't in
+        the local KB (already annotated as ``[UNVERIFIED: ...]``), unless
+        confidence is low or the hallucination ratio is high.
+        """
+        if result.confidence < 0.5:
+            return False
+        total_cves = len(result.verified_cves) + len(result.stripped_cves)
+        if len(result.stripped_cves) >= 3 and total_cves > 0:
+            if (len(result.stripped_cves) / total_cves) > 0.7:
+                return False
+        return True

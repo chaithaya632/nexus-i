@@ -48,6 +48,8 @@ class TestPassiveHtmlDast:
         assert "Mixed Content: HTTP Iframe on HTTPS Page" in titles
         assert "Reverse Tabnabbing Risk (target=_blank Without rel=noopener)" in titles
         assert "Client-Side DOM Sink Audit Candidate" in titles
+        dom_f = [f for f in findings if f.title == "Client-Side DOM Sink Audit Candidate"][0]
+        assert dom_f.confirmed is False
 
     def test_clean_hardened_html_yields_zero_passive_findings(self) -> None:
         html = """<!DOCTYPE html><html><body>
@@ -249,7 +251,10 @@ class TestDatabasesSmtpCloudAndServerStatus:
         def _serve_mongo():
             c, _ = mongo_srv.accept()
             with c:
-                c.recv(512)
+                req = c.recv(512)
+                # Verify OP_MSG (opcode 2013) is used
+                if len(req) >= 16:
+                    assert struct.unpack("<i", req[12:16])[0] == 2013
                 c.sendall(b"\x00" * 36 + b'ismaster\x00\x01maxBsonObjectSize\x00')
 
         # 2. PostgreSQL mock (SSL N + AuthenticationOk code 0)
@@ -366,3 +371,30 @@ class TestDatabasesSmtpCloudAndServerStatus:
             org_srv.server_close()
 
         assert leaked == []
+
+    @pytest.mark.asyncio
+    async def test_postgresql_ssl_accepted_probes_startup_over_tls(self) -> None:
+        from unittest.mock import MagicMock, patch
+
+        fake_sock = MagicMock()
+        fake_sock.recv.return_value = b"S"
+        fake_sock.__enter__.return_value = fake_sock
+        fake_sock.__exit__.return_value = False
+
+        fake_ssock = MagicMock()
+        fake_ssock.recv.return_value = b"R" + struct.pack("!Ii", 8, 3)  # Cleartext password
+        fake_ssock.__enter__.return_value = fake_ssock
+        fake_ssock.__exit__.return_value = False
+
+        fake_ctx = MagicMock()
+        fake_ctx.wrap_socket.return_value = fake_ssock
+
+        with (
+            patch("nexus.scanner.network_services.socket.create_connection", return_value=fake_sock),
+            patch("nexus.scanner.network_services.ssl.create_default_context", return_value=fake_ctx),
+        ):
+            findings = await audit_postgresql("127.0.0.1", 5432)
+
+        assert len(findings) == 1
+        assert findings[0].title == "PostgreSQL: Cleartext Password Authentication Advertised"
+        fake_ctx.wrap_socket.assert_called_once()

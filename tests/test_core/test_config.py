@@ -1,9 +1,5 @@
 """Tests for nexus.core.config."""
 
-import os
-import tempfile
-from pathlib import Path
-
 import pytest
 import yaml
 
@@ -109,3 +105,49 @@ class TestNexusConfig:
         assert "ssh_key_path" not in loaded_dict
         assert "api_keys" not in loaded_dict
         assert "openapi_spec" in loaded_dict
+
+    def test_no_dirs_created_on_init_until_ensure_or_save(self, tmp_path):
+        d = tmp_path / "lazy_data"
+        o = tmp_path / "lazy_out"
+        cfg = NexusConfig(data_dir=d, output_dir=o)
+        assert not d.exists()
+        assert not o.exists()
+        assert cfg.db_path == d / "nexus.db"
+
+        cfg.ensure_dirs()
+        assert d.is_dir()
+        assert o.is_dir()
+
+    def test_max_threads_validation_and_new_env_overrides(self, tmp_path, monkeypatch):
+        from pydantic import ValidationError
+
+        with pytest.raises(ValidationError):
+            NexusConfig(data_dir=tmp_path, output_dir=tmp_path / "o", max_threads=0)
+
+        monkeypatch.setenv("NEXUS_DATA_DIR", str(tmp_path / "env_data"))
+        monkeypatch.setenv("NEXUS_PROFILE", "api")
+        monkeypatch.setenv("NEXUS_SCOPE_FILE", str(tmp_path / "scope.yaml"))
+        monkeypatch.setenv("NEXUS_KNOWLEDGE_DIR", str(tmp_path / "kb"))
+        monkeypatch.setenv("NEXUS_IGNORE_FILE", str(tmp_path / ".nexusignore"))
+        monkeypatch.setenv("NEXUS_LOCAL_PKG_AUDIT", "true")
+        monkeypatch.setenv("NEXUS_AUTO_CONFIRM_EXPLOITS", "1")
+
+        cfg = NexusConfig.load(tmp_path / "missing.yaml")
+        assert cfg.db_path == tmp_path / "env_data" / "nexus.db"
+        assert cfg.profile == ScanProfile.API
+        assert cfg.scope_file == tmp_path / "scope.yaml"
+        assert cfg.knowledge_dir == tmp_path / "kb"
+        assert cfg.ignore_file == tmp_path / ".nexusignore"
+        assert cfg.local_pkg_audit is True
+        assert cfg.auto_confirm_exploits is True
+
+    def test_save_permissions_posix(self, tmp_path):
+        import stat
+        import sys
+
+        cfg = NexusConfig(data_dir=tmp_path, output_dir=tmp_path / "out")
+        dest = cfg.save(tmp_path / "perms.yaml")
+        assert dest.is_file()
+        if sys.platform != "win32":
+            mode = stat.S_IMODE(dest.stat().st_mode)
+            assert mode == 0o600

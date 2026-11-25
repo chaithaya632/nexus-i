@@ -4,16 +4,60 @@ from __future__ import annotations
 
 import fnmatch
 import logging
+import os
 import shlex
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Iterable
+from typing import Any, Iterable
 
 import yaml
 
 from nexus.db.models import Finding
 
 log = logging.getLogger("nexus.correlator.baseline")
+
+
+def _normalize_cwe(val: str) -> str:
+    s = val.strip().upper()
+    if not s:
+        return ""
+    return s if s.startswith("CWE-") else f"CWE-{s}"
+
+
+def _strip_inline_comment(line: str) -> str:
+    """Strip unquoted `# ...` inline comments from a text rule line."""
+    in_quote: str | None = None
+    for idx, ch in enumerate(line):
+        if ch in ("'", '"'):
+            if in_quote is None:
+                in_quote = ch
+            elif in_quote == ch:
+                in_quote = None
+        elif ch == "#" and in_quote is None:
+            if idx == 0 or line[idx - 1].isspace():
+                return line[:idx].strip()
+    return line.strip()
+
+
+def _unquote_token(tok: str) -> str:
+    if len(tok) >= 2 and tok[0] == tok[-1] and tok[0] in ('"', "'"):
+        return tok[1:-1]
+    return tok
+
+
+def _as_str_list(entry: dict[str, Any], *keys: str) -> list[str]:
+    out: list[str] = []
+    for k in keys:
+        if k not in entry or entry[k] is None:
+            continue
+        val = entry[k]
+        if isinstance(val, list):
+            out.extend(str(item).strip() for item in val if item is not None and str(item).strip())
+        else:
+            s = str(val).strip()
+            if s:
+                out.append(s)
+    return out
 
 
 @dataclass
@@ -39,8 +83,10 @@ class IgnoreRule:
         if self.cves and not any(c.upper() in f_cves for c in self.cves):
             return False
 
-        if self.cwes and finding.cwe_id.upper() not in {c.upper() for c in self.cwes}:
-            return False
+        if self.cwes:
+            f_cwe = _normalize_cwe(finding.cwe_id)
+            if f_cwe not in {_normalize_cwe(c) for c in self.cwes}:
+                return False
 
         if self.hosts:
             host_l = finding.host.lower()
@@ -73,26 +119,28 @@ class IgnoreRule:
 
 
 def _parse_text_line(line: str) -> IgnoreRule | None:
-    stripped = line.strip()
-    if not stripped or stripped.startswith("#"):
+    stripped = _strip_inline_comment(line)
+    if not stripped:
         return None
     rule = IgnoreRule(raw=stripped)
+    use_posix = os.name != "nt"
     try:
-        tokens = shlex.split(stripped)
+        tokens = shlex.split(stripped, posix=use_posix)
     except ValueError:
         tokens = stripped.split()
 
-    for tok in tokens:
+    for raw_tok in tokens:
+        tok = _unquote_token(raw_tok)
         if ":" in tok:
             k, v = tok.split(":", 1)
             kl = k.strip().lower()
-            val = v.strip()
+            val = _unquote_token(v.strip())
             if not val:
                 continue
             if kl == "cve":
                 rule.cves.append(val)
             elif kl == "cwe":
-                rule.cwes.append(val if val.upper().startswith("CWE-") else f"CWE-{val}")
+                rule.cwes.append(_normalize_cwe(val))
             elif kl == "host":
                 rule.hosts.append(val)
             elif kl == "port":
@@ -138,13 +186,13 @@ def load_ignore_rules(ignore_path: str | Path) -> list[IgnoreRule]:
             elif isinstance(entry, dict):
                 r = IgnoreRule(
                     raw=str(entry),
-                    cves=[str(entry["cve"])] if entry.get("cve") else [],
-                    cwes=[str(entry["cwe"])] if entry.get("cwe") else [],
-                    hosts=[str(entry["host"])] if entry.get("host") else [],
-                    ports=[str(entry["port"])] if entry.get("port") is not None else [],
-                    tools=[str(entry["tool"])] if entry.get("tool") else [],
-                    titles=[str(entry["title"])] if entry.get("title") else [],
-                    severities=[str(entry["severity"])] if entry.get("severity") else [],
+                    cves=_as_str_list(entry, "cve", "cves"),
+                    cwes=[_normalize_cwe(c) for c in _as_str_list(entry, "cwe", "cwes")],
+                    hosts=_as_str_list(entry, "host", "hosts"),
+                    ports=_as_str_list(entry, "port", "ports"),
+                    tools=_as_str_list(entry, "tool", "tools"),
+                    titles=_as_str_list(entry, "title", "titles"),
+                    severities=_as_str_list(entry, "severity", "severities", "sev"),
                     reason=str(entry.get("reason", "")),
                 )
                 rules.append(r)

@@ -2,12 +2,21 @@
 
 from __future__ import annotations
 
+import csv
+import io
 import logging
 import re
 from typing import Any
+from urllib.parse import urlparse
 
 from nexus.db.models import Finding, Severity
-from nexus.recon.runner import ToolRunner
+from nexus.recon.runner import (
+    ToolRunner,
+    validate_cli_target,
+    validate_extra_args,
+    validate_headers,
+    validate_port,
+)
 
 log = logging.getLogger("nexus.scanner.nikto")
 
@@ -56,14 +65,19 @@ async def nikto_scan(
     import tempfile
 
     # Nikto errors with "-port cannot be used with a full URI" if both URL and -p are passed
-    clean_target = target.strip()
+    clean_target = validate_cli_target(target, label="target")
+    if port is not None:
+        port = validate_port(port)
+    clean_headers = validate_headers(headers)
+    safe_extra = validate_extra_args(extra_args)
+
     is_uri = "://" in clean_target
     use_ssl = ssl or clean_target.lower().startswith("https://")
     inferred_port = port
     if is_uri:
-        host_part = clean_target.split("://", 1)[1].split("/")[0]
-        if ":" in host_part and host_part.rsplit(":", 1)[1].isdigit():
-            inferred_port = int(host_part.rsplit(":", 1)[1])
+        parsed = urlparse(clean_target)
+        if parsed.port is not None and inferred_port is None:
+            inferred_port = parsed.port
 
     with tempfile.TemporaryDirectory(prefix="nexus_nikto_") as td:
         csv_path = Path(td) / "nikto.csv"
@@ -73,19 +87,19 @@ async def nikto_scan(
             args.extend(["-p", str(port)])
         elif is_uri and port and f":{port}" not in clean_target:
             # Strip scheme to use -p cleanly with explicit non-default port
-            host_only = clean_target.split("://", 1)[1].split("/")[0].split(":")[0]
+            host_only = (urlparse(clean_target).hostname or "").strip() or clean_target
             args[1] = host_only
             args.extend(["-p", str(port)])
 
         if ssl and not is_uri:
             args.append("-ssl")
 
-        if headers:
-            for k, v in headers.items():
+        if clean_headers:
+            for k, v in clean_headers.items():
                 args.extend(["-Add-header", f"{k}: {v}"])
 
-        if extra_args:
-            args.extend(extra_args)
+        if safe_extra:
+            args.extend(safe_extra)
 
         out = await ToolRunner.run("nikto", args, timeout=timeout)
         csv_text = ""
@@ -104,26 +118,27 @@ def _parse_nikto_csv(
     default_port: int | None = None,
     ssl: bool = False,
 ) -> list[Finding]:
-    """Parse Nikto CSV text (where data rows are quoted) into Findings."""
+    """Parse Nikto CSV text (where data rows are quoted) into Findings using csv.reader."""
     findings: list[Finding] = []
+    filtered_lines = [
+        line for line in csv_text.splitlines()
+        if line.strip() and not line.lstrip().startswith("#")
+    ]
+    if not filtered_lines:
+        return findings
 
-    for line in csv_text.splitlines():
-        line = line.strip()
-        if not line or line.startswith("#"):
-            continue
-
+    for parts in csv.reader(io.StringIO("\n".join(filtered_lines))):
         # Nikto CSV: "host","IP","port","osvdb/ref","method","uri","description"
-        parts = _parse_csv_line(line)
         if len(parts) < 7:
             continue
 
-        host = parts[0].strip('"')
-        ip = parts[1].strip('"')
-        port_raw = parts[2].strip('"')
-        osvdb = parts[3].strip('"')
-        method = parts[4].strip('"')
-        uri = parts[5].strip('"')
-        desc = parts[6].strip('"')
+        host = parts[0].strip()
+        ip = parts[1].strip()
+        port_raw = parts[2].strip()
+        osvdb = parts[3].strip()
+        method = parts[4].strip()
+        uri = parts[5].strip()
+        desc = parts[6].strip()
 
         # Skip header/metadata lines or empty host summary rows
         if host.lower() == "host" or not desc:
@@ -148,21 +163,10 @@ def _parse_nikto_csv(
 
 
 def _parse_csv_line(line: str) -> list[str]:
-    """Simple CSV line parser that handles quoted fields."""
-    parts: list[str] = []
-    current = ""
-    in_quotes = False
-    for ch in line:
-        if ch == '"':
-            in_quotes = not in_quotes
-            current += ch
-        elif ch == "," and not in_quotes:
-            parts.append(current)
-            current = ""
-        else:
-            current += ch
-    parts.append(current)
-    return parts
+    """Parse a single CSV line via stdlib csv.reader."""
+    for row in csv.reader(io.StringIO(line)):
+        return row
+    return []
 
 
 def _classify_severity(description: str) -> Severity:

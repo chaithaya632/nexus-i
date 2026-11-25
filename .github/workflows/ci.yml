@@ -20,6 +20,7 @@ jobs:
         uses: actions/setup-python@v5
         with:
           python-version: ${{ matrix.python-version }}
+          cache: 'pip'
 
       - name: Install dependencies
         run: |
@@ -28,10 +29,8 @@ jobs:
 
       - name: Lint
         run: |
-          pip install ruff
           ruff check nexus/ tests/
           ruff format --check nexus/ tests/
-        continue-on-error: true
 
       - name: Run tests
         run: |

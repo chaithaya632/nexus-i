@@ -20,11 +20,13 @@ from urllib.parse import urljoin, urlparse
 import httpx
 
 from nexus.db.models import Finding, Severity
-from nexus.recon.runner import ToolRunner
+from nexus.recon.runner import ToolRunner, validate_cli_target, validate_headers
 from nexus.scanner._http import make_http_client, parse_url_target
 from nexus.scanner.passive_dast import analyze_html_passive
 
 log = logging.getLogger("nexus.scanner.crawler")
+
+_MAX_CRAWL_BODY_BYTES = 2 * 1024 * 1024  # 2 MiB per response cap
 
 _STEALTH_CRAWL: dict[str, tuple[int, int, float]] = {
     "loud": (25, 150, 0.0),
@@ -91,20 +93,27 @@ def extract_js_endpoints_and_secrets(
     source_url: str,
     *,
     allowed_host: str = "",
+    allowed_scheme: str = "",
+    allowed_port: int | None = None,
 ) -> tuple[list[str], list[Finding]]:
-    """Extract same-host endpoints and detect accidentally exposed client-side secrets."""
+    """Extract same-origin endpoints and detect accidentally exposed client-side secrets."""
     host, port, proto = parse_url_target(source_url)
     scope_host = (allowed_host or host).lower()
+    scope_scheme = (allowed_scheme or proto).lower()
+    scope_port = int(allowed_port if allowed_port is not None else (port or (443 if scope_scheme == "https" else 80)))
+    bounded = (content or "")[:_MAX_CRAWL_BODY_BYTES]
 
     endpoints: list[str] = []
     seen_ep: set[str] = set()
-    for m in _JS_ENDPOINT_RE.finditer(content):
+    for m in _JS_ENDPOINT_RE.finditer(bounded):
         raw_ep = m.group(1) or m.group(2)
         if not raw_ep:
             continue
         resolved = urljoin(source_url, raw_ep)
         parsed = urlparse(resolved)
-        if parsed.scheme in ("http", "https") and (parsed.hostname or "").lower() == scope_host:
+        if _is_same_target_origin(
+            resolved, base_scheme=scope_scheme, base_host=scope_host, base_port=scope_port
+        ):
             clean = f"{parsed.scheme}://{parsed.netloc}{parsed.path}"
             if parsed.query:
                 clean += f"?{parsed.query}"
@@ -115,7 +124,7 @@ def extract_js_endpoints_and_secrets(
     findings: list[Finding] = []
     seen_secrets: set[tuple[str, str]] = set()
     for label, sev, pattern in _SECRET_RULES:
-        for match in pattern.finditer(content):
+        for match in pattern.finditer(bounded):
             val = match.group(1) if match.lastindex else match.group(0)
             if not val or any(ph in val.lower() for ph in _PLACEHOLDER_HINTS):
                 continue
@@ -151,20 +160,22 @@ async def _katana_crawl(
     timeout: int,
 ) -> list[str]:
     """Run ProjectDiscovery katana and return discovered URLs."""
+    clean_target = validate_cli_target(target_url, label="target_url")
+    clean_headers = validate_headers(headers)
     conc, rate, _ = _STEALTH_CRAWL.get(stealth, _STEALTH_CRAWL["normal"])
     args = [
-        "-u", target_url,
+        "-u", clean_target,
         "-d", str(max_depth),
         "-jc",
         "-kf", "all",
+        "-fs", "fqdn",
         "-jsonl",
         "-silent",
         "-c", str(conc),
         "-rl", str(rate),
     ]
-    if headers:
-        args.extend(["-fs", "fqdn"])
-        for k, v in headers.items():
+    if clean_headers:
+        for k, v in clean_headers.items():
             args.extend(["-H", f"{k}: {v}"])
 
     out = await ToolRunner.run("katana", args, timeout=timeout)
@@ -217,17 +228,16 @@ def _is_same_target_origin(url: str, *, base_scheme: str, base_host: str, base_p
     return origin == (base_scheme.lower(), base_host.lower(), int(base_port))
 
 
-def _make_url_keeper(base_host: str, base_scheme: str = "", base_port: int = 0):
+def _make_url_keeper(base_host: str, base_scheme: str = "http", base_port: int = 80):
     discovered: list[str] = []
     seen: set[str] = set()
+    eff_scheme = (base_scheme or "http").lower()
+    eff_port = int(base_port or (443 if eff_scheme == "https" else 80))
 
     def _keep(u: str) -> bool:
-        p = urlparse(u)
-        if base_scheme and base_port:
-            if not _is_same_target_origin(u, base_scheme=base_scheme, base_host=base_host, base_port=base_port):
-                return False
-        elif p.scheme not in ("http", "https") or (p.hostname or "").lower() != base_host:
+        if not _is_same_target_origin(u, base_scheme=eff_scheme, base_host=base_host, base_port=eff_port):
             return False
+        p = urlparse(u)
         if p.path == "/favicon.ico":
             return False
         norm = u.split("#", 1)[0]
@@ -246,13 +256,21 @@ def _process_dom_snapshot(
     dom_links: list[str] | None,
     *,
     base_host: str,
+    base_scheme: str = "",
+    base_port: int | None = None,
     findings: list[Finding],
     keep_fn,
     visited: set[str],
     queue: deque[str],
 ) -> None:
     if html:
-        js_eps, sec_f = extract_js_endpoints_and_secrets(html, cur, allowed_host=base_host)
+        js_eps, sec_f = extract_js_endpoints_and_secrets(
+            html,
+            cur,
+            allowed_host=base_host,
+            allowed_scheme=base_scheme,
+            allowed_port=base_port,
+        )
         findings.extend(sec_f)
         findings.extend(analyze_html_passive(cur, html, content_type="text/html"))
         for ep in js_eps:
@@ -345,7 +363,10 @@ async def _playwright_browser_crawl(
                     req = route.request
                     parsed_req = urlparse(req.url)
                     scheme = parsed_req.scheme.lower()
-                    if scheme in ("http", "https") and not _is_same_target_origin(
+                    if scheme not in ("http", "https"):
+                        await route.abort()
+                        return
+                    if not _is_same_target_origin(
                         req.url, base_scheme=base_proto, base_host=base_host, base_port=base_port
                     ):
                         if req.resource_type == "document":
@@ -356,11 +377,7 @@ async def _playwright_browser_crawl(
                         }
                         await route.continue_(headers=safe_hdrs)
                         return
-                    if (
-                        scheme in ("http", "https")
-                        and (req.resource_type == "document" or headers)
-                        and hasattr(route, "fetch")
-                    ):
+                    if (req.resource_type == "document" or headers) and hasattr(route, "fetch"):
                         try:
                             resp = await route.fetch(max_redirects=0)
                         except Exception:
@@ -409,8 +426,8 @@ async def _playwright_browser_crawl(
                         dom_links = []
                     _process_dom_snapshot(
                         cur, html, dom_links,
-                        base_host=base_host, findings=findings,
-                        keep_fn=_keep, visited=visited, queue=queue,
+                        base_host=base_host, base_scheme=base_proto, base_port=base_port,
+                        findings=findings, keep_fn=_keep, visited=visited, queue=queue,
                     )
             finally:
                 await browser.close()
@@ -453,11 +470,12 @@ async def _cdp_browser_crawl(
     discovered, _keep = _make_url_keeper(base_host, base_proto, base_port)
     findings: list[Finding] = []
     protected_hdr_names = _protected_header_names(headers)
-    profile_dir = tempfile.mkdtemp(prefix="nexus_cdp_")
+    profile_dir = ""
     proc = None
     _keep(target_url)
 
     try:
+        profile_dir = tempfile.mkdtemp(prefix="nexus_cdp_")
         cmd = [
             exe,
             "--headless=new",
@@ -473,7 +491,11 @@ async def _cdp_browser_crawl(
             "--ignore-certificate-errors",
         ]
         if os.name != "nt" and hasattr(os, "geteuid") and os.geteuid() == 0:
-            cmd.append("--no-sandbox")
+            if os.environ.get("NEXUS_ALLOW_NO_SANDBOX") == "1":
+                log.warning("Running headless Chromium with --no-sandbox as root (NEXUS_ALLOW_NO_SANDBOX=1)")
+                cmd.append("--no-sandbox")
+            else:
+                log.warning("Running as root without NEXUS_ALLOW_NO_SANDBOX=1; keeping Chromium sandbox enabled")
         cmd.append("about:blank")
 
         proc = await asyncio.create_subprocess_exec(
@@ -520,6 +542,7 @@ async def _cdp_browser_crawl(
             pending: dict[int, asyncio.Future] = {}
             send_lock = asyncio.Lock()
             settled = asyncio.Event()
+            main_frame_id = ""
             bg_tasks: set[asyncio.Task] = set()
 
             async def _send_cdp(method: str, params: dict | None = None, *, wait: bool = True) -> dict:
@@ -548,6 +571,7 @@ async def _cdp_browser_crawl(
                 rtype = params.get("resourceType") or ""
                 resp_status = params.get("responseStatusCode")
                 err_reason = params.get("responseErrorReason")
+                responded = False
                 try:
                     if err_reason is not None:
                         await _send_cdp(
@@ -555,6 +579,7 @@ async def _cdp_browser_crawl(
                             {"requestId": req_id, "errorReason": str(err_reason)},
                             wait=False,
                         )
+                        responded = True
                         return
                     if resp_status is not None:
                         if 300 <= int(resp_status) < 400:
@@ -576,59 +601,80 @@ async def _cdp_browser_crawl(
                                         {"requestId": req_id, "errorReason": "Aborted"},
                                         wait=False,
                                     )
+                                    responded = True
                                     return
                                 if rtype == "Document" and _keep(resolved) and resolved not in visited:
                                     queue.append(resolved)
                         await _send_cdp("Fetch.continueResponse", {"requestId": req_id}, wait=False)
+                        responded = True
                         return
 
                     parsed = urlparse(req_url)
                     scheme = parsed.scheme.lower()
-                    if scheme in ("http", "https"):
-                        if _is_same_target_origin(
-                            req_url, base_scheme=base_proto, base_host=base_host, base_port=base_port
-                        ):
-                            _keep(req_url)
-                            if headers:
-                                merged = dict(req_headers)
-                                lower_keys = {k.lower(): k for k in merged}
-                                for k, v in headers.items():
-                                    old_key = lower_keys.get(k.lower())
-                                    if old_key:
-                                        merged.pop(old_key, None)
-                                    merged[k] = v
-                                await _send_cdp(
-                                    "Fetch.continueRequest",
-                                    {
-                                        "requestId": req_id,
-                                        "headers": [{"name": str(k), "value": str(v)} for k, v in merged.items()],
-                                    },
-                                    wait=False,
-                                )
-                                return
-                        else:
-                            if rtype == "Document":
-                                await _send_cdp(
-                                    "Fetch.failRequest",
-                                    {"requestId": req_id, "errorReason": "Aborted"},
-                                    wait=False,
-                                )
-                                return
-                            safe_hdrs = [
-                                {"name": str(k), "value": str(v)}
-                                for k, v in req_headers.items()
-                                if str(k).lower() not in protected_hdr_names
-                            ]
+                    if scheme not in ("http", "https"):
+                        await _send_cdp(
+                            "Fetch.failRequest",
+                            {"requestId": req_id, "errorReason": "Aborted"},
+                            wait=False,
+                        )
+                        responded = True
+                        return
+
+                    if _is_same_target_origin(
+                        req_url, base_scheme=base_proto, base_host=base_host, base_port=base_port
+                    ):
+                        _keep(req_url)
+                        if headers:
+                            merged = dict(req_headers)
+                            lower_keys = {k.lower(): k for k in merged}
+                            for k, v in headers.items():
+                                old_key = lower_keys.get(k.lower())
+                                if old_key:
+                                    merged.pop(old_key, None)
+                                merged[k] = v
                             await _send_cdp(
                                 "Fetch.continueRequest",
-                                {"requestId": req_id, "headers": safe_hdrs},
+                                {
+                                    "requestId": req_id,
+                                    "headers": [{"name": str(k), "value": str(v)} for k, v in merged.items()],
+                                },
                                 wait=False,
                             )
-                            return
+                        else:
+                            await _send_cdp("Fetch.continueRequest", {"requestId": req_id}, wait=False)
+                        responded = True
+                        return
 
-                    await _send_cdp("Fetch.continueRequest", {"requestId": req_id}, wait=False)
-                except Exception:
-                    pass
+                    if rtype == "Document":
+                        await _send_cdp(
+                            "Fetch.failRequest",
+                            {"requestId": req_id, "errorReason": "Aborted"},
+                            wait=False,
+                        )
+                        responded = True
+                        return
+
+                    safe_hdrs = [
+                        {"name": str(k), "value": str(v)}
+                        for k, v in req_headers.items()
+                        if str(k).lower() not in protected_hdr_names
+                    ]
+                    await _send_cdp(
+                        "Fetch.continueRequest",
+                        {"requestId": req_id, "headers": safe_hdrs},
+                        wait=False,
+                    )
+                    responded = True
+                except Exception as exc:
+                    log.debug("CDP Fetch handler error for %s: %s", req_url, exc)
+                finally:
+                    if not responded:
+                        with contextlib.suppress(Exception):
+                            await _send_cdp(
+                                "Fetch.failRequest",
+                                {"requestId": req_id, "errorReason": "Failed"},
+                                wait=False,
+                            )
 
             async def _reader() -> None:
                 try:
@@ -640,10 +686,21 @@ async def _cdp_browser_crawl(
                                 fut.set_result(msg.get("result") or {})
                         else:
                             method = msg.get("method")
-                            if method in ("Page.loadEventFired", "Page.frameStoppedLoading", "Network.loadingFailed"):
+                            ev_params = msg.get("params") or {}
+                            if method == "Page.loadEventFired":
                                 settled.set()
+                            elif method == "Page.frameStoppedLoading":
+                                fid = ev_params.get("frameId") or ""
+                                if not main_frame_id or fid == main_frame_id:
+                                    settled.set()
+                            elif method == "Network.loadingFailed":
+                                # Only settle on main Document failure, never third-party subresources
+                                if ev_params.get("type") == "Document":
+                                    fid = ev_params.get("frameId") or ""
+                                    if not main_frame_id or fid == main_frame_id:
+                                        settled.set()
                             elif method == "Fetch.requestPaused":
-                                task = asyncio.create_task(_handle_paused(msg.get("params") or {}))
+                                task = asyncio.create_task(_handle_paused(ev_params))
                                 bg_tasks.add(task)
                                 task.add_done_callback(bg_tasks.discard)
                 except Exception:
@@ -665,6 +722,12 @@ async def _cdp_browser_crawl(
                         "patterns": [
                             {"urlPattern": "http://*", "requestStage": "Request"},
                             {"urlPattern": "https://*", "requestStage": "Request"},
+                            {"urlPattern": "ws://*", "requestStage": "Request"},
+                            {"urlPattern": "wss://*", "requestStage": "Request"},
+                            {"urlPattern": "file://*", "requestStage": "Request"},
+                            {"urlPattern": "ftp://*", "requestStage": "Request"},
+                            {"urlPattern": "blob:*", "requestStage": "Request"},
+                            {"urlPattern": "data:*", "requestStage": "Request"},
                             {"urlPattern": "http://*", "requestStage": "Response"},
                             {"urlPattern": "https://*", "requestStage": "Response"},
                         ]
@@ -678,10 +741,12 @@ async def _cdp_browser_crawl(
                         continue
                     visited.add(cur)
                     settled.clear()
+                    main_frame_id = ""
                     try:
                         nav_res = await _send_cdp("Page.navigate", {"url": cur})
                         if nav_res.get("errorText"):
                             continue
+                        main_frame_id = str(nav_res.get("frameId") or "")
                         with contextlib.suppress(asyncio.TimeoutError):
                             await asyncio.wait_for(settled.wait(), timeout=min(float(timeout), 8.0))
                         await asyncio.sleep(0.35)
@@ -704,10 +769,11 @@ async def _cdp_browser_crawl(
                     if not isinstance(snap, dict):
                         continue
                     actual_href = str(snap.get("href") or "")
-                    actual_parsed = urlparse(actual_href)
                     if (
                         actual_href.startswith("chrome-error://")
-                        or (actual_parsed.hostname and actual_parsed.hostname.lower() != base_host)
+                        or not _is_same_target_origin(
+                            actual_href, base_scheme=base_proto, base_host=base_host, base_port=base_port
+                        )
                     ):
                         continue
                     html = str(snap.get("html") or "")
@@ -715,8 +781,8 @@ async def _cdp_browser_crawl(
                     dom_links = list(raw_links) if isinstance(raw_links, list) else []
                     _process_dom_snapshot(
                         cur, html, dom_links,
-                        base_host=base_host, findings=findings,
-                        keep_fn=_keep, visited=visited, queue=queue,
+                        base_host=base_host, base_scheme=base_proto, base_port=base_port,
+                        findings=findings, keep_fn=_keep, visited=visited, queue=queue,
                     )
             finally:
                 for t in list(bg_tasks):
@@ -741,7 +807,8 @@ async def _cdp_browser_crawl(
                 with contextlib.suppress(Exception):
                     proc.kill()
                     await proc.wait()
-        shutil.rmtree(profile_dir, ignore_errors=True)
+        if profile_dir:
+            shutil.rmtree(profile_dir, ignore_errors=True)
 
     return discovered, findings
 
@@ -778,19 +845,18 @@ async def crawl_web(
 
     Returns (discovered_urls, passive_dast_and_secret_findings).
     """
-    base_host, base_port, base_proto = parse_url_target(target_url)
+    clean_url = validate_cli_target(target_url, label="target_url")
+    clean_headers = validate_headers(headers)
+    base_host, base_port, base_proto = parse_url_target(clean_url)
     discovered: list[str] = []
     seen_urls: set[str] = set()
     findings: list[Finding] = []
     _, _, delay_s = _STEALTH_CRAWL.get(stealth, _STEALTH_CRAWL["normal"])
 
     def _url_allowed(u: str) -> bool:
-        if headers:
-            return _is_same_target_origin(
-                u, base_scheme=base_proto, base_host=base_host, base_port=base_port
-            )
-        p = urlparse(u)
-        return p.scheme in ("http", "https") and (p.hostname or "").lower() == base_host
+        return _is_same_target_origin(
+            u, base_scheme=base_proto, base_host=base_host, base_port=base_port
+        )
 
     def _add_url(u: str) -> bool:
         if not _url_allowed(u):
@@ -802,7 +868,7 @@ async def crawl_web(
             return True
         return False
 
-    _add_url(target_url)
+    _add_url(clean_url)
 
     js_to_scan: list[str] = []
     seen_js: set[str] = set()
@@ -817,28 +883,37 @@ async def crawl_web(
 
     if use_browser:
         bw_urls, bw_findings = await _browser_crawl(
-            target_url, max_pages=min(max_pages, 8), headers=headers, timeout=min(timeout, 30)
+            clean_url, max_pages=min(max_pages, 8), headers=clean_headers or None, timeout=min(timeout, 30)
         )
         for bu in bw_urls:
             _add_url(bu)
             _track_js(bu)
         findings.extend(bw_findings)
 
+    kat_added: list[str] = []
     if ToolRunner.is_available("katana"):
         kat_urls = await _katana_crawl(
-            target_url, max_depth=max_depth, stealth=stealth, headers=headers, timeout=timeout
+            clean_url, max_depth=max_depth, stealth=stealth, headers=clean_headers or None, timeout=timeout
         )
         for ku in kat_urls:
             if _add_url(ku):
+                kat_added.append(ku.split("#", 1)[0])
                 _track_js(ku)
 
-    # Pure-Python HTTP crawl + JS/HTML inspection (runs as fallback when katana absent, or scans JS assets)
+    # Pure-Python HTTP crawl + JS/HTML inspection (runs as fallback when katana absent/empty, or inspects discovered assets)
+    req_timeout = max(1.0, min(float(timeout), 15.0))
     try:
-        async with make_http_client(headers=headers, timeout=10.0) as client:
-            if ToolRunner.is_available("katana") and discovered:
-                queue: deque[tuple[str, int]] = deque((u, max_depth) for u in js_to_scan)
+        async with make_http_client(
+            headers=clean_headers or None, timeout=req_timeout, stealth=stealth
+        ) as client:
+            if kat_added:
+                seed = list(js_to_scan) + [u for u in kat_added if u not in seen_js]
+                queue: deque[tuple[str, int]] = deque((u, max_depth) for u in seed[:max_pages])
             else:
-                queue = deque([(target_url, 0)] + [(u, 0) for u in js_to_scan if u != target_url])
+                seed = [clean_url] + [u for u in discovered if u != clean_url] + [
+                    u for u in js_to_scan if u != clean_url and u not in discovered
+                ]
+                queue = deque((u, 0) for u in seed[:max_pages])
 
             visited: set[str] = set()
             while queue and len(visited) < max_pages:
@@ -868,13 +943,17 @@ async def crawl_web(
                     continue
 
                 ctype = (resp.headers.get("content-type") or "").lower()
-                text = resp.text or ""
+                text = (resp.text or "")[:_MAX_CRAWL_BODY_BYTES]
                 if not text:
                     continue
 
                 if "javascript" in ctype or cur_url.lower().split("?", 1)[0].endswith(".js") or "html" in ctype:
                     js_eps, sec_findings = extract_js_endpoints_and_secrets(
-                        text, cur_url, allowed_host=base_host
+                        text,
+                        cur_url,
+                        allowed_host=base_host,
+                        allowed_scheme=base_proto,
+                        allowed_port=base_port,
                     )
                     findings.extend(sec_findings)
                     findings.extend(analyze_html_passive(cur_url, text, content_type=ctype))

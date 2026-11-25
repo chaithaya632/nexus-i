@@ -286,7 +286,10 @@ async def test_nmap_scan_root_privilege_fallback():
     ok_out = ToolOutput(tool="nmap", args=[], returncode=0, stdout="", stderr="")
     run_mock = AsyncMock(side_effect=[fail_out, ok_out])
 
-    with patch.object(ToolRunner, "run", run_mock):
+    with (
+        patch.object(ToolRunner, "is_available", return_value=True),
+        patch.object(ToolRunner, "run", run_mock),
+    ):
         res = await nmap_scan("http://127.0.0.1:8080/test", stealth="ghost", timeout=10)
 
     assert run_mock.await_count == 2
@@ -316,4 +319,242 @@ def test_parse_nmap_xml_ipv6_and_script_findings():
     res = _parse_nmap_xml(xml_data)
     assert res["targets"][0].ip == "::1"
     assert res["ports"][0].port == 8080
-    assert any("Nmap script" in f.title and f.severity.value == "medium" for f in res["findings"])
+    script_findings = [f for f in res["findings"] if "Nmap script" in f.title]
+    assert len(script_findings) == 1
+    assert script_findings[0].severity.value == "medium"
+    assert script_findings[0].port == 8080
+    assert script_findings[0].protocol == "tcp"
+
+
+# ── Security hardening & Wave-audit regression tests ─────────────
+
+
+def test_runner_validation_and_redaction():
+    import xml.etree.ElementTree as ET
+    from nexus.recon.runner import (
+        _redact_args,
+        safe_parse_xml,
+        sanitize_header_value,
+        validate_cli_target,
+        validate_extra_args,
+        validate_headers,
+    )
+
+    assert validate_cli_target(" example.com ") == "example.com"
+    for bad in ("", "   ", "-evil", "host\x00.com", "host\r\n.com", "a b"):
+        with pytest.raises(ValueError):
+            validate_cli_target(bad)
+
+    assert sanitize_header_value(" Bearer tok ") == "Bearer tok"
+    with pytest.raises(ValueError):
+        sanitize_header_value("ok\r\nInjected: 1")
+    with pytest.raises(ValueError):
+        validate_headers({"-H": "val"})
+    with pytest.raises(ValueError):
+        validate_headers({"X:Bad": "val"})
+
+    assert validate_extra_args(["-tags", "php"]) == ["-tags", "php"]
+    for bad_args in (["--os-shell"], ["-oX", "/tmp/x"], ["-iL=/etc/passwd"], ["bad\narg"]):
+        with pytest.raises(ValueError):
+            validate_extra_args(bad_args)
+
+    redacted = _redact_args([
+        "-p", "s3cr3t",
+        "-P", "/tmp/pass.txt",
+        "--data", "user=a&pass=b",
+        "-H", "X-Custom: tok123",
+        "-Add-header", "Cookie: sid=xyz",
+        "-h", "target.local",
+    ])
+    joined = " ".join(redacted)
+    for leak in ("s3cr3t", "/tmp/pass.txt", "user=a&pass=b", "tok123", "sid=xyz"):
+        assert leak not in joined
+    assert "-h target.local" in joined
+
+    with pytest.raises(ET.ParseError):
+        safe_parse_xml('<?xml version="1.0"?><!DOCTYPE foo [<!ENTITY xxe SYSTEM "file:///etc/passwd">]><r>&xxe;</r>')
+    el = safe_parse_xml('<?xml version="1.0"?><!DOCTYPE nmaprun><nmaprun/>')
+    assert el.tag == "nmaprun"
+
+
+@pytest.mark.asyncio
+async def test_windows_terminate_process_tree_taskkill():
+    from nexus.recon.runner import _terminate_process_tree
+
+    proc = MagicMock()
+    proc.pid = 4242
+    proc.returncode = None
+    proc.wait = AsyncMock(return_value=0)
+
+    tk_proc = MagicMock()
+    tk_proc.returncode = 0
+    tk_proc.wait = AsyncMock(return_value=0)
+
+    with (
+        patch("nexus.recon.runner.os.name", "nt"),
+        patch("nexus.recon.runner.asyncio.create_subprocess_exec", AsyncMock(return_value=tk_proc)) as mock_exec,
+    ):
+        await _terminate_process_tree(proc, use_pg=False)
+
+    mock_exec.assert_awaited_once()
+    assert mock_exec.call_args.args[:5] == ("taskkill", "/T", "/F", "/PID", "4242")
+
+
+@pytest.mark.asyncio
+async def test_nmap_ipv6_missing_tool_and_timeout_and_default_ports():
+    from nexus.recon.ports import DEFAULT_PORTS, _extract_nmap_target, nmap_scan
+
+    for port in ("2375", "2379", "5000", "8000", "8500", "9000", "11211"):
+        assert port in DEFAULT_PORTS.split(",")
+
+    assert _extract_nmap_target("::1") == "::1"
+    assert _extract_nmap_target("[::1]:8080") == "::1"
+    assert _extract_nmap_target("http://[::1]:8080/api") == "::1"
+
+    with patch.object(ToolRunner, "is_available", return_value=False):
+        res = await nmap_scan("example.com")
+    assert res == {"targets": [], "ports": [], "findings": [], "raw_xml": ""}
+
+    timeout_out = ToolOutput(tool="nmap", args=[], returncode=-1, stdout="", stderr="TIMEOUT after 10s")
+    with (
+        patch.object(ToolRunner, "is_available", return_value=True),
+        patch.object(ToolRunner, "run", AsyncMock(return_value=timeout_out)),
+    ):
+        res_to = await nmap_scan("::1", timeout=10)
+    assert res_to == {"targets": [], "ports": [], "findings": [], "raw_xml": ""}
+
+
+@pytest.mark.asyncio
+async def test_dns_aaaa_cname_records_multipart_tld_and_python_fallback():
+    import json
+    from nexus.recon.dns import _extract_root_domain, dns_zone_transfer, enumerate_dns
+
+    assert _extract_root_domain("app.example.co.uk") == "example.co.uk"
+    assert _extract_root_domain("co.uk") == ""
+    assert _extract_root_domain("sub.example.com") == "example.com"
+
+    # Python socket.getaddrinfo fallback when dnsx is absent
+    t = Target(host="app.example.co.uk")
+    with (
+        patch.object(ToolRunner, "is_available", return_value=False),
+        patch("nexus.recon.dns._resolve_host_sync", return_value="93.184.216.34"),
+    ):
+        targets_out, findings_out = await enumerate_dns([t])
+    assert targets_out[0].ip == "93.184.216.34"
+    assert findings_out == []
+
+    # dnsx AAAA/CNAME/MX/NS/TXT + authoritative NS resolution for dig axfr
+    dnsx_line = json.dumps({
+        "host": "v6.example.co.uk",
+        "aaaa": ["2001:db8::1"],
+        "cname": ["cdn.example.co.uk"],
+        "mx": ["mail.example.co.uk"],
+        "ns": ["ns1.example.co.uk"],
+        "txt": ["v=spf1 -all"],
+    })
+    dig_axfr_out = ToolOutput(tool="dig", args=[], returncode=0, stdout="a\nb\nc\n", stderr="")
+
+    async def _fake_run(tool, args, **_kw):
+        if tool == "dnsx":
+            return ToolOutput(tool="dnsx", args=args, returncode=0, stdout=dnsx_line + "\n", stderr="")
+        if tool == "dig" and args[0] == "axfr":
+            return dig_axfr_out
+        return ToolOutput(tool="dig", args=args, returncode=0, stdout="", stderr="")
+
+    t2 = Target(host="v6.example.co.uk")
+    with (
+        patch.object(ToolRunner, "is_available", return_value=True),
+        patch.object(ToolRunner, "run", AsyncMock(side_effect=_fake_run)) as mock_run,
+    ):
+        res_t, res_f = await enumerate_dns([t2])
+    assert res_t[0].ip == "2001:db8::1"
+    assert any("DNS Records Enumerated" in f.title for f in res_f)
+    assert any("Zone Transfer Allowed (example.co.uk)" in f.title for f in res_f)
+    dig_calls = [c.args[1] for c in mock_run.await_args_list if c.args[0] == "dig"]
+    assert ["axfr", "example.co.uk", "@ns1.example.co.uk"] in dig_calls
+
+    # Authoritative NS lookup via dig +short NS when nameserver not passed
+    with (
+        patch.object(ToolRunner, "is_available", return_value=True),
+        patch.object(ToolRunner, "run", AsyncMock(side_effect=[
+            ToolOutput(tool="dig", args=[], returncode=0, stdout="ns2.example.org.\n", stderr=""),
+            ToolOutput(tool="dig", args=[], returncode=0, stdout="", stderr=""),
+        ])) as mock_ns_run,
+    ):
+        assert await dns_zone_transfer("example.org") is None
+    assert mock_ns_run.await_args_list[1].args[1] == ["axfr", "example.org", "@ns2.example.org"]
+
+
+def test_subdomains_idn_punycode():
+    from nexus.recon.subdomains import _extract_valid_host
+
+    assert _extract_valid_host("api.xn--p1ai", "xn--p1ai") == "api.xn--p1ai"
+    assert _extract_valid_host("sub.münchen.de", "münchen.de") == "sub.xn--mnchen-3ya.de"
+
+
+@pytest.mark.asyncio
+async def test_tech_non_collision_key_and_waf_https_ports():
+    import json
+    from nexus.recon.tech import detect_tech_stack
+    from nexus.recon.waf import detect_waf
+
+    httpx_lines = "\n".join([
+        json.dumps({"url": "http://app.local:80", "input": "app.local", "host": "app.local", "port": 80, "scheme": "http", "tech": ["Nginx"]}),
+        json.dumps({"url": "https://app.local:8443", "input": "https://app.local:8443", "host": "app.local", "port": 8443, "scheme": "https", "tech": ["React"]}),
+    ])
+    t_http = Target(host="http://app.local:80")
+    t_https = Target(host="https://app.local:8443")
+
+    with (
+        patch("nexus.recon.tech._resolve_httpx_bin", return_value="httpx"),
+        patch.object(ToolRunner, "is_available", side_effect=lambda n: n == "whatweb"),
+        patch.object(ToolRunner, "run", AsyncMock(side_effect=[
+            ToolOutput(tool="httpx", args=[], returncode=0, stdout=httpx_lines, stderr=""),
+            ToolOutput(tool="whatweb", args=[], returncode=0, stdout="", stderr=""),
+            ToolOutput(tool="whatweb", args=[], returncode=0, stdout="", stderr=""),
+        ])) as mock_run,
+    ):
+        await detect_tech_stack([t_http, t_https])
+
+    assert "Nginx" in t_http.tech_stack and "React" not in t_http.tech_stack
+    assert "React" in t_https.tech_stack and "Nginx" not in t_https.tech_stack
+    ww_targets = [c.args[1][-1] for c in mock_run.await_args_list if c.args[0] == "whatweb"]
+    assert "https://app.local:8443" in ww_targets
+
+    # WAF probes HTTPS for :8443 / bare host
+    t_waf = Target(host="secure.local:8443", is_live=True)
+    with (
+        patch.object(ToolRunner, "is_available", return_value=True),
+        patch.object(ToolRunner, "run", AsyncMock(return_value=ToolOutput(
+            tool="wafw00f", args=[], returncode=0,
+            stdout="[*] The site https://secure.local:8443 is behind Cloudflare WAF.", stderr="",
+        ))) as waf_run,
+    ):
+        _, waf_findings = await detect_waf([t_waf])
+    assert t_waf.waf_detected == "Cloudflare"
+    assert len(waf_findings) == 1
+    assert waf_run.await_args.args[1] == ["https://secure.local:8443"]
+
+
+@pytest.mark.asyncio
+async def test_osint_cleans_temp_files_on_runner_exception():
+    from pathlib import Path
+    from nexus.recon.osint import theharvester_gather
+
+    created_paths: list[str] = []
+    orig_make = ToolRunner.make_temp_path
+
+    def _track_temp(suffix=".xml"):
+        p = orig_make(suffix)
+        created_paths.append(p)
+        return p
+
+    with (
+        patch.object(ToolRunner, "make_temp_path", side_effect=_track_temp),
+        patch.object(ToolRunner, "run", AsyncMock(side_effect=RuntimeError("boom"))),
+    ):
+        with pytest.raises(RuntimeError):
+            await theharvester_gather("example.com")
+
+    assert len(created_paths) == 1
+    assert not Path(created_paths[0]).exists()

@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import os
 from pathlib import Path
 
 import pytest
@@ -137,7 +136,6 @@ def test_cli_engage_passes_profile_and_resume(cli_env, monkeypatch):
 
 
 def test_cli_wave2_auth_and_openapi_flags(cli_env, tmp_path: Path, monkeypatch):
-    from unittest.mock import AsyncMock
     from nexus.core.engine import NexusEngine
     from nexus.core.config import ScanProfile
 
@@ -237,3 +235,89 @@ def test_cli_wave3_sarif_diff_and_ignore(cli_env, tmp_path: Path):
     assert res_fail.exit_code == 2
     res_pass = runner.invoke(cli, ["diff", e1.id, e2.id, "--fail-on-new", "info"])
     assert res_pass.exit_code == 0
+
+
+def test_cli_applies_stealth_tier_profile_before_boot(cli_env, monkeypatch):
+    from unittest.mock import AsyncMock
+    from nexus.core.config import StealthLevel, Tier, ScanProfile
+    from nexus.core.engine import NexusEngine
+
+    booted_states = {}
+    orig_boot = NexusEngine.boot
+
+    def _spy_boot(self, **kwargs):
+        booted_states["stealth"] = self.config.stealth
+        booted_states["tier"] = self.config.tier
+        booted_states["profile"] = self.config.profile
+        kwargs["connect_ai"] = False
+        return orig_boot(self, **kwargs)
+
+    monkeypatch.setattr(NexusEngine, "boot", _spy_boot)
+    monkeypatch.setattr(NexusEngine, "engage", AsyncMock(return_value="eng_preboot"))
+
+    runner = CliRunner()
+    res = runner.invoke(cli, [
+        "engage", "app.local", "--stealth", "paranoid", "--tier", "light",
+        "--profile", "api", "--no-exploit",
+    ])
+    assert res.exit_code == 0
+    assert booted_states["stealth"] == StealthLevel.PARANOID
+    assert booted_states["tier"] == Tier.LIGHT
+    assert booted_states["profile"] == ScanProfile.API
+
+
+def test_cli_kb_search_vector_and_ai_client(cli_env, monkeypatch):
+    from unittest.mock import patch
+    from nexus.ai.ollama_client import OllamaClient
+
+    runner = CliRunner()
+    res_vec = runner.invoke(cli, ["kb", "search", "apache path traversal"])
+    assert res_vec.exit_code == 0
+    assert "Vector Search Matches" in res_vec.output
+
+    with (
+        patch.object(OllamaClient, "is_alive", return_value=True),
+        patch.object(OllamaClient, "list_models", return_value=["dolphin-mistral:latest"]),
+    ):
+        res_ai = runner.invoke(cli, ["ai", "status"])
+    assert res_ai.exit_code == 0
+    assert "Ollama is running" in res_ai.output
+    assert "dolphin-mistral:latest" in res_ai.output
+
+
+def test_tui_severity_casing_and_none_port():
+    from nexus.cli.tui import make_findings_table, severity_text
+
+    txt = severity_text("HIGH")
+    assert txt.plain == "HIGH"
+    assert txt.style == "red"
+
+    tbl = make_findings_table([
+        {"severity": "CRITICAL", "host": "h.local", "port": None, "title": "T", "tool_source": "x"}
+    ])
+    assert tbl.row_count == 1
+    assert tbl.columns[3]._cells[0] == "-"
+
+
+def test_cli_exploit_requires_confirmation(cli_env, monkeypatch):
+    from unittest.mock import AsyncMock
+    from nexus.core.config import NexusConfig
+    from nexus.core.engine import NexusEngine
+
+    cfg = NexusConfig(data_dir=cli_env, db_path=cli_env / "nexus.db")
+    eng = NexusEngine(cfg)
+    eng.boot(connect_ai=False)
+    e = eng.create_engagement("exp.local")
+    eng.shutdown()
+
+    exp_mock = AsyncMock(return_value=[])
+    monkeypatch.setattr(NexusEngine, "run_exploit", exp_mock)
+
+    runner = CliRunner()
+    res_no = runner.invoke(cli, ["exploit", "-e", e.id], input="n\n")
+    assert res_no.exit_code == 0
+    exp_mock.assert_not_awaited()
+
+    res_yes = runner.invoke(cli, ["exploit", "-e", e.id, "--yes"])
+    assert res_yes.exit_code == 0
+    exp_mock.assert_awaited_once_with(e.id, confirm=True)

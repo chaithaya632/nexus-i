@@ -112,6 +112,57 @@ def _parse_sslyze_json(raw_json: str, host: str, port: int) -> list[Finding]:
     return findings
 
 
+def _extract_cert_expiry(ssock: ssl.SSLSocket) -> tuple[int | None, str]:
+    """Return (days_left, not_after_str) from a connected SSLSocket (verified or unverified)."""
+    cert = ssock.getpeercert() or {}
+    not_after = cert.get("notAfter")
+    if isinstance(not_after, str) and not_after:
+        ts = ssl.cert_time_to_seconds(not_after)
+        days_left = int((ts - datetime.now(timezone.utc).timestamp()) // 86400)
+        return days_left, not_after
+
+    try:
+        der = ssock.getpeercert(binary_form=True)
+    except Exception:
+        der = None
+    if isinstance(der, (bytes, bytearray)) and der:
+        try:
+            from cryptography import x509
+
+            cert_obj = x509.load_der_x509_certificate(bytes(der))
+            exp = getattr(cert_obj, "not_valid_after_utc", None)
+            if exp is None:
+                exp = cert_obj.not_valid_after.replace(tzinfo=timezone.utc)
+            days_left = int((exp.timestamp() - datetime.now(timezone.utc).timestamp()) // 86400)
+            return days_left, exp.isoformat()
+        except Exception:
+            pass
+    return None, ""
+
+
+def _inspect_ssock(ssock: ssl.SSLSocket, host: str, port: int, findings: list[Finding]) -> None:
+    """Inspect negotiated TLS protocol version and certificate expiry."""
+    ver = ssock.version() or ""
+    if ver in ("TLSv1", "TLSv1.1", "SSLv3", "SSLv2"):
+        findings.append(Finding(
+            host=host, port=port, protocol="https",
+            title=f"TLS: Deprecated Protocol Negotiated ({ver})",
+            description=f"{host}:{port} negotiated weak protocol {ver}.",
+            severity=Severity.MEDIUM, cwe_id="CWE-326",
+            tool_source="tls_probe", evidence=f"Negotiated: {ver}",
+        ))
+    days_left, not_after_label = _extract_cert_expiry(ssock)
+    if days_left is not None and days_left < 30:
+        findings.append(Finding(
+            host=host, port=port, protocol="https",
+            title="TLS: Certificate Expiring Soon" if days_left >= 0 else "TLS: Expired Certificate",
+            description=f"Certificate on {host}:{port} notAfter={not_after_label}.",
+            severity=Severity.HIGH if days_left < 0 else Severity.LOW,
+            cwe_id="CWE-295", tool_source="tls_probe",
+            evidence=f"notAfter: {not_after_label}",
+        ))
+
+
 def _stdlib_tls_probe(host: str, port: int, timeout: float = 8.0) -> list[Finding]:
     """Pure-Python TLS certificate and hostname check fallback (zero binary deps)."""
     findings: list[Finding] = []
@@ -119,29 +170,7 @@ def _stdlib_tls_probe(host: str, port: int, timeout: float = 8.0) -> list[Findin
     try:
         with socket.create_connection((host, port), timeout=timeout) as sock:
             with ctx.wrap_socket(sock, server_hostname=host) as ssock:
-                cert = ssock.getpeercert() or {}
-                ver = ssock.version() or ""
-                if ver in ("TLSv1", "TLSv1.1", "SSLv3", "SSLv2"):
-                    findings.append(Finding(
-                        host=host, port=port, protocol="https",
-                        title=f"TLS: Deprecated Protocol Negotiated ({ver})",
-                        description=f"{host}:{port} negotiated weak protocol {ver}.",
-                        severity=Severity.MEDIUM, cwe_id="CWE-326",
-                        tool_source="tls_probe", evidence=f"Negotiated: {ver}",
-                    ))
-                not_after = cert.get("notAfter")
-                if not_after:
-                    ts = ssl.cert_time_to_seconds(not_after)
-                    days_left = int((ts - datetime.now(timezone.utc).timestamp()) // 86400)
-                    if days_left < 30:
-                        findings.append(Finding(
-                            host=host, port=port, protocol="https",
-                            title="TLS: Certificate Expiring Soon" if days_left >= 0 else "TLS: Expired Certificate",
-                            description=f"Certificate on {host}:{port} notAfter={not_after}.",
-                            severity=Severity.HIGH if days_left < 0 else Severity.LOW,
-                            cwe_id="CWE-295", tool_source="tls_probe",
-                            evidence=f"notAfter: {not_after}",
-                        ))
+                _inspect_ssock(ssock, host, port, findings)
     except ssl.SSLCertVerificationError as exc:
         findings.append(Finding(
             host=host, port=port, protocol="https",
@@ -150,6 +179,16 @@ def _stdlib_tls_probe(host: str, port: int, timeout: float = 8.0) -> list[Findin
             severity=Severity.MEDIUM, cwe_id="CWE-295",
             tool_source="tls_probe", evidence=str(exc)[:500],
         ))
+        # Continue inspecting negotiated protocol & certificate expiry without verification
+        unverified_ctx = ssl.create_default_context()
+        unverified_ctx.check_hostname = False
+        unverified_ctx.verify_mode = ssl.CERT_NONE
+        try:
+            with socket.create_connection((host, port), timeout=timeout) as sock2:
+                with unverified_ctx.wrap_socket(sock2, server_hostname=host) as ssock2:
+                    _inspect_ssock(ssock2, host, port, findings)
+        except (OSError, ssl.SSLError) as inner_exc:
+            log.debug("Unverified TLS inspection skipped for %s:%d: %s", host, port, inner_exc)
     except (OSError, ssl.SSLError) as exc:
         log.debug("TLS probe skipped/failed for %s:%d: %s", host, port, exc)
     return findings

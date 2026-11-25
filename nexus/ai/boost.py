@@ -16,7 +16,7 @@ from __future__ import annotations
 import logging
 from typing import Any
 
-from nexus.ai.ollama_client import OllamaClient, RECOMMENDED_MODELS
+from nexus.ai.ollama_client import OllamaClient, matches_model_name
 from nexus.ai.prompts import (
     SECURITY_ANALYST_SYSTEM,
     EXPLOIT_ADVISOR_SYSTEM,
@@ -27,7 +27,7 @@ from nexus.ai.prompts import (
     exploit_suggestion_prompt,
     remediation_prompt,
 )
-from nexus.ai.guard import AIGuard, GuardResult
+from nexus.ai.guard import AIGuard
 
 log = logging.getLogger("nexus.ai.boost")
 
@@ -55,11 +55,13 @@ class AIBoost:
 
     def connect(self) -> bool:
         """Attempt to connect to Ollama.  Sets self.available accordingly."""
+        if self.client is not None:
+            self.client.close()
         self.client = OllamaClient(self.host)
         self.available = self.client.is_alive()
         if self.available:
             models = self.client.list_models()
-            has_model = any(self.model in m for m in models)
+            has_model = any(matches_model_name(m, self.model) for m in models)
             if not has_model:
                 log.warning(
                     "Ollama is running but model '%s' not found.  "
