@@ -18,8 +18,27 @@ from nexus.core.config import NexusConfig, ScanProfile, Tier, StealthLevel
 from nexus.core.engine import NexusEngine
 from nexus.core.hardware import detect_hardware, auto_select_tier, tier_description
 from nexus.db.models import Severity
+from nexus.scanner._http import redact_headers
 
 console = Console()
+
+
+def _build_auth_headers(headers: tuple[str, ...], cookie: str, auth_bearer: str) -> dict[str, str]:
+    """Parse CLI --header, --cookie, and --auth-bearer flags into an HTTP header dict."""
+    parsed: dict[str, str] = {}
+    for raw in headers:
+        if ":" not in raw:
+            raise click.BadParameter(f"Invalid header format '{raw}'; expected 'Name: Value'.")
+        name, value = raw.split(":", 1)
+        clean_name = name.strip()
+        if not clean_name:
+            raise click.BadParameter(f"Empty header name in '{raw}'.")
+        parsed[clean_name] = value.strip()
+    if cookie:
+        parsed["Cookie"] = cookie
+    if auth_bearer:
+        parsed["Authorization"] = f"Bearer {auth_bearer}"
+    return parsed
 
 
 def _get_engine(ctx: click.Context) -> NexusEngine:
@@ -64,13 +83,18 @@ def _run_async(coro):
     help="Scan profile (quick, web, network, api, full).",
 )
 @click.option("--resume", default=None, help="Resume an existing engagement by ID.")
+@click.option("--header", "-H", "headers", multiple=True, help="Custom HTTP header ('Name: Value'); repeatable.")
+@click.option("--cookie", default="", help="Session Cookie header value for authenticated web scans.")
+@click.option("--auth-bearer", default="", help="Bearer token for Authorization header.")
+@click.option("--openapi", type=click.Path(exists=True), default=None, help="Path to OpenAPI/Swagger JSON or YAML spec.")
 @click.option("--no-exploit", is_flag=True, help="Skip exploitation phase.")
 @click.pass_context
-def engage(ctx, target, name, scope, stealth, tier, profile, resume, no_exploit):
+def engage(ctx, target, name, scope, stealth, tier, profile, resume, headers, cookie, auth_bearer, openapi, no_exploit):
     """Start or resume a penetration test engagement against TARGET."""
     if not target and not resume:
         raise click.UsageError("Provide TARGET or pass --resume <engagement_id>.")
 
+    auth_hdrs = _build_auth_headers(headers, cookie, auth_bearer)
     engine = _get_engine(ctx)
 
     if stealth:
@@ -79,15 +103,22 @@ def engage(ctx, target, name, scope, stealth, tier, profile, resume, no_exploit)
         engine.config.tier = Tier(tier)
     if profile:
         engine.config.profile = ScanProfile(profile)
+    if auth_hdrs:
+        engine.config.auth_headers = auth_hdrs
+    if openapi:
+        engine.config.openapi_spec = Path(openapi)
 
     display_target = target or f"resume:{resume}"
+    auth_summary = ", ".join(redact_headers(auth_hdrs).keys()) or "none"
     console.print(Panel(
         f"[bold green]NEXUS Engagement[/]\n"
         f"Target: [cyan]{display_target}[/]\n"
         f"Profile: {engine.config.profile.value}\n"
         f"Stealth: {engine.config.stealth.value}\n"
         f"Tier: {engine.config.tier.value}\n"
-        f"Scope: {scope or 'unrestricted'}",
+        f"Scope: {scope or 'unrestricted'}\n"
+        f"Auth Headers: {auth_summary}\n"
+        f"OpenAPI: {openapi or 'none'}",
         title="🎯 Resuming Engagement" if resume else "🎯 New Engagement",
     ))
 
@@ -135,14 +166,27 @@ def recon(ctx, target, scope, engagement):
 @click.command()
 @click.argument("target")
 @click.option("--engagement", "-e", required=True, help="Engagement ID.")
+@click.option("--profile", "-p", type=click.Choice([p.value for p in ScanProfile]), default=None)
+@click.option("--header", "-H", "headers", multiple=True, help="Custom HTTP header ('Name: Value'); repeatable.")
+@click.option("--cookie", default="", help="Session Cookie header value for authenticated web scans.")
+@click.option("--auth-bearer", default="", help="Bearer token for Authorization header.")
+@click.option("--openapi", type=click.Path(exists=True), default=None, help="Path to OpenAPI/Swagger JSON or YAML spec.")
 @click.pass_context
-def scan(ctx, target, engagement):
+def scan(ctx, target, engagement, profile, headers, cookie, auth_bearer, openapi):
     """Run vulnerability scanning against TARGET within an engagement."""
+    auth_hdrs = _build_auth_headers(headers, cookie, auth_bearer)
     engine = _get_engine(ctx)
     eng = engine.resume_engagement(engagement)
     if not eng:
         console.print(f"[red]Engagement {engagement} not found.[/]")
         raise SystemExit(1)
+
+    if profile:
+        engine.config.profile = ScanProfile(profile)
+    if auth_hdrs:
+        engine.config.auth_headers = auth_hdrs
+    if openapi:
+        engine.config.openapi_spec = Path(openapi)
 
     console.print(f"[bold yellow]🔎 Scanning[/] → {target}")
     _run_async(engine.run_scan(eng.id, target))

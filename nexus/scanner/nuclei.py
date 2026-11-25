@@ -37,6 +37,7 @@ async def nuclei_scan(
     templates: list[str] | None = None,
     severity_filter: list[str] | None = None,
     stealth: str = "normal",
+    headers: dict[str, str] | None = None,
     timeout: int = 900,
     extra_args: list[str] | None = None,
 ) -> list[Finding]:
@@ -47,6 +48,7 @@ async def nuclei_scan(
         templates: specific template dirs/files. None = all default templates.
         severity_filter: e.g. ["critical", "high", "medium"].
         stealth: stealth level for rate limiting.
+        headers: optional custom HTTP headers (e.g. cookies, bearer tokens).
         timeout: max seconds for the entire scan.
         extra_args: additional nuclei CLI flags.
     """
@@ -70,6 +72,10 @@ async def nuclei_scan(
 
     if severity_filter:
         args.extend(["-severity", ",".join(severity_filter)])
+
+    if headers:
+        for k, v in headers.items():
+            args.extend(["-H", f"{k}: {v}"])
 
     if extra_args:
         args.extend(extra_args)

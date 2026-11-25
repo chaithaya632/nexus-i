@@ -40,6 +40,7 @@ async def nikto_scan(
     *,
     port: int | None = None,
     ssl: bool = False,
+    headers: dict[str, str] | None = None,
     timeout: int = 600,
     extra_args: list[str] | None = None,
 ) -> list[Finding]:
@@ -78,6 +79,10 @@ async def nikto_scan(
 
         if ssl and not is_uri:
             args.append("-ssl")
+
+        if headers:
+            for k, v in headers.items():
+                args.extend(["-Add-header", f"{k}: {v}"])
 
         if extra_args:
             args.extend(extra_args)

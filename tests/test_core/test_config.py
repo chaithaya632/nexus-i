@@ -73,4 +73,21 @@ class TestNexusConfig:
         assert set(SCAN_PROFILE_SETTINGS.keys()) == {p.value for p in ScanProfile}
         assert SCAN_PROFILE_SETTINGS[ScanProfile.NETWORK.value]["run_nuclei"] is False
         assert SCAN_PROFILE_SETTINGS[ScanProfile.NETWORK.value]["run_tls"] is True
+        assert SCAN_PROFILE_SETTINGS[ScanProfile.NETWORK.value]["run_crawl"] is False
         assert SCAN_PROFILE_SETTINGS[ScanProfile.API.value]["ffuf_wordlist"] == "api"
+        assert SCAN_PROFILE_SETTINGS[ScanProfile.WEB.value]["run_crawl"] is True
+
+    def test_auth_headers_excluded_from_saved_config(self, tmp_path):
+        cfg = NexusConfig(
+            data_dir=tmp_path,
+            db_path=tmp_path / "test.db",
+            output_dir=tmp_path / "output",
+            auth_headers={"Authorization": "Bearer sensitive_token"},
+            openapi_spec=tmp_path / "spec.yaml",
+        )
+        saved_path = cfg.save(tmp_path / "cfg.yaml")
+        raw = saved_path.read_text(encoding="utf-8")
+        loaded_dict = yaml.safe_load(raw)
+        assert "sensitive_token" not in raw
+        assert "auth_headers" not in loaded_dict
+        assert "openapi_spec" in loaded_dict

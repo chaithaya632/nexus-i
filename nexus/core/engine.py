@@ -44,6 +44,10 @@ from nexus.scanner.web import ffuf_scan
 from nexus.scanner.nikto import nikto_scan
 from nexus.scanner.ssh_audit import audit_ssh
 from nexus.scanner.tls import audit_tls
+from nexus.scanner._http import parse_url_target, redact_headers
+from nexus.scanner.crawler import crawl_web
+from nexus.scanner.headers import audit_http_security
+from nexus.scanner.openapi import audit_openapi_spec
 from nexus.correlator.engine import correlate as correlate_findings
 from nexus.exploit.executor import ExploitExecutor, ExploitResult
 from nexus.exploit.sqli import sqlmap_scan
@@ -632,10 +636,17 @@ class NexusEngine:
         profile_cfg = SCAN_PROFILE_SETTINGS.get(
             self.config.profile.value, SCAN_PROFILE_SETTINGS[ScanProfile.FULL.value]
         )
+        auth_headers = dict(self.config.auth_headers) if self.config.auth_headers else {}
+        openapi_spec = self.config.openapi_spec
         self.audit.log_action(
             "scan_start",
             target=target,
-            extra={"id": eng_id, "profile": self.config.profile.value},
+            extra={
+                "id": eng_id,
+                "profile": self.config.profile.value,
+                "auth_headers": redact_headers(auth_headers),
+                "openapi_spec": str(openapi_spec) if openapi_spec else None,
+            },
         )
 
         all_findings: list[Finding] = []
@@ -765,11 +776,57 @@ class NexusEngine:
             "id": eng_id,
             "profile": self.config.profile.value,
             "effective_stealth": effective_stealth,
+            "auth_headers": redact_headers(auth_headers),
+            "openapi_spec": str(openapi_spec) if openapi_spec else None,
             "wafs_detected": sorted(wafs_detected),
             "waf_bypass_techniques": waf_bypass_count,
             "expert_rules": [{"rule": name, "actions": actions} for name, actions in expert_recs],
             "service_routes": service_routes,
         })
+
+        # Keep clean root origins for directory/server scanners (avoid fuzzing crawled subpaths)
+        base_roots = list(url_set)
+
+        # 0a. OpenAPI / Swagger specification parsing (feeds scoped API endpoints & schema checks)
+        if openapi_spec:
+            base_hint = url_set[0] if url_set else f"https://{target}"
+            try:
+                api_urls, api_findings = audit_openapi_spec(openapi_spec, base_url_override=base_hint)
+                for au in api_urls:
+                    ehost, eport, _ = parse_url_target(au)
+                    if ehost and self._is_in_scope(ehost, eport) and len(url_set) < 60:
+                        _add_url(au)
+                for af in api_findings:
+                    af.engagement_id = eng_id
+                    all_findings.append(af)
+            except Exception as exc:
+                log.warning("[SCAN] OpenAPI spec parsing failed (%s): %s", openapi_spec, exc)
+
+        # 0b. SPA / JS crawling & passive client-side secret detection (katana + Python fallback)
+        if profile_cfg.get("run_crawl", True) and url_set:
+            crawl_seeds = [
+                u for u in url_set[:2]
+                if self._is_in_scope(*parse_url_target(u)[:2])
+            ]
+            if crawl_seeds:
+                log.info("[SCAN] Crawling %d seed URL(s) for SPA/JS routes & secrets", len(crawl_seeds))
+                crawl_tasks = [
+                    (f"crawl:{u}", crawl_web(u, stealth=effective_stealth, headers=auth_headers or None))
+                    for u in crawl_seeds
+                ]
+                crawl_results = await self.scheduler.run_parallel(crawl_tasks)
+                for tr in crawl_results:
+                    if tr.error or tr.result is None:
+                        log.warning("[SCAN] crawl_web failed (%s): %s", tr.name, tr.error)
+                        continue
+                    crawled_urls, secret_findings = tr.result
+                    for cu in crawled_urls:
+                        ehost, eport, _ = parse_url_target(cu)
+                        if ehost and self._is_in_scope(ehost, eport) and len(url_set) < 60:
+                            _add_url(cu)
+                    for sf in secret_findings:
+                        sf.engagement_id = eng_id
+                        all_findings.append(sf)
 
         urls = url_set
 
@@ -789,12 +846,14 @@ class NexusEngine:
             log.info("[SCAN] Running nuclei on %d URLs (stealth=%s, tags=%s)",
                      len(urls), effective_stealth, nuclei_extra)
             try:
-                nuclei_findings = await nuclei_scan(
-                    urls,
-                    stealth=effective_stealth,
-                    severity_filter=["critical", "high", "medium", "low"],
-                    extra_args=nuclei_extra,
-                )
+                nuclei_kwargs: dict[str, Any] = {
+                    "stealth": effective_stealth,
+                    "severity_filter": ["critical", "high", "medium", "low"],
+                    "extra_args": nuclei_extra,
+                }
+                if auth_headers:
+                    nuclei_kwargs["headers"] = auth_headers
+                nuclei_findings = await nuclei_scan(urls, **nuclei_kwargs)
                 for f in nuclei_findings:
                     f.engagement_id = eng_id
                 all_findings.extend(nuclei_findings)
@@ -803,14 +862,17 @@ class NexusEngine:
         elif profile_cfg.get("run_nuclei", True) and urls:
             log.warning("[SCAN] nuclei not found — skipping vulnerability scan")
 
-        # 2. ffuf directory brute-force (base URLs discovered, fallback to target)
-        ffuf_targets = urls[:4] if urls else ([f"http://{target}", f"https://{target}"] if self._is_in_scope(target) else [])
+        # 2. ffuf directory brute-force (root URLs discovered, fallback to target)
+        ffuf_targets = base_roots[:4] if base_roots else ([f"http://{target}", f"https://{target}"] if self._is_in_scope(target) else [])
         if profile_cfg.get("run_ffuf", True) and ToolRunner.is_available("ffuf") and ffuf_targets:
             ffuf_wl = str(profile_cfg.get("ffuf_wordlist", "common"))
             for base in ffuf_targets:
                 log.info("[SCAN] Running ffuf on %s (wordlist=%s, stealth=%s)", base, ffuf_wl, effective_stealth)
                 try:
-                    ffuf_findings = await ffuf_scan(base, wordlist_name=ffuf_wl, stealth=effective_stealth)
+                    ffuf_kwargs: dict[str, Any] = {"wordlist_name": ffuf_wl, "stealth": effective_stealth}
+                    if auth_headers:
+                        ffuf_kwargs["headers"] = auth_headers
+                    ffuf_findings = await ffuf_scan(base, **ffuf_kwargs)
                     for f in ffuf_findings:
                         f.engagement_id = eng_id
                     all_findings.extend(ffuf_findings)
@@ -824,7 +886,10 @@ class NexusEngine:
             for base in ffuf_targets[:2]:
                 log.info("[SCAN] Running nikto on %s", base)
                 try:
-                    nikto_findings = await nikto_scan(base)
+                    nikto_kwargs: dict[str, Any] = {}
+                    if auth_headers:
+                        nikto_kwargs["headers"] = auth_headers
+                    nikto_findings = await nikto_scan(base, **nikto_kwargs)
                     for f in nikto_findings:
                         f.engagement_id = eng_id
                     all_findings.extend(nikto_findings)
@@ -866,6 +931,22 @@ class NexusEngine:
                 for f in tr.result:
                     f.engagement_id = eng_id
                     all_findings.append(f)
+
+        # 6. Verified HTTP security headers, CORS & CSP audit
+        if profile_cfg.get("run_headers", True) and urls:
+            header_urls = [
+                u for u in urls[:8]
+                if self._is_in_scope(*parse_url_target(u)[:2])
+            ]
+            if header_urls:
+                log.info("[SCAN] Auditing HTTP security headers & CORS on %d URL(s)", len(header_urls))
+                try:
+                    hdr_findings = await audit_http_security(header_urls, headers=auth_headers or None)
+                    for hf in hdr_findings:
+                        hf.engagement_id = eng_id
+                    all_findings.extend(hdr_findings)
+                except Exception as exc:
+                    log.warning("[SCAN] audit_http_security failed: %s", exc)
 
         # 4. Plugin scanners
         if self.plugins and self.plugins.registry.scanners:
@@ -1081,6 +1162,8 @@ class NexusEngine:
         skip_exploit: bool = False,
         profile: str | None = None,
         resume_id: str | None = None,
+        auth_headers: dict[str, str] | None = None,
+        openapi_spec: str | Path | None = None,
     ) -> str:
         """Run the complete engagement pipeline: Recon → Scan → Correlate → Exploit → Report.
 
@@ -1093,6 +1176,10 @@ class NexusEngine:
 
         if profile:
             self.config.profile = ScanProfile(profile)
+        if auth_headers:
+            self.config.auth_headers = dict(auth_headers)
+        if openapi_spec:
+            self.config.openapi_spec = Path(openapi_spec)
 
         if resume_id:
             eng = self.resume_engagement(resume_id)

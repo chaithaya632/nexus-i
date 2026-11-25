@@ -56,6 +56,7 @@ async def ffuf_scan(
     stealth: str = "normal",
     extensions: list[str] | None = None,
     match_codes: str = "200,204,301,302,307,401,403,405",
+    headers: dict[str, str] | None = None,
     timeout: int = 600,
     extra_args: list[str] | None = None,
 ) -> list[Finding]:
@@ -83,6 +84,10 @@ async def ffuf_scan(
 
     if extensions:
         args.extend(["-e", ",".join(extensions)])
+
+    if headers:
+        for k, v in headers.items():
+            args.extend(["-H", f"{k}: {v}"])
 
     if extra_args:
         args.extend(extra_args)

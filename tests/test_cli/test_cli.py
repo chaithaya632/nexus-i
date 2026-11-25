@@ -134,3 +134,56 @@ def test_cli_engage_passes_profile_and_resume(cli_env, monkeypatch):
         profile="quick",
         resume_id="eng_resumed_01",
     )
+
+
+def test_cli_wave2_auth_and_openapi_flags(cli_env, tmp_path: Path, monkeypatch):
+    from unittest.mock import AsyncMock
+    from nexus.core.engine import NexusEngine
+    from nexus.core.config import ScanProfile
+
+    spec = tmp_path / "spec.yaml"
+    spec.write_text("openapi: 3.0.0\ninfo:\n  title: t\n  version: '1'\npaths: {}\n", encoding="utf-8")
+
+    runner = CliRunner()
+    res_eng_help = runner.invoke(cli, ["engage", "--help"])
+    res_scan_help = runner.invoke(cli, ["scan", "--help"])
+    for flag in ("--header", "--cookie", "--auth-bearer", "--openapi"):
+        assert flag in res_eng_help.output
+        assert flag in res_scan_help.output
+
+    # Bad header syntax fails cleanly
+    res_bad = runner.invoke(cli, ["engage", "app.local", "--header", "NoColonHere"])
+    assert res_bad.exit_code != 0
+
+    # Valid flags configure NexusConfig for scan
+    eng = NexusEngine()
+    eng.config.data_dir = cli_env
+    eng.config.db_path = cli_env / "nexus.db"
+    eng.boot()
+    created = eng.create_engagement("app.local")
+    eng.shutdown()
+
+    captured_cfg = {}
+
+    async def _fake_scan(self, eng_id, target):
+        captured_cfg["profile"] = self.config.profile
+        captured_cfg["headers"] = dict(self.config.auth_headers)
+        captured_cfg["openapi"] = str(self.config.openapi_spec)
+        return []
+
+    monkeypatch.setattr(NexusEngine, "run_scan", _fake_scan)
+    res_ok = runner.invoke(
+        cli,
+        [
+            "scan", "app.local", "-e", created.id,
+            "-p", "api",
+            "-H", "X-Org: lab",
+            "--cookie", "sess=abc",
+            "--auth-bearer", "jwt_tok",
+            "--openapi", str(spec),
+        ],
+    )
+    assert res_ok.exit_code == 0
+    assert captured_cfg["profile"] == ScanProfile.API
+    assert captured_cfg["headers"] == {"X-Org": "lab", "Cookie": "sess=abc", "Authorization": "Bearer jwt_tok"}
+    assert captured_cfg["openapi"] == str(spec)

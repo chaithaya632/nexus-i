@@ -272,6 +272,8 @@ class TestEngineIntegrationContracts:
                 "nexus.core.engine.ToolRunner.is_available",
                 side_effect=lambda name: name in ("nuclei", "ffuf"),
             ),
+            patch("nexus.core.engine.crawl_web", AsyncMock(return_value=([], []))),
+            patch("nexus.core.engine.audit_http_security", AsyncMock(return_value=[])),
             patch("nexus.core.engine.nuclei_scan", nuclei_mock),
             patch("nexus.core.engine.ffuf_scan", ffuf_mock),
             patch("nexus.core.engine.audit_tls", tls_mock),
@@ -369,3 +371,86 @@ class TestEngineIntegrationContracts:
         exploit_mock.assert_not_awaited()
         mock_rep.assert_called_once()
         assert engine.db.get_engagement(eng.id).phase == EngagementPhase.COMPLETE
+
+    @pytest.mark.asyncio
+    async def test_run_scan_wave2_auth_openapi_crawl_headers_and_redaction(
+        self, engine: NexusEngine, tmp_path: Path,
+    ) -> None:
+        from unittest.mock import patch, AsyncMock
+        from nexus.core.config import ScanProfile
+        from nexus.db.models import Finding, Port, Severity, Target
+
+        spec_file = tmp_path / "api.yaml"
+        spec_file.write_text(
+            """
+openapi: 3.0.3
+info:
+  title: Scope API
+  version: "1.0"
+servers:
+  - url: https://api.local
+paths:
+  /v1/users:
+    get:
+      responses:
+        "200":
+          description: ok
+""",
+            encoding="utf-8",
+        )
+        scope_file = tmp_path / "scope.yaml"
+        scope_file.write_text("allowed_domains:\n  - api.local\n", encoding="utf-8")
+
+        engine.config.profile = ScanProfile.API
+        engine.config.auth_headers = {
+            "Authorization": "Bearer topsecret_wave2_token",
+            "Cookie": "sid=secret_cookie_val",
+        }
+        engine.config.openapi_spec = spec_file
+
+        eng = engine.create_engagement("api.local", scope_file=str(scope_file))
+        t = Target(engagement_id=eng.id, host="api.local", ip="10.0.0.40", is_live=True)
+        engine.db.add_target(t)
+        engine.db.add_port(Port(target_id=t.id, port=443, protocol="tcp", state="open", service="https"))
+
+        crawl_mock = AsyncMock(return_value=(
+            ["https://api.local/v1/from-js", "https://evil.external.com/leak"],
+            [Finding(host="api.local", port=443, protocol="https", title="Client-Side Secret Exposed: Test", severity=Severity.MEDIUM, tool_source="crawler")],
+        ))
+        hdr_mock = AsyncMock(return_value=[
+            Finding(host="api.local", port=443, protocol="https", title="HTTP: Missing CSP", severity=Severity.LOW, tool_source="http_headers", confirmed=True),
+        ])
+        nuclei_mock = AsyncMock(return_value=[])
+        ffuf_mock = AsyncMock(return_value=[])
+        tls_mock = AsyncMock(return_value=[])
+
+        with (
+            patch(
+                "nexus.core.engine.ToolRunner.is_available",
+                side_effect=lambda name: name in ("nuclei", "ffuf"),
+            ),
+            patch("nexus.core.engine.crawl_web", crawl_mock),
+            patch("nexus.core.engine.audit_http_security", hdr_mock),
+            patch("nexus.core.engine.nuclei_scan", nuclei_mock),
+            patch("nexus.core.engine.ffuf_scan", ffuf_mock),
+            patch("nexus.core.engine.audit_tls", tls_mock),
+        ):
+            findings = await engine.run_scan(eng.id, "api.local")
+
+        # OpenAPI URL + same-scope crawled JS route reached nuclei (out-of-scope blocked)
+        scanned_urls = nuclei_mock.call_args.args[0]
+        assert "https://api.local/v1/users" in scanned_urls
+        assert "https://api.local/v1/from-js" in scanned_urls
+        assert all("evil.external.com" not in u for u in scanned_urls)
+        assert nuclei_mock.call_args.kwargs["headers"] == engine.config.auth_headers
+        assert ffuf_mock.call_args.kwargs["headers"] == engine.config.auth_headers
+        assert ffuf_mock.call_count == 1
+        assert ffuf_mock.call_args.args[0] == "https://api.local"
+        assert hdr_mock.call_args.kwargs["headers"] == engine.config.auth_headers
+
+        # Audit log must redact sensitive header secrets cleanly
+        audit_text = engine.audit._path.read_text(encoding="utf-8")
+        assert "topsecret_wave2_token" not in audit_text
+        assert "secret_cookie_val" not in audit_text
+        assert "***REDACTED***" in audit_text
+        assert len(findings) >= 3  # OpenAPI, crawler secret, http_headers
