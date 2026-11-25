@@ -217,3 +217,63 @@ def test_correlate_with_all_real_brain_subsystems():
     # Attack chains discovered against real ChainBuilder goals
     assert len(chains) > 0
     assert all(len(c.steps) > 0 for c in chains)
+
+
+def test_dedup_preserves_distinct_endpoints():
+    findings = [
+        _make_finding(
+            host="app.local", port=443, cwe_id="CWE-89",
+            title="SQL Injection", evidence="URL: https://app.local/login",
+        ),
+        _make_finding(
+            host="app.local", port=443, cwe_id="CWE-89",
+            title="SQL Injection", evidence="URL: https://app.local/api/search",
+        ),
+    ]
+    result = deduplicate_findings(findings)
+    assert len(result) == 2
+
+
+def test_enrich_uses_max_cve_cvss_and_low_severity():
+    from nexus.brain.knowledge_graph import KnowledgeGraph, ServiceKnowledge, VulnEntry
+
+    kg = KnowledgeGraph()
+    sk = ServiceKnowledge(name="demo")
+    v_low = VulnEntry(cve="CVE-2024-0001", cvss=3.1)
+    v_high = VulnEntry(cve="CVE-2024-0002", cvss=8.8)
+    sk.vulns.extend([v_low, v_high])
+    kg._services["demo"] = sk
+    kg._cve_index["CVE-2024-0001"] = ("demo", v_low)
+    kg._cve_index["CVE-2024-0002"] = ("demo", v_high)
+
+    f_multi = _make_finding(cve_ids=["CVE-2024-0001", "CVE-2024-0002"], severity=Severity.INFO)
+    f_low = _make_finding(cvss_score=2.5, severity=Severity.INFO)
+    enrich_findings([f_multi, f_low], knowledge_graph=kg)
+    assert f_multi.cvss_score == 8.8
+    assert f_multi.severity == Severity.HIGH
+    assert f_low.severity == Severity.LOW
+
+
+def test_graph_mysql_not_sqli_and_expert_str_actions_expand_states():
+    from nexus.brain.chain_builder import ChainBuilder
+    from nexus.brain.expert import Rule, RuleEngine
+
+    cb = ChainBuilder()
+    cb.build_default_graph()
+
+    # MySQL banner finding must NOT trigger sqli_found
+    mysql_finding = _make_finding(host="db.local", port=3306, protocol="mysql", title="MySQL 8.0 exposed")
+    chains_mysql = build_attack_chains([mysql_finding], chain_builder=cb)
+    assert not any("sqli" in c.name for c in chains_mysql)
+
+    # Expert Rule with str action should expand graph states (e.g. 'sqli_found' -> 'rce_achieved')
+    expert = RuleEngine()
+    expert.add_rule(Rule(
+        name="custom_port_to_sqli",
+        conditions=[lambda facts: "port_8080" in facts],
+        actions=["check_sqli"],
+    ))
+    port_finding = _make_finding(host="web.local", port=8080, protocol="http", title="HTTP Port 8080")
+    chains = build_attack_chains([port_finding], chain_builder=cb, expert=expert)
+    assert any("sqli_found" in c.name for c in chains)
+

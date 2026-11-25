@@ -6,6 +6,7 @@ import hashlib
 import json
 import re
 from typing import Any, TYPE_CHECKING
+from urllib.parse import urlsplit
 
 from nexus import __version__
 
@@ -40,33 +41,64 @@ def _sev_str(sev: Any) -> str:
 def _rule_id_for(f: dict[str, Any]) -> str:
     cves = f.get("cve_ids") or []
     if cves:
-        return str(cves[0]).upper()
+        return str(cves[0]).strip().upper()
     cwe = str(f.get("cwe_id") or "").strip().upper()
     tool = _NON_ALNUM.sub("-", str(f.get("tool_source") or "nexus").lower()).strip("-") or "nexus"
-    if cwe:
-        return f"NEXUS-{tool}-{cwe}"
     slug = hashlib.sha1(str(f.get("title", "finding")).encode("utf-8")).hexdigest()[:8].upper()
+    if cwe:
+        return f"NEXUS-{tool}-{cwe}-{slug}"
     return f"NEXUS-{tool}-{slug}"
 
 
 def _artifact_uri(f: dict[str, Any]) -> str:
-    host = str(f.get("host") or "target").strip()
-    port = f.get("port")
+    raw_host = str(f.get("host") or "target").strip()
     proto = str(f.get("protocol") or "").strip().lower()
-    if proto in ("http", "https") and host:
+    port = f.get("port")
+
+    if "://" in raw_host:
+        parsed = urlsplit(raw_host)
+        if not proto and parsed.scheme:
+            proto = parsed.scheme.lower()
+        raw_host = parsed.hostname or parsed.netloc or "target"
+    else:
+        raw_host = raw_host.split("/", 1)[0]
+
+    clean_host = _NON_ALNUM.sub("-", raw_host).strip("-") or "target"
+    if proto in ("http", "https"):
         default_p = 443 if proto == "https" else 80
-        suffix = f"-{port}" if port and port != default_p else ""
-        return f"{proto}/{host}{suffix}"
-    return f"{host}/{port}" if port else host
+        if port and port != default_p:
+            return f"{proto}/{clean_host}/{port}"
+        return f"{proto}/{clean_host}"
+    return f"{clean_host}/{port}" if port else clean_host
+
+
+def _security_severity(cvss: Any, sev: str) -> str:
+    if cvss is not None and str(cvss).strip() != "":
+        try:
+            score = float(cvss)
+            if 0.0 <= score <= 10.0:
+                return f"{score:.1f}"
+        except (TypeError, ValueError):
+            pass
+    return _DEFAULT_SCORE.get(sev, "1.0")
 
 
 def render_sarif(data: ReportData, *, include_suppressed: bool = True) -> str:
     """Render engagement findings as OASIS SARIF v2.1.0 JSON."""
-    raw_findings = data.findings
+    combined_findings: list[dict[str, Any]] = list(data.findings)
+    if include_suppressed and getattr(data, "suppressed_findings", None):
+        seen_ids = {f.get("id") for f in combined_findings if f.get("id")}
+        for sf in data.suppressed_findings:
+            sf_id = sf.get("id")
+            if sf_id and sf_id in seen_ids:
+                continue
+            if sf not in combined_findings:
+                combined_findings.append(sf)
+
     rules_by_id: dict[str, dict[str, Any]] = {}
     results: list[dict[str, Any]] = []
 
-    for f in raw_findings:
+    for f in combined_findings:
         suppressed = bool(f.get("false_positive", False))
         if suppressed and not include_suppressed:
             continue
@@ -76,8 +108,7 @@ def render_sarif(data: ReportData, *, include_suppressed: bool = True) -> str:
         title = str(f.get("title") or rule_id)
         desc = str(f.get("description") or title)
         remediation = str(f.get("remediation") or "Review finding details and apply vendor hardening/patches.")
-        cvss = f.get("cvss_score")
-        sec_score = f"{float(cvss):.1f}" if cvss is not None else _DEFAULT_SCORE.get(sev, "1.0")
+        sec_score = _security_severity(f.get("cvss_score"), sev)
 
         if rule_id not in rules_by_id:
             tags = ["security"]

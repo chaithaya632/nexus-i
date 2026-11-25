@@ -2,10 +2,13 @@
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass, field
 
 import numpy as np
 from scipy.sparse import csr_matrix
+
+_TOKEN_RE = re.compile(r"\d+(?:\.\d+)+|[a-z0-9]+(?:-[a-z0-9]+)*")
 
 
 @dataclass
@@ -25,6 +28,7 @@ class VectorSearch:
 
     def __init__(self) -> None:
         self._entries: list[SearchEntry] = []
+        self._id_index: dict[str, int] = {}
         self._vocab: dict[str, int] = {}
         self._idf: np.ndarray | None = None
         self._tfidf_matrix: csr_matrix | None = None
@@ -35,7 +39,12 @@ class VectorSearch:
         return len(self._entries)
 
     def add_entry(self, id: str, text: str, metadata: dict | None = None) -> None:
-        self._entries.append(SearchEntry(id=id, text=text.lower(), metadata=metadata or {}))
+        entry = SearchEntry(id=id, text=text.lower(), metadata=metadata or {})
+        if id in self._id_index:
+            self._entries[self._id_index[id]] = entry
+        else:
+            self._id_index[id] = len(self._entries)
+            self._entries.append(entry)
         self._built = False
 
     def add_entries(self, entries: list[tuple[str, str, dict]]) -> None:
@@ -43,11 +52,18 @@ class VectorSearch:
             self.add_entry(id_, text, meta)
 
     def _tokenize(self, text: str) -> list[str]:
-        """Simple whitespace + punctuation tokenizer."""
-        clean = text.lower()
-        for ch in ".,;:!?()[]{}\"'`~@#$%^&*+=|\\/<>":
-            clean = clean.replace(ch, " ")
-        return [t for t in clean.split() if len(t) >= 2]
+        """Tokenizer preserving dotted version numbers and splitting hyphenated IDs (e.g. CVEs)."""
+        tokens: list[str] = []
+        for tok in _TOKEN_RE.findall(text.lower()):
+            if "-" in tok:
+                if len(tok) >= 2:
+                    tokens.append(tok)
+                for part in tok.split("-"):
+                    if len(part) >= 2:
+                        tokens.append(part)
+            elif len(tok) >= 2:
+                tokens.append(tok)
+        return tokens
 
     def build_index(self) -> None:
         """Build the TF-IDF matrix from all entries."""
@@ -82,8 +98,8 @@ class VectorSearch:
                     df[idx] += 1
                     seen.add(idx)
 
-        # IDF = log(N / (df + 1)) + 1
-        self._idf = np.log(n_docs / (df + 1)) + 1
+        # Smooth IDF = log((N + 1) / (df + 1)) + 1 (stays >= 1.0 even when N == 1)
+        self._idf = np.log((n_docs + 1) / (df + 1)) + 1
 
         # Build sparse TF-IDF matrix
         rows, cols, data = [], [], []

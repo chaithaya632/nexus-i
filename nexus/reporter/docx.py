@@ -7,12 +7,20 @@ is skipped with a warning.
 from __future__ import annotations
 
 import logging
-from typing import TYPE_CHECKING
+from typing import Any, TYPE_CHECKING
+
+from nexus.reporter.generator import strip_markdown
 
 if TYPE_CHECKING:
     from nexus.reporter.generator import ReportData
 
 log = logging.getLogger("nexus.reporter.docx")
+
+
+def _enum_str(val: Any, default: str = "") -> str:
+    if val is None:
+        return default
+    return str(val.value if hasattr(val, "value") else val)
 
 
 def render_docx(data: ReportData, output_path: str) -> None:
@@ -22,7 +30,6 @@ def render_docx(data: ReportData, output_path: str) -> None:
     """
     try:
         from docx import Document  # type: ignore[import-untyped]
-        from docx.shared import Inches, Pt, RGBColor  # type: ignore[import-untyped]
         from docx.enum.text import WD_ALIGN_PARAGRAPH  # type: ignore[import-untyped]
     except ImportError:
         raise ImportError(
@@ -46,7 +53,7 @@ def render_docx(data: ReportData, output_path: str) -> None:
 
     # Executive Summary
     doc.add_heading("Executive Summary", level=1)
-    doc.add_paragraph(data.executive_summary)
+    doc.add_paragraph(strip_markdown(data.executive_summary))
 
     # Severity Summary Table
     doc.add_heading("Risk Overview", level=2)
@@ -75,7 +82,7 @@ def render_docx(data: ReportData, output_path: str) -> None:
 
     # Methodology
     doc.add_heading("Methodology", level=1)
-    doc.add_paragraph(data.methodology)
+    doc.add_paragraph(strip_markdown(data.methodology))
 
     # Findings Summary
     doc.add_heading("Findings Summary", level=1)
@@ -87,47 +94,52 @@ def render_docx(data: ReportData, output_path: str) -> None:
             fhdr[j].text = h
 
         for i, f in enumerate(data.findings, 1):
-            sev = f.get("severity", "info")
-            if hasattr(sev, "value"):
-                sev = sev.value
+            sev = _enum_str(f.get("severity"), "info")
             row = ftable.add_row().cells
             row[0].text = str(i)
             row[1].text = sev.upper()
-            row[2].text = f.get("title", "")[:60]
-            row[3].text = f.get("host", "")
-            row[4].text = f.get("cwe_id", "")
+            row[2].text = str(f.get("title") or "")[:60]
+            row[3].text = str(f.get("host") or "")
+            row[4].text = str(f.get("cwe_id") or "")
     else:
         doc.add_paragraph("No findings to report.")
 
     # Detailed Findings
     doc.add_heading("Detailed Findings", level=1)
     for i, f in enumerate(data.findings, 1):
-        sev = f.get("severity", "info")
-        if hasattr(sev, "value"):
-            sev = sev.value
+        sev = _enum_str(f.get("severity"), "info")
         doc.add_heading(f"{i}. {f.get('title', '')}", level=2)
         p = doc.add_paragraph()
         p.add_run(f"Severity: {sev.upper()}\n").bold = True
         p.add_run(f"Host: {f.get('host', '')}\n")
-        if f.get("port"):
+        if f.get("port") is not None:
             p.add_run(f"Port: {f['port']}\n")
         if f.get("cwe_id"):
             p.add_run(f"CWE: {f['cwe_id']}\n")
+        if f.get("cvss_score") is not None:
+            p.add_run(f"CVSS: {f['cvss_score']}\n")
         if f.get("tool_source"):
             p.add_run(f"Tool: {f['tool_source']}\n")
 
-        doc.add_paragraph(f.get("description", ""))
+        doc.add_paragraph(str(f.get("description") or ""))
+
+        if f.get("evidence"):
+            doc.add_heading("Evidence", level=3)
+            doc.add_paragraph(str(f["evidence"])[:2000])
 
         if f.get("remediation"):
             doc.add_heading("Remediation", level=3)
-            doc.add_paragraph(f["remediation"])
+            doc.add_paragraph(strip_markdown(str(f["remediation"])))
 
     # Attack Chains
     doc.add_heading("Attack Chains", level=1)
     if data.chains:
         for i, c in enumerate(data.chains, 1):
+            impact = _enum_str(c.get("impact"), "unknown").upper()
             doc.add_heading(f"Chain {i}: {c.get('name', '')}", level=2)
-            doc.add_paragraph(c.get("description", ""))
+            doc.add_paragraph(f"Confidence: {c.get('confidence', 0):.0%} | Impact: {impact}")
+            if c.get("description"):
+                doc.add_paragraph(str(c["description"]))
             for j, s in enumerate(c.get("steps", []), 1):
                 doc.add_paragraph(
                     f"{j}. {s.get('action', '')} (via {s.get('tool', '')})",
@@ -135,6 +147,47 @@ def render_docx(data: ReportData, output_path: str) -> None:
                 )
     else:
         doc.add_paragraph("No attack chains identified.")
+
+    # Discovered Credentials (Redacted)
+    doc.add_heading("Discovered Credentials", level=1)
+    if data.credentials:
+        ctable = doc.add_table(rows=1, cols=5)
+        ctable.style = "Table Grid"
+        chdr = ctable.rows[0].cells
+        for j, h in enumerate(["Host", "Port", "Service", "Username", "Source"]):
+            chdr[j].text = h
+        for c in data.credentials:
+            row = ctable.add_row().cells
+            row[0].text = str(c.get("host") or "")
+            row[1].text = "" if c.get("port") is None else str(c.get("port"))
+            row[2].text = str(c.get("service") or "")
+            row[3].text = str(c.get("username") or "")
+            row[4].text = str(c.get("source") or "")
+        doc.add_paragraph("Note: Passwords and hashes are redacted from this report for security.")
+    else:
+        doc.add_paragraph("No credentials discovered.")
+
+    # Targets
+    doc.add_heading("Targets", level=1)
+    if data.targets:
+        ttable = doc.add_table(rows=1, cols=6)
+        ttable.style = "Table Grid"
+        thdr = ttable.rows[0].cells
+        for j, h in enumerate(["Host", "IP", "Live", "OS", "Tech Stack", "WAF"]):
+            thdr[j].text = h
+        for t in data.targets:
+            tech = t.get("tech_stack", [])
+            if isinstance(tech, list):
+                tech = ", ".join(str(x) for x in tech[:5])
+            row = ttable.add_row().cells
+            row[0].text = str(t.get("host") or "")
+            row[1].text = str(t.get("ip") or "")
+            row[2].text = str(t.get("is_live", ""))
+            row[3].text = str(t.get("os_guess") or "")
+            row[4].text = str(tech)
+            row[5].text = str(t.get("waf_detected") or "")
+    else:
+        doc.add_paragraph("No targets enumerated.")
 
     # Footer
     doc.add_paragraph("")

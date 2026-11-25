@@ -63,7 +63,7 @@ class Target(BaseModel):
 class Port(BaseModel):
     id: str = Field(default_factory=_new_id)
     target_id: str = ""
-    port: int = 0
+    port: int = Field(default=0, ge=0, le=65535)
     protocol: str = "tcp"
     state: str = "open"
     service: str = ""
@@ -75,14 +75,14 @@ class Finding(BaseModel):
     id: str = Field(default_factory=_new_id)
     engagement_id: str = ""
     host: str = ""
-    port: int | None = None
+    port: int | None = Field(default=None, ge=0, le=65535)
     protocol: str = ""
     title: str = ""
     description: str = ""
     severity: Severity = Severity.INFO
-    cvss_score: float | None = None
+    cvss_score: float | None = Field(default=None, ge=0.0, le=10.0)
     cve_ids: list[str] = Field(default_factory=list)
-    epss_score: float | None = None
+    epss_score: float | None = Field(default=None, ge=0.0, le=1.0)
     cwe_id: str = ""
     owasp_category: str = ""
     tool_source: str = ""
@@ -99,11 +99,11 @@ class Credential(BaseModel):
     id: str = Field(default_factory=_new_id)
     engagement_id: str = ""
     host: str = ""
-    port: int = 0
+    port: int = Field(default=0, ge=0, le=65535)
     service: str = ""
     username: str = ""
-    password: str = ""
-    hash_value: str = ""
+    password: str = Field(default="", exclude=True, repr=False)
+    hash_value: str = Field(default="", exclude=True, repr=False)
     source: str = ""  # how it was obtained
     confirmed: bool = False
 
@@ -124,7 +124,7 @@ class AttackChain(BaseModel):
     name: str = ""
     description: str = ""
     steps: list[ChainStep] = Field(default_factory=list)
-    confidence: float = 0.0  # 0.0 (low) to 1.0 (high)
+    confidence: float = Field(default=0.0, ge=0.0, le=1.0)  # 0.0 (low) to 1.0 (high)
     impact: Severity = Severity.INFO
     confirmed: bool = False
     poc_script: str = ""

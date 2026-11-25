@@ -11,11 +11,15 @@ Built-in templates use placeholder variables:
 from __future__ import annotations
 
 import base64
+import logging
+import re
 import urllib.parse
 from dataclasses import dataclass, field
 from pathlib import Path
 
 import yaml
+
+log = logging.getLogger("nexus.brain.payloads")
 
 
 @dataclass
@@ -45,7 +49,7 @@ class PayloadDB:
 
     @property
     def count(self) -> int:
-        return len(self._payloads)
+        return sum(1 for p in self._payloads if not p.name.startswith("_category_"))
 
     def _load_category_stubs(self) -> None:
         """Register category metadata without inline exploit strings.
@@ -81,7 +85,8 @@ class PayloadDB:
         for f in sorted(yaml_dir.glob("*.yaml")):
             try:
                 raw = yaml.safe_load(f.read_text(encoding="utf-8"))
-            except (yaml.YAMLError, OSError):
+            except (yaml.YAMLError, OSError) as exc:
+                log.warning("Failed to load payload file %s: %s", f, exc)
                 continue
             if not isinstance(raw, dict):
                 continue
@@ -114,35 +119,41 @@ class PayloadDB:
         # Exclude internal category stubs from search results
         results = [p for p in self._payloads if not p.name.startswith("_category_")]
         if category:
-            results = [p for p in results if p.category == category]
+            cat_l = category.lower()
+            results = [p for p in results if p.category.lower() == cat_l]
         if platform:
-            results = [p for p in results if p.platform in (platform, "universal")]
+            plat_l = platform.lower()
+            results = [p for p in results if p.platform.lower() in (plat_l, "universal")]
         if language:
-            results = [p for p in results if p.language == language]
+            lang_l = language.lower()
+            results = [p for p in results if p.language.lower() == lang_l]
         if keyword:
             kw = keyword.lower()
             results = [
                 p for p in results
                 if kw in p.name.lower()
                 or kw in p.description.lower()
-                or any(kw in t for t in p.tags)
+                or any(kw in t.lower() for t in p.tags)
             ]
         if max_evasion is not None:
             results = [p for p in results if p.evasion_level <= max_evasion]
         return results
 
     def render(self, payload: Payload, variables: dict[str, str]) -> str:
-        """Render a payload template with actual values."""
-        result = payload.template
-        for key, val in variables.items():
-            placeholder = "{" + key.upper() + "}"
-            result = result.replace(placeholder, val)
-        return result
+        """Render a payload template with single-pass placeholder substitution."""
+        upper_vars = {k.upper(): v for k, v in variables.items()}
+        return re.sub(
+            r"\{([A-Za-z0-9_]+)\}",
+            lambda m: upper_vars.get(m.group(1).upper(), m.group(0)),
+            payload.template,
+        )
 
     def get_by_name(self, name: str) -> Payload | None:
-        """Get a payload by exact name."""
+        """Get a payload by exact name (excluding internal category stubs)."""
+        if name.startswith("_category_"):
+            return None
         for p in self._payloads:
-            if p.name == name:
+            if not p.name.startswith("_category_") and p.name == name:
                 return p
         return None
 
@@ -175,8 +186,18 @@ def encode_hex(payload: str) -> str:
 
 
 def encode_unicode(payload: str) -> str:
-    """Unicode-escape a payload string."""
-    return "".join(f"\\u{ord(c):04x}" for c in payload)
+    """Unicode-escape a payload string (using UTF-16 surrogate pairs for non-BMP chars)."""
+    out: list[str] = []
+    for ch in payload:
+        cp = ord(ch)
+        if cp <= 0xFFFF:
+            out.append(f"\\u{cp:04x}")
+        else:
+            cp_adj = cp - 0x10000
+            high = 0xD800 + (cp_adj >> 10)
+            low = 0xDC00 + (cp_adj & 0x3FF)
+            out.append(f"\\u{high:04x}\\u{low:04x}")
+    return "".join(out)
 
 
 def encode_html_entity(payload: str) -> str:

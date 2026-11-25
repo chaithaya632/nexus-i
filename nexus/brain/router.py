@@ -2,10 +2,14 @@
 
 from __future__ import annotations
 
+import copy
+import logging
 from pathlib import Path
 from typing import Any
 
 import yaml
+
+log = logging.getLogger("nexus.brain.router")
 
 
 # Default routing rules (used when YAML not available)
@@ -92,7 +96,7 @@ class ServiceRouter:
     """Routes detected services to appropriate scanning tools and checks."""
 
     def __init__(self) -> None:
-        self._routing: dict[str, dict[str, Any]] = dict(DEFAULT_ROUTING)
+        self._routing: dict[str, dict[str, Any]] = copy.deepcopy(DEFAULT_ROUTING)
 
     def load_from_directory(self, knowledge_dir: Path) -> None:
         """Load custom routing rules from YAML."""
@@ -102,23 +106,31 @@ class ServiceRouter:
         for yaml_file in sorted(routing_dir.glob("*.yaml")):
             try:
                 raw = yaml.safe_load(yaml_file.read_text(encoding="utf-8"))
-            except (yaml.YAMLError, OSError):
+            except (yaml.YAMLError, OSError) as exc:
+                log.warning("Failed to load routing file %s: %s", yaml_file, exc)
                 continue
             if isinstance(raw, dict):
                 for svc, data in raw.items():
                     if isinstance(data, dict):
-                        self._routing[svc] = data
+                        self._routing[str(svc).lower().strip()] = copy.deepcopy(data)
 
     def route(self, service_name: str) -> dict[str, Any]:
-        """Get tools and checks for a service."""
-        key = service_name.lower().strip()
+        """Get tools and checks for a service, preferring exact then longest match."""
+        key = (service_name or "").lower().strip()
+        if not key:
+            return {"tools": ["nmap", "nuclei"], "checks": ["cve_scan"]}
         # Direct match
         if key in self._routing:
-            return self._routing[key]
-        # Partial match
-        for svc, data in self._routing.items():
-            if svc in key or key in svc:
-                return data
+            return copy.deepcopy(self._routing[key])
+        # Partial match — prefer longest matching service key (e.g. 'https' over 'http')
+        candidates = [
+            (svc, data)
+            for svc, data in self._routing.items()
+            if svc in key or key in svc
+        ]
+        if candidates:
+            _, best_data = max(candidates, key=lambda item: len(item[0]))
+            return copy.deepcopy(best_data)
         return {"tools": ["nmap", "nuclei"], "checks": ["cve_scan"]}
 
     def identify_service_by_port(self, port: int) -> list[str]:

@@ -2,21 +2,27 @@
 
 from __future__ import annotations
 
+import hashlib
 from collections import Counter
 from typing import Any
 
+from nexus.correlator.dedup import extract_endpoint
 from nexus.db.models import Finding
 from nexus.db.store import EngagementStore
 
 
-def finding_fingerprint(f: Finding) -> tuple[str, int, str, tuple[str, ...], str]:
+def finding_fingerprint(f: Finding) -> tuple[str, int, str, tuple[str, ...], str, str]:
     """Stable identity key matching findings across consecutive engagement runs."""
+    endpoint = extract_endpoint(f)
+    if not endpoint and f.description.strip():
+        endpoint = "desc:" + hashlib.sha1(f.description.strip().lower().encode("utf-8")).hexdigest()[:10]
     return (
         f.host.strip().lower(),
         int(f.port or 0),
         f.cwe_id.strip().upper(),
         tuple(sorted(c.strip().upper() for c in f.cve_ids)),
         f.title.strip().lower(),
+        endpoint,
     )
 
 

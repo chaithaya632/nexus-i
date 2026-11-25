@@ -3,16 +3,38 @@
 from __future__ import annotations
 
 import json
+import logging
 import re
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlsplit
 
 import httpx
 import yaml
 
+log = logging.getLogger("nexus.brain.cve_sync")
+
 CISA_KEV_URL = "https://www.cisa.gov/sites/default/files/feeds/known_exploited_vulnerabilities.json"
+_MAX_FEED_BYTES = 50 * 1024 * 1024  # 50 MiB safety cap
 _CVE_RE = re.compile(r"^CVE-\d{4}-\d{4,}$", re.IGNORECASE)
 _SLUG_RE = re.compile(r"[^a-z0-9]+")
+
+
+def _write_merged_cves(dest: Path, cves_map: dict[str, dict[str, Any]]) -> None:
+    """Merge new CVE entries into an existing YAML catalog without clobbering custom entries."""
+    existing_cves: dict[str, Any] = {}
+    if dest.is_file():
+        try:
+            loaded = yaml.safe_load(dest.read_text(encoding="utf-8"))
+            if isinstance(loaded, dict) and isinstance(loaded.get("cves"), dict):
+                existing_cves = dict(loaded["cves"])
+        except (yaml.YAMLError, OSError) as exc:
+            log.warning("Could not read existing CVE file %s for merge: %s", dest, exc)
+    merged = {**existing_cves, **cves_map}
+    dest.write_text(
+        yaml.safe_dump({"cves": merged}, sort_keys=False, allow_unicode=True),
+        encoding="utf-8",
+    )
 
 
 def _slug(raw: str) -> str:
@@ -62,10 +84,7 @@ def import_cisa_kev_data(data: dict[str, Any], out_dir: Path) -> tuple[int, Path
     cves_dir = Path(out_dir) / "cves"
     cves_dir.mkdir(parents=True, exist_ok=True)
     dest = cves_dir / "kev.yaml"
-    dest.write_text(
-        yaml.safe_dump({"cves": cves_map}, sort_keys=False, allow_unicode=True),
-        encoding="utf-8",
-    )
+    _write_merged_cves(dest, cves_map)
     return len(cves_map), dest
 
 
@@ -188,10 +207,7 @@ def import_nvd_json_data(data: dict[str, Any], out_dir: Path) -> tuple[int, Path
     cves_dir = Path(out_dir) / "cves"
     cves_dir.mkdir(parents=True, exist_ok=True)
     dest = cves_dir / "nvd_custom.yaml"
-    dest.write_text(
-        yaml.safe_dump({"cves": cves_map}, sort_keys=False, allow_unicode=True),
-        encoding="utf-8",
-    )
+    _write_merged_cves(dest, cves_map)
     return len(cves_map), dest
 
 
@@ -211,12 +227,27 @@ async def sync_cisa_kev(
     *,
     url: str = CISA_KEV_URL,
     timeout: float = 30.0,
+    max_bytes: int = _MAX_FEED_BYTES,
 ) -> tuple[int, Path]:
     """Download the official CISA KEV JSON catalog and persist it under `<data_dir>/cves/kev.yaml`."""
+    parsed = urlsplit(url)
+    if parsed.scheme.lower() != "https" or not parsed.netloc:
+        raise ValueError(f"KEV sync URL must use https:// scheme, got: {url!r}")
+
     async with httpx.AsyncClient(timeout=timeout, follow_redirects=True) as client:
-        resp = await client.get(url)
-        resp.raise_for_status()
-        payload = resp.json()
+        async with client.stream("GET", url) as resp:
+            resp.raise_for_status()
+            if urlsplit(str(resp.url)).scheme.lower() != "https":
+                raise ValueError(f"KEV sync redirected to non-HTTPS URL: {resp.url}")
+            cl_header = resp.headers.get("content-length")
+            if cl_header and cl_header.isdigit() and int(cl_header) > max_bytes:
+                raise ValueError(f"KEV feed exceeds maximum allowed size ({max_bytes} bytes)")
+            buf = bytearray()
+            async for chunk in resp.aiter_bytes():
+                buf.extend(chunk)
+                if len(buf) > max_bytes:
+                    raise ValueError(f"KEV feed exceeds maximum allowed size ({max_bytes} bytes)")
+            payload = json.loads(buf.decode("utf-8"))
     if not isinstance(payload, dict):
         raise ValueError("Unexpected response format from KEV feed")
     return import_cisa_kev_data(payload, data_dir)

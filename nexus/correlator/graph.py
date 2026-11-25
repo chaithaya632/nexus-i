@@ -3,18 +3,49 @@
 from __future__ import annotations
 
 import logging
-from typing import Any
+import re
+from typing import Any, Protocol
 
 from nexus.db.models import AttackChain, ChainStep, Finding, Severity
 
 log = logging.getLogger("nexus.correlator.graph")
 
+_SQLI_TITLE_RE = re.compile(r"\bsql\s+injection\b|\bsqli\b")
+
+_ACTION_TO_STATES: dict[str, tuple[str, ...]] = {
+    "run_sqlmap_dump": ("db_dumped",),
+    "extract_credentials": ("credentials_obtained",),
+    "chain_to_auth_bypass": ("admin_access", "admin_panel_access"),
+    "test_admin_panels": ("admin_access", "admin_panel_access"),
+    "try_file_upload": ("webshell_uploaded", "file_uploaded"),
+    "try_code_execution": ("rce_achieved",),
+    "try_ssh_with_creds": ("ssh_access",),
+    "try_rdp_with_creds": ("rdp_access",),
+    "check_ghostcat": ("ghostcat_vuln",),
+    "check_ms17_010": ("ms17_010_vuln",),
+    "check_sqli": ("sqli_found",),
+    "check_xss": ("xss_found",),
+    "run_wpscan": ("service_wordpress",),
+    "check_manager_exposed": ("tomcat_manager_found",),
+    "try_war_deploy": ("war_uploaded",),
+}
+
+
+class ChainBuilderLike(Protocol):
+    def find_attack_paths(self, start: str, goal: str, max_paths: int = 5) -> list[list[dict[str, Any]]]: ...
+
+
+class ExpertEngineLike(Protocol):
+    def clear_facts(self) -> None: ...
+    def add_fact(self, key: str, value: Any, source: str = "", confidence: float = 1.0) -> None: ...
+    def evaluate(self) -> list[tuple[str, list[Any]]]: ...
+
 
 def build_attack_chains(
     findings: list[Finding],
     *,
-    chain_builder: Any = None,
-    expert: Any = None,
+    chain_builder: ChainBuilderLike | None = None,
+    expert: ExpertEngineLike | None = None,
 ) -> list[AttackChain]:
     """Analyze findings and build potential attack chains.
 
@@ -45,13 +76,13 @@ def build_attack_chains(
             states.add("service_tomcat")
         if "wordpress" in title_l or "wordpress" in f.description.lower():
             states.add("service_wordpress")
-        if "sql" in title_l or "cwe-89" in cwe_l or "sqli" in cwe_l:
+        if _SQLI_TITLE_RE.search(title_l) or "cwe-89" in cwe_l or "sqli" in cwe_l:
             states.add("vuln_sqli")
             states.add("sqli_found")
         if "xss" in title_l or "cwe-79" in cwe_l:
             states.add("vuln_xss")
             states.add("xss_found")
-        if "rce" in title_l or "remote code" in title_l or "remote command" in title_l:
+        if re.search(r"\brce\b", title_l) or "remote code" in title_l or "remote command" in title_l:
             states.add("vuln_rce")
         if "lfi" in title_l or "file inclusion" in title_l or "path traversal" in title_l or "cwe-22" in cwe_l:
             states.add("vuln_lfi")
@@ -71,11 +102,16 @@ def build_attack_chains(
         fired = expert.evaluate()
         log.info("Expert system fired %d rules during correlation", len(fired))
 
-        # Add any new states from fired rules
-        for rule_name, actions in fired:
+        # Add new states derived from fired rules (supports both str and tuple actions)
+        for _rule_name, actions in fired:
             for action in actions:
-                if isinstance(action, tuple) and len(action) == 2:
-                    states.add(action[0])
+                if isinstance(action, tuple) and len(action) >= 1:
+                    states.add(str(action[0]))
+                elif isinstance(action, str) and action.strip():
+                    act = action.strip()
+                    states.add(act)
+                    for mapped in _ACTION_TO_STATES.get(act, ()):
+                        states.add(mapped)
 
     # Find attack paths to high-value goal states present in ChainBuilder / YAML templates
     chains: list[AttackChain] = []
@@ -137,7 +173,6 @@ def _find_related_finding(findings: list[Finding], state: str) -> Finding | None
     """Find a finding that relates to a chain state."""
     state_lower = state.lower()
     for f in findings:
-        # Match by port
         if state_lower.startswith("port_"):
             try:
                 port = int(state_lower.split("_")[1])
@@ -145,11 +180,9 @@ def _find_related_finding(findings: list[Finding], state: str) -> Finding | None
                     return f
             except (ValueError, IndexError):
                 pass
-        # Match by vulnerability type
         if state_lower.startswith("vuln_") and f.cwe_id:
             if state_lower[5:] in f.cwe_id.lower():
                 return f
-        # Match by service
         if state_lower.startswith("service_"):
             svc = state_lower[8:]
             if svc in f.title.lower() or svc in f.protocol.lower():

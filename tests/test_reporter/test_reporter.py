@@ -159,3 +159,80 @@ def test_generate_report_prepends_ai_summary(db_with_data, tmp_path):
     md = Path(generated[0]).read_text(encoding="utf-8")
     assert "Custom AI insight" in md
     assert "This penetration test identified 3 findings" in md
+
+
+def test_reporter_redacts_secrets_and_parity_across_md_html_docx(tmp_path):
+    import json
+    from nexus.db.models import AttackChain, ChainStep, Credential
+    from nexus.reporter.sarif import render_sarif
+
+    db = EngagementStore(tmp_path / "full_rep.db")
+    eng = Engagement(name="Full", target="app.local", phase=EngagementPhase.REPORT)
+    db.create_engagement(eng)
+    db.add_target(Target(engagement_id=eng.id, host="app.local", ip="10.0.0.5", is_live=True, os_guess="Linux"))
+    db.add_credential(Credential(
+        engagement_id=eng.id, host="app.local", port=22, service="ssh",
+        username="deploy", password="TopSecretPassword!", hash_value="hashSecret!", source="hydra",
+    ))
+    db.add_chain(AttackChain(
+        engagement_id=eng.id, name="Web to RCE", impact=Severity.CRITICAL,
+        steps=[ChainStep(order=1, action="sqli", tool="sqlmap")],
+    ))
+    db.add_finding(Finding(
+        engagement_id=eng.id, host="app.local", port=None, protocol="http",
+        title="SQL Injection | 'union' select\nin /login", cwe_id="CWE-89",
+        severity=Severity.HIGH, tool_source="sqlmap",
+    ))
+    db.add_finding(Finding(
+        engagement_id=eng.id, host="app.local", port=443, protocol="https",
+        title="Second CWE-89 finding", cwe_id="CWE-89",
+        severity=Severity.MEDIUM, tool_source="sqlmap", cvss_score="invalid_float",  # type: ignore[arg-type]
+    ) if False else Finding(
+        engagement_id=eng.id, host="app.local", port=443, protocol="https",
+        title="Second CWE-89 finding", cwe_id="CWE-89",
+        severity=Severity.MEDIUM, tool_source="sqlmap",
+    ))
+
+    data = build_report_data(db, eng.id)
+    assert data.credentials[0]["password"] == "***REDACTED***"
+    assert "TopSecretPassword!" not in str(data)
+
+    out = tmp_path / "out"
+    files = generate_report(db, eng.id, out, formats=["md", "html", "docx", "sarif"])
+    assert len(files) == 4
+
+    md_txt = (out / f"nexus_report_{eng.id}.md").read_text(encoding="utf-8")
+    assert "Severity.CRITICAL" not in md_txt
+    assert "CRITICAL" in md_txt
+    assert "\\|" in md_txt
+
+    html_txt = (out / f"nexus_report_{eng.id}.html").read_text(encoding="utf-8")
+    assert "Discovered Credentials" in html_txt
+    assert "Targets" in html_txt
+    assert ">None<" not in html_txt
+    assert "TopSecretPassword!" not in html_txt
+    assert "@page" in html_txt
+    assert "max-height: 300px" not in html_txt
+    assert "max-height:300px" not in html_txt
+
+    from docx import Document
+    doc = Document(str(out / f"nexus_report_{eng.id}.docx"))
+    doc_text = "\n".join(p.text for p in doc.paragraphs)
+    assert "Discovered Credentials" in doc_text
+    assert "Targets" in doc_text
+    assert "TopSecretPassword!" not in doc_text
+    assert "**CRITICAL**" not in doc_text
+
+    sarif_doc = json.loads((out / f"nexus_report_{eng.id}.sarif").read_text(encoding="utf-8"))
+    rules = sarif_doc["runs"][0]["tool"]["driver"]["rules"]
+    assert len(rules) == 2  # Distinct titles with same CWE-89 get distinct ruleIds
+
+    from nexus.reporter.html import _esc
+    assert _esc(None) == ""
+    assert _esc("a'b") == "a&#x27;b"
+
+    # Guard invalid float cvss_score in SARIF dict inputs
+    data.findings.append({"title": "Bad CVSS", "host": "app.local", "severity": "low", "cvss_score": "bad"})
+    sarif_raw = json.loads(render_sarif(data))
+    assert len(sarif_raw["runs"][0]["results"]) == 3
+

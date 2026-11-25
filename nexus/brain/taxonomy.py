@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+import re
+from typing import Any
+
 OWASP_TOP_10_2021: dict[str, dict[str, str]] = {
     "A01": {"name": "Broken Access Control", "keywords": "idor,bola,privilege,authorization,access control,directory traversal,path traversal,insecure direct object"},
     "A02": {"name": "Cryptographic Failures", "keywords": "ssl,tls,cipher,encryption,certificate,cleartext,plaintext,weak crypto,hashing,md5,sha1"},
@@ -99,12 +102,21 @@ class TaxonomyMapper:
 
     def classify_owasp(self, title: str, description: str = "") -> str:
         """Return the most likely OWASP Top 10 category ID (e.g., 'A03')."""
-        text = f"{title} {description}".lower()
+        raw = f"{title} {description}".lower()
+        normalized = re.sub(r"[-_]+", " ", raw)
         best_match = ""
         best_score = 0
         for cat_id, cat_data in OWASP_TOP_10_2021.items():
             keywords = cat_data["keywords"].split(",")
-            score = sum(1 for kw in keywords if kw.strip() in text)
+            score = 0
+            for kw in keywords:
+                k = kw.strip().lower()
+                if not k:
+                    continue
+                k_norm = re.sub(r"[-_]+", " ", k)
+                pattern = r"\b" + re.escape(k_norm) + r"\b"
+                if re.search(pattern, normalized) or re.search(r"\b" + re.escape(k) + r"\b", raw):
+                    score += 1
             if score > best_score:
                 best_score = score
                 best_match = cat_id
@@ -119,15 +131,31 @@ class TaxonomyMapper:
         key = vuln_type.lower().strip().replace(" ", "_").replace("-", "_")
         return CWE_MAP.get(key, "")
 
+    def map_finding(self, finding: Any) -> str:
+        """Return formatted OWASP Top 10 category string for a Finding or dict."""
+        cwe_id = finding.get("cwe_id", "") if isinstance(finding, dict) else getattr(finding, "cwe_id", "")
+        title = finding.get("title", "") if isinstance(finding, dict) else getattr(finding, "title", "")
+        desc = finding.get("description", "") if isinstance(finding, dict) else getattr(finding, "description", "")
+        if cwe_id:
+            mapped = self.map_cwe(str(cwe_id))
+            if mapped:
+                return mapped.get("owasp", "")
+        cat_id = self.classify_owasp(str(title), str(desc))
+        if cat_id:
+            return f"{cat_id} — {self.get_owasp_name(cat_id)}"
+        return ""
+
     def classify_finding(self, title: str, description: str = "", vuln_type: str = "") -> dict[str, str]:
         """Full classification of a finding."""
         owasp = self.classify_owasp(title, description)
         cwe = self.classify_cwe(vuln_type) if vuln_type else ""
         if not cwe:
-            # Try to infer from title
-            for key, cwe_id in CWE_MAP.items():
-                if key.replace("_", " ") in title.lower():
-                    cwe = cwe_id
+            title_norm = re.sub(r"[-_]+", " ", title.lower())
+            # Prefer longest keyword match with word boundaries
+            for key in sorted(CWE_MAP, key=len, reverse=True):
+                phrase = key.replace("_", " ")
+                if re.search(r"\b" + re.escape(phrase) + r"\b", title_norm):
+                    cwe = CWE_MAP[key]
                     break
         return {
             "owasp_category": owasp,

@@ -3,11 +3,14 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+import logging
 from pathlib import Path
 from typing import Any
 
 import networkx as nx
 import yaml
+
+log = logging.getLogger("nexus.brain.chain_builder")
 
 
 @dataclass
@@ -70,7 +73,8 @@ class ChainBuilder:
         for yaml_file in sorted(chains_dir.glob("*.yaml")):
             try:
                 raw = yaml.safe_load(yaml_file.read_text(encoding="utf-8"))
-            except (yaml.YAMLError, OSError):
+            except (yaml.YAMLError, OSError) as exc:
+                log.warning("Failed to load chain template %s: %s", yaml_file, exc)
                 continue
             if not isinstance(raw, dict):
                 continue
@@ -116,9 +120,9 @@ class ChainBuilder:
             ("sqli_found", "sqli_confirmed", "sqli_exploit", "sqlmap", 0.3),
             ("sqli_confirmed", "db_dumped", "db_dump", "sqlmap", 0.2),
             ("db_dumped", "credentials_obtained", "extract_creds", "sqlmap", 0.2),
-            ("credentials_obtained", "admin_panel_access", "login_admin", "hydra", 0.3),
-            ("admin_panel_access", "file_uploaded", "upload_shell", "custom", 0.4),
-            ("file_uploaded", "rce_achieved", "execute_shell", "custom", 0.2),
+            ("credentials_obtained", "admin_access", "login_admin", "hydra", 0.3),
+            ("admin_access", "webshell_uploaded", "upload_shell", "custom", 0.4),
+            ("webshell_uploaded", "rce_achieved", "execute_shell", "custom", 0.2),
 
             # Tomcat Paths
             ("service_tomcat", "tomcat_manager_found", "check_manager", "ffuf", 0.2),
@@ -133,7 +137,7 @@ class ChainBuilder:
             ("service_wordpress", "wp_users_found", "wp_user_enum", "wpscan", 0.2),
             ("service_wordpress", "xmlrpc_enabled", "xmlrpc_check", "nuclei", 0.15),
             ("xmlrpc_enabled", "wp_creds_found", "xmlrpc_brute", "hydra", 0.5),
-            ("wp_creds_found", "admin_panel_access", "wp_admin_login", "custom", 0.1),
+            ("wp_creds_found", "admin_access", "wp_admin_login", "custom", 0.1),
 
             # Credential Reuse
             ("credentials_obtained", "ssh_access", "ssh_login", "ssh", 0.3),
@@ -199,7 +203,7 @@ class ChainBuilder:
         reachable = nx.descendants(self._graph, start)
         # Goals are states with no outgoing edges or high-impact states
         goals = {"rce_achieved", "data_exfiltrated", "privesc_achieved",
-                 "admin_panel_access", "credentials_obtained", "lateral_movement"}
+                 "admin_access", "admin_panel_access", "credentials_obtained", "lateral_movement"}
         return sorted(reachable & goals)
 
     def suggest_next_actions(self, current_states: list[str]) -> list[dict[str, Any]]:

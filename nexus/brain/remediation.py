@@ -3,10 +3,13 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+import logging
 from pathlib import Path
 from typing import Any
 
 import yaml
+
+log = logging.getLogger("nexus.brain.remediation")
 
 
 @dataclass
@@ -39,7 +42,7 @@ class RemediationDB:
 
     def _load_builtins(self) -> None:
         for r in self._cwe_remediations():
-            self._by_id[r.id] = r
+            self._by_id[r.id.strip().upper()] = r
 
     def load_from_yaml(self, yaml_dir: Path) -> None:
         """Load additional remediations from YAML files."""
@@ -48,14 +51,16 @@ class RemediationDB:
         for f in sorted(yaml_dir.glob("*.yaml")):
             try:
                 raw = yaml.safe_load(f.read_text(encoding="utf-8"))
-            except (yaml.YAMLError, OSError):
+            except (yaml.YAMLError, OSError) as exc:
+                log.warning("Failed to load remediation file %s: %s", f, exc)
                 continue
             if not isinstance(raw, dict):
                 continue
             for entry in raw.get("remediations", []):
                 if isinstance(entry, dict) and "id" in entry and "title" in entry:
+                    r_id = str(entry["id"]).strip().upper()
                     r = Remediation(
-                        id=entry["id"],
+                        id=r_id,
                         title=entry["title"],
                         severity=entry.get("severity", "high"),
                         short_fix=entry.get("short_fix", ""),
@@ -64,11 +69,17 @@ class RemediationDB:
                         code_examples=entry.get("code_examples", {}),
                         tags=entry.get("tags", []),
                     )
-                    self._by_id[r.id] = r
+                    self._by_id[r_id] = r
 
     def get(self, vuln_id: str) -> Remediation | None:
-        """Get remediation by exact CWE/CVE ID."""
-        return self._by_id.get(vuln_id)
+        """Get remediation by CWE/CVE ID (case-insensitive)."""
+        if not vuln_id:
+            return None
+        return self._by_id.get(vuln_id.strip().upper())
+
+    def lookup(self, vuln_id: str) -> Remediation | None:
+        """Alias for get()."""
+        return self.get(vuln_id)
 
     def search(self, keyword: str) -> list[Remediation]:
         """Search remediations by keyword in title, fix text, or tags."""
@@ -76,7 +87,7 @@ class RemediationDB:
         return [
             r for r in self._by_id.values()
             if kw in r.title.lower() or kw in r.short_fix.lower()
-            or kw in r.detailed_fix.lower() or any(kw in t for t in r.tags)
+            or kw in r.detailed_fix.lower() or any(kw in t.lower() for t in r.tags)
         ]
 
     def get_for_finding(self, cwe_id: str = "", cve_ids: list[str] | None = None) -> Remediation | None:
@@ -84,12 +95,12 @@ class RemediationDB:
         # Try specific CVEs first
         if cve_ids:
             for cve in cve_ids:
-                r = self._by_id.get(cve)
+                r = self.get(cve)
                 if r:
                     return r
         # Fall back to CWE class
         if cwe_id:
-            return self._by_id.get(cwe_id)
+            return self.get(cwe_id)
         return None
 
     def _cwe_remediations(self) -> list[Remediation]:
@@ -156,7 +167,12 @@ class RemediationDB:
                 ),
                 references=["https://cheatsheetseries.owasp.org/cheatsheets/Input_Validation_Cheat_Sheet.html"],
                 code_examples={
-                    "python": "real = os.path.realpath(os.path.join(BASE_DIR, user_path))\nassert real.startswith(os.path.realpath(BASE_DIR))",
+                    "python": (
+                        "base = Path(BASE_DIR).resolve()\n"
+                        "target = (base / user_path).resolve()\n"
+                        "if not target.is_relative_to(base):\n"
+                        "    raise ValueError('Path traversal detected')"
+                    ),
                 },
                 tags=["file", "traversal", "lfi", "owasp-a01"],
             ),

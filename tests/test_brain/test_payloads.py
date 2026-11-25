@@ -9,8 +9,10 @@ from nexus.brain.remediation import RemediationDB
 class TestPayloadDB:
     def test_init(self):
         db = PayloadDB()
-        # Should have category stubs loaded
-        assert db.count >= 10
+        # Category stubs should NOT inflate count or resolve via get_by_name
+        assert db.count == 0
+        assert db.get_by_name("_category_sqli") is None
+        assert len(db.categories()) >= 10
 
     def test_categories(self):
         db = PayloadDB()

@@ -1,8 +1,8 @@
-"""CVE Knowledge Graph — 10,000+ service→vulnerability→exploit mappings."""
+"""CVE Knowledge Graph — version-bounded service→vulnerability→exploit mappings."""
 
 from __future__ import annotations
 
-import os
+import logging
 import re
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -10,24 +10,51 @@ from typing import Any
 
 import yaml
 
+log = logging.getLogger("nexus.brain.knowledge_graph")
 
-_VER_RE = re.compile(r"(\d+(?:\.\d+)+)")
+_VER_RE = re.compile(r"(\d+(?:\.\d+)+(?:[a-z](?!\d))?)")
+_ParsedVer = tuple[tuple[int, ...], int]
 
 
-def _parse_version(raw: str) -> tuple[int, ...] | None:
-    """Extract numeric version tuple (e.g. 'Apache/2.4.49' -> (2, 4, 49))."""
-    m = _VER_RE.search(raw or "")
+def _parse_version(raw: str) -> _ParsedVer | None:
+    """Extract numeric version tuple + optional trailing patch letter (e.g. '1.1.1t' -> ((1, 1, 1), 20))."""
+    m = _VER_RE.search((raw or "").lower())
     if not m:
         return None
-    return tuple(int(x) for x in m.group(1).split("."))
+    token = m.group(1)
+    letter = 0
+    if token[-1].isalpha():
+        letter = ord(token[-1]) - ord("a") + 1
+        token = token[:-1]
+    return tuple(int(x) for x in token.split(".")), letter
 
 
-def _cmp_versions(a: tuple[int, ...], b: tuple[int, ...]) -> int:
-    """Compare two version tuples padding shorter tail with zeros (-1, 0, 1)."""
-    length = max(len(a), len(b))
-    pa = a + (0,) * (length - len(a))
-    pb = b + (0,) * (length - len(b))
-    return (pa > pb) - (pa < pb)
+def _cmp_versions(a: _ParsedVer, b: _ParsedVer) -> int:
+    """Compare two parsed versions padding shorter numeric tail with zeros (-1, 0, 1)."""
+    a_nums, a_let = a
+    b_nums, b_let = b
+    length = max(len(a_nums), len(b_nums))
+    pa = a_nums + (0,) * (length - len(a_nums))
+    pb = b_nums + (0,) * (length - len(b_nums))
+    if pa != pb:
+        return (pa > pb) - (pa < pb)
+    return (a_let > b_let) - (a_let < b_let)
+
+
+def _product_family(spec: str) -> str:
+    """Extract canonical product family key from a product/range spec."""
+    s = str(spec or "").strip()
+    if not s:
+        return "generic"
+    if any(op in s for op in ("<", ">", "=")):
+        s = re.split(r"\s+[<>=]", s, maxsplit=1)[0].strip()
+    s = re.sub(
+        r"[-_\s]+\d+(?:\.\d+)*(?:[a-z](?!\d))?(?:[-_]\d+(?:\.\d+)*(?:[a-z](?!\d))?)*$",
+        "",
+        s,
+        flags=re.IGNORECASE,
+    )
+    return s.strip("-_ ") or "generic"
 
 
 def _version_in_range(ver_str: str, range_spec: str) -> bool:
@@ -36,7 +63,7 @@ def _version_in_range(ver_str: str, range_spec: str) -> bool:
     Supports:
       - Exact/prefix product spec: 'apache-httpd-2.4.49' -> matches 2.4.49
       - Hyphenated bounds: 'openssh-8.5-9.7' or '2.0-2.14.1' -> inclusive range
-      - Comma comparators: '<2.4.51', '>=8.5,<9.8', '<=1.0.1'
+      - Comma comparators: '<2.4.51', '>=8.5,<9.8', '<=1.0.1', '<1.1.1t'
       - Fallback prefix: 'apache-httpd-2.4' (2 parts) -> major.minor match
     """
     ver = _parse_version(ver_str)
@@ -63,7 +90,7 @@ def _version_in_range(ver_str: str, range_spec: str) -> bool:
                     if bound is None:
                         return False
                     # Do not match an ambiguous minor-only banner (e.g. 'Apache/2.4') against patch bounds ('<=2.4.48')
-                    if len(ver) < len(bound) and ver == bound[:len(ver)]:
+                    if len(ver[0]) < len(bound[0]) and ver[0] == bound[0][:len(ver[0])]:
                         return False
                     if not fn(ver, bound):
                         return False
@@ -75,22 +102,26 @@ def _version_in_range(ver_str: str, range_spec: str) -> bool:
     # Find all version segments inside spec (e.g. 'openssh-8.5-9.7' -> ['8.5', '9.7'])
     parts = _VER_RE.findall(spec)
     if len(parts) >= 2:
-        low = tuple(int(x) for x in parts[-2].split("."))
-        high = tuple(int(x) for x in parts[-1].split("."))
-        # Do not match an ambiguous minor-only banner (e.g. 'Apache/2.4') against patch bounds ('2.4.0-2.4.55')
-        if len(ver) < len(high) and ver == high[:len(ver)]:
+        low = _parse_version(parts[-2])
+        high = _parse_version(parts[-1])
+        if low is None or high is None:
             return False
-        if len(ver) < len(low) and ver == low[:len(ver)]:
+        # Do not match an ambiguous minor-only banner (e.g. 'Apache/2.4') against patch bounds ('2.4.0-2.4.55')
+        if len(ver[0]) < len(high[0]) and ver[0] == high[0][:len(ver[0])]:
+            return False
+        if len(ver[0]) < len(low[0]) and ver[0] == low[0][:len(ver[0])]:
             return False
         return _cmp_versions(ver, low) >= 0 and _cmp_versions(ver, high) <= 0
     if len(parts) == 1:
-        target = tuple(int(x) for x in parts[0].split("."))
+        target = _parse_version(parts[0])
+        if target is None:
+            return False
         # Exact match when full X.Y.Z specified; major.minor prefix if only X.Y
-        if len(target) >= 3:
-            if len(ver) < len(target) and ver == target[:len(ver)]:
+        if len(target[0]) >= 3 or target[1] > 0:
+            if len(ver[0]) < len(target[0]) and ver[0] == target[0][:len(ver[0])]:
                 return False
             return _cmp_versions(ver, target) == 0
-        return ver[:len(target)] == target
+        return ver[0][:len(target[0])] == target[0]
     return False
 
 
@@ -159,7 +190,8 @@ class KnowledgeGraph:
     def _load_file(self, path: Path) -> None:
         try:
             raw = yaml.safe_load(path.read_text(encoding="utf-8"))
-        except (yaml.YAMLError, OSError):
+        except (yaml.YAMLError, OSError) as exc:
+            log.warning("Failed to load CVE knowledge file %s: %s", path, exc)
             return
         if not isinstance(raw, dict):
             return
@@ -207,7 +239,7 @@ class KnowledgeGraph:
 
             self._services[service_key] = sk
             for fp in sk.fingerprints:
-                self._fingerprint_index[fp.lower()] = service_key
+                self._fingerprint_index.setdefault(fp.lower(), service_key)
 
     def _load_flat_cves(self, cves_map: dict[str, Any]) -> None:
         """Load the `cves: {CVE-ID: {...}}` YAML schema."""
@@ -222,8 +254,8 @@ class KnowledgeGraph:
                 for t in exploit_tools
                 if isinstance(t, str)
             ]
-            # Derive service key from primary product prefix (e.g. "apache-httpd-2.4" -> "apache-httpd")
-            primary_service = str(products[0])
+            families = list(dict.fromkeys(_product_family(str(p)) for p in products)) or ["generic"]
+            primary_service = families[0]
             entry = VulnEntry(
                 cve=cve_id.upper(),
                 severity=cve_data.get("severity", "medium"),
@@ -238,15 +270,17 @@ class KnowledgeGraph:
             )
             self._cve_index[entry.cve] = (primary_service, entry)
 
-            sk = self._services.get(primary_service)
-            if sk is None:
-                sk = ServiceKnowledge(name=primary_service)
-                self._services[primary_service] = sk
-            sk.vulns.append(entry)
-            for fp in fingerprints:
-                if fp not in sk.fingerprints:
-                    sk.fingerprints.append(fp)
-                self._fingerprint_index[fp.lower()] = primary_service
+            for fam in families:
+                sk = self._services.get(fam)
+                if sk is None:
+                    sk = ServiceKnowledge(name=fam)
+                    self._services[fam] = sk
+                if not any(existing.cve == entry.cve for existing in sk.vulns):
+                    sk.vulns.append(entry)
+                for fp in fingerprints:
+                    if fp not in sk.fingerprints:
+                        sk.fingerprints.append(fp)
+                    self._fingerprint_index.setdefault(fp.lower(), fam)
 
     @staticmethod
     def _parse_exploits(raw_exploits: list[Any]) -> list[ExploitInfo]:
@@ -289,7 +323,7 @@ class KnowledgeGraph:
                 matched.append(v)
                 continue
             specs = v.version_specs or [s.strip() for s in v.affected_versions.split(",") if s.strip()]
-            if any(_version_in_range(version, s) for s in specs) or (v.affected_versions and version in v.affected_versions):
+            if any(_version_in_range(version, s) for s in specs):
                 matched.append(v)
         return matched
 
