@@ -110,6 +110,51 @@ class TestDashboardAPI:
             ws.send_text("ping")
             assert ws.receive_text() == "pong"
 
+    def test_sarif_diff_and_suppressed_filter_endpoints(self, client, engine):
+        from nexus.db.models import Finding, Severity
+
+        st = client.get("/api/status").json()
+        assert "profile" in st
+
+        e1 = engine.create_engagement("ci.local", name="base")
+        engine.db.add_finding(Finding(
+            engagement_id=e1.id, host="ci.local", port=443, title="Missing HSTS",
+            cwe_id="CWE-523", severity=Severity.LOW,
+        ))
+        e2 = engine.create_engagement("ci.local", name="head")
+        engine.db.add_finding(Finding(
+            engagement_id=e2.id, host="ci.local", port=443, title="Missing HSTS",
+            cwe_id="CWE-523", severity=Severity.LOW,
+        ))
+        engine.db.add_finding(Finding(
+            engagement_id=e2.id, host="ci.local", port=6379, title="Redis Unauth",
+            cwe_id="CWE-306", severity=Severity.HIGH,
+        ))
+        engine.db.add_finding(Finding(
+            engagement_id=e2.id, host="ci.local", port=80, title="Ignored Info",
+            cwe_id="CWE-693", severity=Severity.INFO, false_positive=True,
+        ))
+
+        all_f = client.get(f"/api/engagements/{e2.id}/findings").json()
+        active_f = client.get(f"/api/engagements/{e2.id}/findings?include_suppressed=false").json()
+        assert len(all_f) == 3
+        assert len(active_f) == 2
+
+        sarif_resp = client.get(f"/api/engagements/{e2.id}/sarif")
+        assert sarif_resp.status_code == 200
+        doc = sarif_resp.json()
+        assert doc["version"] == "2.1.0"
+        assert len(doc["runs"][0]["results"]) == 3
+
+        assert client.get("/api/engagements/missing_id/sarif").status_code == 404
+
+        diff_resp = client.get(f"/api/diff?old={e1.id}&new={e2.id}")
+        assert diff_resp.status_code == 200
+        diff_data = diff_resp.json()
+        assert diff_data["counts"] == {"new": 1, "resolved": 0, "persistent": 1, "suppressed": 1}
+
+        assert client.get(f"/api/diff?old=missing&new={e2.id}").status_code == 404
+
 
 class TestFallbackHTML:
     def test_fallback_html_contains_nexus(self):

@@ -482,3 +482,26 @@ paths:
         assert persisted["CWE-693"].false_positive is True
         assert persisted["CWE-89"].false_positive is False
         assert engine.brain_stats().get("remediations", 0) >= 15
+
+    @pytest.mark.asyncio
+    async def test_run_scan_dispatches_network_auditors(self, engine: NexusEngine) -> None:
+        from unittest.mock import patch, AsyncMock
+        from nexus.core.config import ScanProfile
+        from nexus.db.models import Finding, Port, Severity, Target
+
+        engine.config.profile = ScanProfile.NETWORK
+        eng = engine.create_engagement("infra.local")
+        t = Target(engagement_id=eng.id, host="infra.local", ip="10.0.0.50", is_live=True)
+        engine.db.add_target(t)
+        engine.db.add_port(Port(target_id=t.id, port=6379, protocol="tcp", state="open", service="redis"))
+        engine.db.add_port(Port(target_id=t.id, port=445, protocol="tcp", state="open", service="microsoft-ds"))
+
+        net_mock = AsyncMock(side_effect=[
+            [Finding(host="infra.local", port=6379, protocol="redis", title="Redis Open", severity=Severity.HIGH, tool_source="redis_probe")],
+            [Finding(host="infra.local", port=445, protocol="smb", title="SMB Signing Disabled", severity=Severity.MEDIUM, tool_source="nmap_smb")],
+        ])
+        with patch("nexus.core.engine.audit_network_service", net_mock):
+            findings = await engine.run_scan(eng.id, "infra.local")
+
+        assert net_mock.await_count == 2
+        assert {f.tool_source for f in findings} == {"redis_probe", "nmap_smb"}

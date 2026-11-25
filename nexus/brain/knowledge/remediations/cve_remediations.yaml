@@ -57,3 +57,19 @@ remediations:
     detailed_fix: |
       Upgrade all Log4j-core artifacts to >= 2.17.1 (Java 8) or 2.12.4 (Java 7), avoiding relying solely on formatMsgNoLookups.
     tags: [log4j, java, jndi]
+
+  - id: CVE-2018-7600
+    title: Drupal Drupalgeddon 2 Form API RCE
+    severity: critical
+    short_fix: Upgrade Drupal Core immediately to 7.58+, 8.3.9+, 8.4.6+, or 8.5.1+ (or modern Drupal 10+).
+    detailed_fix: |
+      Apply official Drupal security release SA-CORE-2018-002 to sanitize Form API array keys in request payloads.
+    tags: [drupal, cms, rce]
+
+  - id: CVE-2023-23752
+    title: Joomla 4.x Webservice Config Disclosure
+    severity: medium
+    short_fix: Upgrade Joomla to 4.2.8 or later and rotate exposed database/service credentials.
+    detailed_fix: |
+      Update Joomla Core to 4.2.8+ so unauthenticated requests to /api/index.php/v1/config/application are rejected cleanly.
+    tags: [joomla, cms, exposure]

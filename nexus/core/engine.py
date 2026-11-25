@@ -47,6 +47,7 @@ from nexus.scanner.tls import audit_tls
 from nexus.scanner._http import parse_url_target, redact_headers
 from nexus.scanner.crawler import crawl_web
 from nexus.scanner.headers import audit_http_security
+from nexus.scanner.network_services import audit_network_service
 from nexus.scanner.openapi import audit_openapi_spec
 from nexus.correlator.baseline import apply_baseline_suppressions, load_ignore_rules, resolve_ignore_path
 from nexus.correlator.engine import correlate as correlate_findings
@@ -660,6 +661,8 @@ class NexusEngine:
         seen_tls: set[tuple[str, int]] = set()
         ssh_endpoints: list[tuple[str, int]] = []
         seen_ssh: set[tuple[str, int]] = set()
+        net_endpoints: list[tuple[str, int, str]] = []
+        seen_net: set[tuple[str, int]] = set()
         tech_tokens: set[str] = set()
         wafs_detected: set[str] = set()
         discovered_services: set[str] = set()
@@ -736,6 +739,13 @@ class NexusEngine:
                             if self.expert:
                                 self.expert.add_fact(f"service_{alias}", True, source="db")
                             discovered_services.add(alias)
+
+                    if p.port in (6379, 21, 445, 139, 9200) or any(
+                        tok in svc for tok in ("redis", "ftp", "smb", "microsoft-ds", "netbios-ssn", "elastic")
+                    ):
+                        if (host, p.port) not in seen_net:
+                            seen_net.add((host, p.port))
+                            net_endpoints.append((host, p.port, svc))
             else:
                 _add_url(f"http://{host}")
                 _add_url(f"https://{host}")
@@ -948,6 +958,23 @@ class NexusEngine:
                     all_findings.extend(hdr_findings)
                 except Exception as exc:
                     log.warning("[SCAN] audit_http_security failed: %s", exc)
+
+        # 7. Network & datastore configuration audits (SMB, FTP, Redis, Elasticsearch)
+        if profile_cfg.get("run_network_audits", True) and net_endpoints:
+            log.info("[SCAN] Auditing %d network/datastore service endpoint(s)", len(net_endpoints))
+            net_tasks = [
+                (f"net:{h}:{p}", audit_network_service(h, p, svc))
+                for h, p, svc in net_endpoints
+                if self._is_in_scope(h, p)
+            ]
+            net_results = await self.scheduler.run_parallel(net_tasks) if net_tasks else []
+            for tr in net_results:
+                if tr.error or tr.result is None:
+                    log.warning("[SCAN] audit_network_service failed (%s): %s", tr.name, tr.error)
+                    continue
+                for nf in tr.result:
+                    nf.engagement_id = eng_id
+                    all_findings.append(nf)
 
         # 4. Plugin scanners
         if self.plugins and self.plugins.registry.scanners:

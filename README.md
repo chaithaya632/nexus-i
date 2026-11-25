@@ -51,19 +51,27 @@ pip install -e ".[dev]"          # pytest, ruff, coverage
 nexus init
 
 # Run a full engagement (Recon → Scan → Correlate → Exploit → Report)
-nexus engage example.com --scope scope.yaml
+nexus engage example.com --scope scope.yaml --profile full
+
+# Fast DevSecOps / authenticated Web+API check with OpenAPI, baseline ignore & resume
+nexus engage api.example.com --scope scope.yaml --profile api --openapi openapi.yaml --auth-bearer "$TOKEN" --ignore .nexusignore
+nexus engage --resume <engagement_id>
 
 # Recon only
 nexus recon example.com
 
-# Scan an existing engagement
-nexus scan example.com -e <engagement_id>
+# Scan an existing engagement (custom headers, cookies, profile)
+nexus scan example.com -e <engagement_id> --profile web -H "X-Env: staging" --cookie "session=..."
 
 # Exploit
 nexus exploit -e <engagement_id>
 
-# Generate report (md, html, pdf, docx, json)
+# Generate report (md, html, pdf, docx, json, sarif)
 nexus report -e <engagement_id> -f html
+nexus report -e <engagement_id> -f sarif -o results.sarif
+
+# Diff two runs as a CI/CD regression gate
+nexus diff <baseline_eng_id> <current_eng_id> --fail-on-new critical,high
 
 # Check brain stats
 nexus kb stats

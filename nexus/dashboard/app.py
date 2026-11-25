@@ -24,7 +24,7 @@ from typing import Any
 
 try:
     from fastapi import FastAPI, WebSocket, WebSocketDisconnect
-    from fastapi.responses import HTMLResponse, FileResponse, JSONResponse
+    from fastapi.responses import HTMLResponse, FileResponse, JSONResponse, Response
     from fastapi.staticfiles import StaticFiles
     from fastapi.middleware.cors import CORSMiddleware
     HAS_FASTAPI = True
@@ -34,6 +34,9 @@ except ImportError:
 from nexus import __version__
 from nexus.core.config import NexusConfig
 from nexus.core.engine import NexusEngine
+from nexus.correlator.diff import diff_engagements
+from nexus.reporter.generator import ReportData, build_report_data
+from nexus.reporter.sarif import render_sarif
 
 log = logging.getLogger("nexus.dashboard")
 
@@ -83,6 +86,7 @@ class DashboardApp:
                 "booted": self.engine._booted,
                 "tier": self.engine.config.tier.value,
                 "stealth": self.engine.config.stealth.value,
+                "profile": self.engine.config.profile.value,
                 "brain": stats,
                 "ai": ai_status,
             }
@@ -110,13 +114,44 @@ class DashboardApp:
             return summary
 
         @app.get("/api/engagements/{eng_id}/findings")
-        async def get_findings(eng_id: str):
+        async def get_findings(eng_id: str, include_suppressed: bool = True):
             assert self.engine.db is not None
             findings = self.engine.db.get_findings(eng_id)
+            if not include_suppressed:
+                findings = [f for f in findings if not getattr(f, "false_positive", False)]
             return [
                 f.model_dump() if hasattr(f, "model_dump") else f
                 for f in findings
             ]
+
+        @app.get("/api/engagements/{eng_id}/sarif")
+        async def get_sarif(eng_id: str):
+            assert self.engine.db is not None
+            try:
+                data = build_report_data(self.engine.db, eng_id)
+            except ValueError:
+                return JSONResponse({"error": "not found"}, status_code=404)
+            sarif_data = ReportData(
+                meta=data.meta,
+                engagement=data.engagement,
+                targets=data.targets,
+                findings=data.findings + data.suppressed_findings,
+                chains=data.chains,
+                credentials=data.credentials,
+                severity_counts=data.severity_counts,
+                executive_summary=data.executive_summary,
+                methodology=data.methodology,
+                suppressed_findings=data.suppressed_findings,
+            )
+            return Response(content=render_sarif(sarif_data), media_type="application/sarif+json")
+
+        @app.get("/api/diff")
+        async def get_diff(old: str, new: str):
+            assert self.engine.db is not None
+            try:
+                return diff_engagements(self.engine.db, old, new)
+            except ValueError as exc:
+                return JSONResponse({"error": str(exc)}, status_code=404)
 
         @app.get("/api/engagements/{eng_id}/chains")
         async def get_chains(eng_id: str):

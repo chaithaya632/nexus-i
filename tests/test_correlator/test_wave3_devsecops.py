@@ -164,3 +164,14 @@ class TestExpandedKnowledgeAndRemediationPacks:
         r = rem.get_for_finding(cve_ids=["CVE-2024-23897"])
         assert r is not None
         assert "2.442" in r.short_fix
+
+        # CMS CVE bounds (Wave 4 accuracy)
+        d_vuln = {e.cve for _, e in kg.match_banner_vulns("http", "Drupal 7.50")}
+        d_patch = {e.cve for _, e in kg.match_banner_vulns("http", "Drupal 7.58")}
+        assert "CVE-2018-7600" in d_vuln
+        assert "CVE-2018-7600" not in d_patch
+
+        j_cms_vuln = {e.cve for _, e in kg.match_banner_vulns("http", "Joomla 4.2.5")}
+        j_cms_patch = {e.cve for _, e in kg.match_banner_vulns("http", "Joomla 4.2.8")}
+        assert "CVE-2023-23752" in j_cms_vuln
+        assert "CVE-2023-23752" not in j_cms_patch
