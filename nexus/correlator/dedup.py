@@ -89,8 +89,17 @@ def deduplicate_findings(findings: list[Finding]) -> list[Finding]:
 
 
 def _dedup_key(f: Finding) -> str:
-    """Generate a dedup key from a finding, preserving distinct endpoints."""
-    identifier = f.cwe_id.strip().upper() if f.cwe_id else _normalize_title(f.title)
+    """Generate a dedup key from a finding, preserving distinct passive checks and endpoints."""
+    cwe = (f.cwe_id or "").strip().upper()
+    norm_title = _normalize_title(f.title)
+    tool_src = (f.tool_source or "").strip().lower()
+    if tool_src.startswith("yaml_rule:"):
+        base = cwe or norm_title
+        identifier = f"{base}|{tool_src}"
+    elif tool_src in ("http_headers", "passive_dast", "exposure_probe", "crawler"):
+        identifier = f"{cwe}|{norm_title}" if cwe else norm_title
+    else:
+        identifier = cwe or norm_title
     endpoint = extract_endpoint(f)
     return f"{f.host.strip().lower()}:{f.port or 0}:{identifier}:{endpoint}"
 

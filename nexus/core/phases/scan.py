@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import os
 from pathlib import Path
@@ -9,8 +10,10 @@ from typing import TYPE_CHECKING, Any
 
 from nexus.core.auth import StatefulAuthSession
 from nexus.core.config import SCAN_PROFILE_SETTINGS, ScanProfile
+from nexus.correlator.dedup import extract_endpoint
 from nexus.db.models import EngagementPhase, Finding
 from nexus.scanner._http import parse_url_target, redact_headers
+from nexus.scanner.passive_dast import analyze_html_passive
 from nexus.scanner.yaml_rules import YamlPassiveRuleEngine
 from nexus.scanner.zap import zap_scan
 from nexus.stealth.controller import set_active_stealth
@@ -19,6 +22,90 @@ if TYPE_CHECKING:
     from nexus.core.engine import NexusEngine
 
 log = logging.getLogger("nexus.engine.scan")
+
+
+async def _run_passive_response_checks(
+    urls: list[str],
+    rule_engine: YamlPassiveRuleEngine,
+    auth_headers: dict[str, str],
+    eng_id: str,
+    *,
+    stealth: str | None = None,
+    already_seen: set[tuple[str, int | None, str, str, str]] | None = None,
+) -> list[Finding]:
+    """Fetch up to 25 scoped URLs concurrently and run YAML + HTML/JS passive checks."""
+    from nexus.scanner._http import make_http_client
+
+    passive_urls = urls[:25]
+    sem = asyncio.Semaphore(6)
+    findings: list[Finding] = []
+    seen: set[tuple[str, int | None, str, str, str]] = (
+        set(already_seen) if already_seen is not None else set()
+    )
+
+    async def _inspect_one(client: Any, target_url: str) -> list[Finding]:
+        async with sem:
+            try:
+                resp = await client.get(target_url)
+            except Exception as exc:
+                log.debug("[SCAN] YAML passive rule fetch failed for %s: %s", target_url, exc)
+                return []
+        raw_headers = getattr(resp, "headers", None)
+        if hasattr(raw_headers, "multi_items"):
+            hdr_items = list(raw_headers.multi_items())
+            rule_headers: Any = raw_headers
+        elif raw_headers is not None and hasattr(raw_headers, "items"):
+            hdr_items = list(raw_headers.items())
+            rule_headers = raw_headers
+        else:
+            hdr_items = []
+            rule_headers = {}
+        ctype = next(
+            (str(v) for k, v in hdr_items if str(k).lower() == "content-type"),
+            "",
+        )
+        raw_text = getattr(resp, "text", "")
+        body = raw_text if isinstance(raw_text, str) else ""
+        raw_status = getattr(resp, "status_code", 0)
+        status_code = (
+            raw_status if isinstance(raw_status, int) and not isinstance(raw_status, bool) else 0
+        )
+
+        found: list[Finding] = []
+        if rule_engine.rule_count > 0:
+            found.extend(
+                rule_engine.inspect_response(
+                    target_url,
+                    status_code=status_code,
+                    headers=rule_headers,
+                    body=body,
+                )
+            )
+        found.extend(analyze_html_passive(target_url, body, content_type=ctype))
+        return found
+
+    async with make_http_client(
+        headers=auth_headers or None, timeout=15.0, stealth=stealth
+    ) as client:
+        batches = await asyncio.gather(
+            *(_inspect_one(client, u) for u in passive_urls),
+            return_exceptions=True,
+        )
+
+    for target_url, batch in zip(passive_urls, batches, strict=True):
+        if isinstance(batch, BaseException):
+            log.debug("[SCAN] Passive inspection failed for %s: %s", target_url, batch)
+            continue
+        for pf in batch:
+            endpoint = extract_endpoint(pf) or target_url
+            dedup_key = (pf.host, pf.port, pf.tool_source, pf.title, endpoint)
+            if dedup_key in seen:
+                continue
+            seen.add(dedup_key)
+            pf.engagement_id = eng_id
+            findings.append(pf)
+
+    return findings
 
 
 class ScanPhase:
@@ -218,10 +305,15 @@ class ScanPhase:
                     _add_url(f"https://{host}")
 
         if not url_set and engine._is_in_scope(target):
-            if engine._is_in_scope(target, 80):
-                _add_url(f"http://{target}")
-            if engine._is_in_scope(target, 443):
-                _add_url(f"https://{target}")
+            if "://" in target:
+                thost, tport, _ = parse_url_target(target)
+                if thost and engine._is_in_scope(thost, tport):
+                    _add_url(target)
+            else:
+                if engine._is_in_scope(target, 80):
+                    _add_url(f"http://{target}")
+                if engine._is_in_scope(target, 443):
+                    _add_url(f"https://{target}")
 
         # Populate Expert RuleEngine, query ServiceRouter & WAFBypassLibrary
         effective_stealth = stealth
@@ -613,45 +705,34 @@ class ScanPhase:
             except Exception as exc:
                 log.warning("[SCAN] audit_auth_enforcement failed: %s", exc)
 
-        # 6e. Declarative YAML passive detection rules
+        # 6e. Declarative YAML passive detection rules & passive HTML/JS analysis
         if profile_cfg.get("run_headers", True) and scoped_urls:
             rule_engine = getattr(engine, "yaml_rules", None)
-            if rule_engine is None or rule_engine.rule_count == 0:
+            if rule_engine is None:
                 rules_dir = Path(__file__).resolve().parents[2] / "brain" / "knowledge" / "rules"
                 rule_engine = YamlPassiveRuleEngine()
                 rule_engine.load_directory(rules_dir)
-            if rule_engine.rule_count > 0:
-                log.info(
-                    "[SCAN] Running %d YAML passive rule(s) against %d URL(s)",
-                    rule_engine.rule_count,
-                    min(len(scoped_urls), 8),
+            log.info(
+                "[SCAN] Running %d YAML passive rule(s) + HTML/JS passive checks against %d URL(s)",
+                rule_engine.rule_count,
+                min(len(scoped_urls), 25),
+            )
+            prior_seen = {
+                (f.host, f.port, f.tool_source, f.title, extract_endpoint(f)) for f in all_findings
+            }
+            try:
+                all_findings.extend(
+                    await _run_passive_response_checks(
+                        scoped_urls,
+                        rule_engine,
+                        auth_headers,
+                        eng_id,
+                        stealth=effective_stealth,
+                        already_seen=prior_seen,
+                    )
                 )
-                try:
-                    from nexus.scanner._http import make_http_client
-
-                    async with make_http_client(
-                        headers=auth_headers or None, timeout=15.0
-                    ) as client:
-                        for target_url in scoped_urls[:8]:
-                            try:
-                                resp = await client.get(target_url)
-                                yr_findings = rule_engine.inspect_response(
-                                    target_url,
-                                    status_code=resp.status_code,
-                                    headers=dict(resp.headers),
-                                    body=resp.text,
-                                )
-                                for yf in yr_findings:
-                                    yf.engagement_id = eng_id
-                                all_findings.extend(yr_findings)
-                            except Exception as exc:
-                                log.debug(
-                                    "[SCAN] YAML passive rule fetch failed for %s: %s",
-                                    target_url,
-                                    exc,
-                                )
-                except Exception as exc:
-                    log.warning("[SCAN] YAML passive rule engine failed: %s", exc)
+            except Exception as exc:
+                log.warning("[SCAN] YAML passive rule engine failed: %s", exc)
 
         # 7. Network & datastore configuration audits
         if profile_cfg.get("run_network_audits", True) and net_endpoints:

@@ -2,8 +2,9 @@
 
 from __future__ import annotations
 
+import re
 from typing import Any
-from urllib.parse import urlparse
+from urllib.parse import parse_qsl, urlencode, urlparse, urlunparse
 
 import httpx
 
@@ -21,17 +22,77 @@ _SENSITIVE_HEADER_KEYS = frozenset(
         "api-key",
     }
 )
+_SENSITIVE_URL_PARAMS = frozenset(
+    {
+        "password",
+        "passwd",
+        "pwd",
+        "secret",
+        "api_key",
+        "apikey",
+        "access_token",
+        "auth_token",
+        "bearer",
+        "client_secret",
+        "reset_token",
+        "otp",
+        "otp_code",
+        "token",
+        "jwt",
+        "jsessionid",
+        "phpsessid",
+        "sid",
+        "sess_id",
+        "session_id",
+        "cftoken",
+    }
+)
+_URL_USERINFO_RE = re.compile(r"^([^:@\s]+):([^@\s]*)@(.+)$")
 
 
 def parse_url_target(url: str) -> tuple[str, int | None, str]:
     """Return (host, port, protocol) parsed from an HTTP/HTTPS URL."""
-    parsed = urlparse(url if "://" in url else f"http://{url}")
+    raw = (url or "").strip()
+    has_scheme = "://" in raw
+    parsed = urlparse(raw if has_scheme else f"http://{raw}")
+    try:
+        port = parsed.port
+    except ValueError:
+        port = None
     proto = parsed.scheme.lower() or "http"
+    if not has_scheme and port in (443, 8443):
+        proto = "https"
     host = (parsed.hostname or "").strip().lower()
-    port = parsed.port
     if port is None:
         port = 443 if proto == "https" else 80
     return host, port, proto
+
+
+def mask_secret_value(raw: str) -> str:
+    """Mask secret tokens cleanly while leaving short prefix/suffix context."""
+    text = (raw or "").strip()
+    if len(text) <= 10:
+        return "*" * max(len(text), 4)
+    return f"{text[:4]}***{text[-4:]}"
+
+
+def redact_sensitive_url(url: str) -> str:
+    """Redact userinfo passwords and sensitive query parameter values in URLs."""
+    if not url:
+        return ""
+    parsed = urlparse(url)
+    netloc = parsed.netloc
+    m = _URL_USERINFO_RE.match(netloc)
+    if m:
+        netloc = f"{m.group(1)}:***@{m.group(3)}"
+    query = parsed.query
+    if query:
+        pairs = parse_qsl(query, keep_blank_values=True)
+        redacted_pairs = [
+            (k, "***REDACTED***" if k.lower() in _SENSITIVE_URL_PARAMS else v) for k, v in pairs
+        ]
+        query = urlencode(redacted_pairs)
+    return urlunparse((parsed.scheme, netloc, parsed.path, parsed.params, query, parsed.fragment))
 
 
 def redact_headers(headers: dict[str, str] | None) -> dict[str, str]:

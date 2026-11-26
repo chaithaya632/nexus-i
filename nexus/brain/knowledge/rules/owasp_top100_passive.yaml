@@ -1,0 +1,1199 @@
+rules:
+  # ============================================================================
+  # A01 — Broken Access Control (10 rules)
+  # ============================================================================
+
+  - id: owasp-a01-cors-null-origin
+    title: CORS Policy Trusts Null Origin
+    owasp_category: "A01 — Broken Access Control"
+    severity: high
+    cwe_id: CWE-942
+    description: HTTP response returns Access-Control-Allow-Origin set to 'null', which can be forged by sandboxed iframes or local files.
+    remediation: Remove 'null' from Access-Control-Allow-Origin and validate origins against an explicit allowlist of trusted HTTPS domains.
+    header_regex: '(?:^|\n)Access-Control-Allow-Origin\s*:\s*null(?:\s|$)'
+    confirmed: true
+
+  - id: owasp-a01-cors-http-origin-credentials
+    title: CORS Allows Credentials for Plaintext HTTP Origin
+    owasp_category: "A01 — Broken Access Control"
+    severity: high
+    cwe_id: CWE-942
+    description: Response enables Access-Control-Allow-Credentials true alongside an unencrypted http:// origin, exposing authenticated cross-origin data to network interception.
+    remediation: Permit Access-Control-Allow-Credentials only for explicitly allowlisted https:// origins.
+    header_regex: '(?:^|\n)(?:Access-Control-Allow-Origin\s*:\s*http://[^\r\n]{1,120}[\s\S]{0,1200}\nAccess-Control-Allow-Credentials\s*:\s*true|Access-Control-Allow-Credentials\s*:\s*true[\s\S]{0,1200}\nAccess-Control-Allow-Origin\s*:\s*http://[^\r\n]{1,120})(?:\s|$)'
+    confirmed: true
+
+  - id: owasp-a01-git-config-exposed
+    title: Exposed Git Configuration File (/.git/config)
+    owasp_category: "A01 — Broken Access Control"
+    severity: high
+    cwe_id: CWE-538
+    description: Publicly accessible .git/config file reveals repository remotes, branch structures, and potentially embedded repository tokens.
+    remediation: Block public access to /.git and all dot-directories at the web server or reverse proxy layer.
+    url_regex: '/\.git/config(?:\?|$)'
+    status_codes: [200]
+    exclude_body_regex: '<!doctype\s+html|<html'
+    body_regex: '\[core\][\s\S]{0,400}(?:repositoryformatversion|bare\s*=|filemode\s*=)|\[remote\s+"[^"]{1,40}"\]'
+    confirmed: true
+
+  - id: owasp-a01-svn-entries-exposed
+    title: Exposed Subversion Metadata (/.svn/entries or wc.db)
+    owasp_category: "A01 — Broken Access Control"
+    severity: high
+    cwe_id: CWE-538
+    description: Publicly accessible Subversion metadata file discloses source directory layout and revision history.
+    remediation: Deny HTTP access to .svn directories and remove VCS metadata from web deployment artifacts.
+    url_regex: '/\.svn/(?:entries|wc\.db)(?:\?|$)'
+    status_codes: [200]
+    exclude_body_regex: '<!doctype\s+html|<html'
+    body_regex: '(?:^\s*(?:8|9|10|11|12)\s*\r?\n\s*dir\s*\r?\n|SQLite format 3)'
+    confirmed: true
+
+  - id: owasp-a01-htaccess-htpasswd-exposed
+    title: Exposed Apache Access Control File (.htaccess / .htpasswd)
+    owasp_category: "A01 — Broken Access Control"
+    severity: high
+    cwe_id: CWE-538
+    description: Apache .htaccess or .htpasswd file is served directly, leaking routing rules, auth realms, or password hashes.
+    remediation: Configure the web server to deny all requests matching ^\.ht* patterns.
+    url_regex: '/\.(?:htaccess|htpasswd)(?:\?|$)'
+    status_codes: [200]
+    exclude_body_regex: '<!doctype\s+html|<html'
+    body_regex: '(?:AuthType\s+(?:Basic|Digest)|AuthUserFile\s+|RewriteRule\s+|Require\s+(?:valid-user|all\s+(?:denied|granted))|(?:^|\n)[a-zA-Z0-9._-]{1,40}:\$(?:apr1|2[aby]|5|6)\$)'
+    confirmed: true
+
+  - id: owasp-a01-admin-interface-noindex-missing
+    title: Administrative Interface Exposed Without Search Engine Indexing Restriction
+    owasp_category: "A01 — Broken Access Control"
+    severity: low
+    cwe_id: CWE-425
+    description: An administrative portal responds with HTTP 200 without an X-Robots-Tag noindex header or robots meta tag, facilitating discovery.
+    remediation: "Restrict administrative paths to VPN/internal networks and add X-Robots-Tag: noindex, nofollow."
+    url_regex: '/(?:admin|administrator|manager|wp-admin|cpanel|dashboard/admin)(?:/|$)'
+    status_codes: [200]
+    content_type_regex: 'text/html|application/xhtml\+xml'
+    absent_header_regex: '(?:^|\n)X-Robots-Tag\s*:\s*[^\r\n]{0,80}(?:noindex|none)'
+    exclude_body_regex: '<meta\s+(?:[^>]{0,80}\bname\s*=\s*["'']?robots["'']?[^>]{0,80}\bnoindex|[^>]{0,80}\bnoindex[^>]{0,80}\bname\s*=\s*["'']?robots["'']?)'
+    body_regex: '(?:<title>[^<]{0,80}(?:admin|dashboard|manager|control\s+panel)|name=["'']?(?:password|pass|admin)["'']?)'
+    confirmed: false
+
+  - id: owasp-a01-kubeconfig-compose-exposed
+    title: Exposed Container Orchestration or Kubernetes Configuration
+    owasp_category: "A01 — Broken Access Control"
+    severity: critical
+    cwe_id: CWE-538
+    description: Publicly accessible Kubernetes kubeconfig or Docker Compose manifest exposes cluster endpoints, service topology, or embedded secrets.
+    remediation: Remove orchestration configs from web roots and enforce strict web server path deny rules.
+    url_regex: '/(?:kubeconfig|\.kube/config|docker-compose\.ya?ml|compose\.ya?ml)(?:\?|$)'
+    status_codes: [200]
+    exclude_body_regex: '<!doctype\s+html|<html'
+    body_regex: '(?:apiVersion\s*:\s*v1[\s\S]{0,300}kind\s*:\s*Config|clusters\s*:[\s\S]{0,200}certificate-authority|services\s*:[\s\S]{0,300}(?:image|ports|environment)\s*:)'
+    confirmed: true
+
+  - id: owasp-a01-idor-sequential-user-leak
+    title: Predictable Sequential Identifiers Exposed in API User/Resource Payload
+    owasp_category: "A01 — Broken Access Control"
+    severity: medium
+    cwe_id: CWE-639
+    description: API JSON response returns small sequential numeric user or order identifiers alongside sensitive account attributes, indicating potential IDOR enumeration risk.
+    remediation: Use non-sequential UUIDs/opaque tokens for public object references and enforce object-level authorization on every request.
+    url_regex: '/api/(?:v\d+/)?(?:users?|accounts?|profiles?|orders?|invoices?)(?:/|\?|$)'
+    status_codes: [200]
+    content_type_regex: 'application/json|application/problem\+json'
+    body_regex: '"(?:user_?id|account_?id|customer_?id|order_?id)"\s*:\s*[1-9]\d{0,7}\b[\s\S]{0,300}"(?:email|username|phone|address|ssn)"\s*:'
+    confirmed: false
+
+  - id: owasp-a01-ds-store-or-backup-exposed
+    title: Exposed macOS .DS_Store or Backup/Dump Artifact
+    owasp_category: "A01 — Broken Access Control"
+    severity: medium
+    cwe_id: CWE-538
+    description: Backup file, editor swap file, SQL dump, or .DS_Store metadata file is publicly readable and can expose directory entries or database contents.
+    remediation: Remove backup, dump, swap, and OS metadata files from web roots and deny access to backup extensions.
+    url_regex: '/(?:\.DS_Store|[^/]{1,80}\.(?:bak|old|orig|sql|swp))(?:\?|$)'
+    status_codes: [200]
+    exclude_body_regex: '<!doctype\s+html|<html'
+    body_regex: '(?:Bud1|b0VIM\s+\d+\.\d+|--\s*(?:MySQL|PostgreSQL|pg_dump|MariaDB)\s+dump|CREATE\s+TABLE\s+[`"\[]?[a-zA-Z0-9_]{1,40}|INSERT\s+INTO\s+[`"\[]?[a-zA-Z0-9_]{1,40})'
+    confirmed: true
+
+  - id: owasp-a01-proxy-override-header-exposed
+    title: Reverse Proxy Routing Override Header Exposed in Response
+    owasp_category: "A01 — Broken Access Control"
+    severity: medium
+    cwe_id: CWE-284
+    description: Response headers expose or advertise routing override headers (such as X-Original-URL or X-Rewrite-URL) that may allow path-based access control bypass if trusted from clients.
+    remediation: Strip client-supplied routing override headers at the edge proxy and do not rely on them for authorization decisions.
+    header_regex: '(?:^|\n)(?:(?:X-Original-URL|X-Rewrite-URL|X-Override-URL|X-Custom-IP-Authorization)\s*:\s*[^\r\n]{1,120}|Vary\s*:[^\r\n]{0,120}\b(?:X-Original-URL|X-Rewrite-URL)\b)'
+    confirmed: true
+
+  # ============================================================================
+  # A02 — Cryptographic Failures (10 rules)
+  # ============================================================================
+
+  - id: owasp-a02-aws-access-key-leak
+    title: AWS Access Key ID Disclosed in HTTP Response
+    owasp_category: "A02 — Cryptographic Failures"
+    severity: critical
+    cwe_id: CWE-312
+    description: An AWS IAM access key identifier (AKIA/ASIA/AROA/AIDA) appears in the HTTP response body.
+    remediation: Revoke and rotate the exposed AWS credentials immediately and migrate workloads to IAM roles or a secrets manager.
+    body_regex: '\b(?-i:(?:AKIA|ASIA|AROA|AIDA)[0-9A-Z]{16})\b'
+    confirmed: true
+
+  - id: owasp-a02-private-key-pem-leak
+    title: Cryptographic Private Key PEM Block Exposed
+    owasp_category: "A02 — Cryptographic Failures"
+    severity: critical
+    cwe_id: CWE-312
+    description: HTTP response body discloses a PEM-encoded private key block (RSA, EC, DSA, OpenSSH, or PGP).
+    remediation: Revoke the compromised key pair immediately, remove the private key from web-accessible assets, and issue fresh keys.
+    body_regex: '-----BEGIN\s+(?:RSA|EC|DSA|OPENSSH|PGP|ENCRYPTED)?\s*PRIVATE KEY-----'
+    confirmed: true
+
+  - id: owasp-a02-api-token-secret-leak
+    title: Third-Party Private API Secret or Token Disclosed in Response
+    owasp_category: "A02 — Cryptographic Failures"
+    severity: high
+    cwe_id: CWE-312
+    description: HTTP response discloses a recognizable private third-party API token or secret key (Stripe live, GitHub PAT, GitLab PAT, or Slack token).
+    remediation: Rotate exposed API keys immediately, restrict key scopes, and store secrets exclusively on the backend.
+    body_regex: '(?-i:(?:sk_live_[0-9a-zA-Z]{20,64}|rk_live_[0-9a-zA-Z]{20,64}|gh[pousr]_[A-Za-z0-9_]{30,80}|glpat-[A-Za-z0-9_-]{20,64}|xox[baprs]-[0-9]{8,14}-[0-9A-Za-z-]{15,64}))'
+    confirmed: true
+
+  - id: owasp-a02-cleartext-secret-in-config
+    title: Cleartext Password or Secret Key Exposed in JSON/YAML Config
+    owasp_category: "A02 — Cryptographic Failures"
+    severity: high
+    cwe_id: CWE-312
+    description: Non-HTML configuration or API response discloses a cleartext secret field such as db_password, client_secret, jwt_secret, or private_key.
+    remediation: Remove secrets from serialized configs, use encrypted secret stores, and redact sensitive fields before serialization.
+    exclude_body_regex: '<!doctype\s+html|<html'
+    body_regex: '(?:^|[\s{,])["'']?(?:db_password|database_password|client_secret|jwt_secret|secret_key|aws_secret_access_key|private_key)["'']?\s*[:=]\s*["''][^"''\r\n\s*${][^"''\r\n\s*]{5,80}["'']'
+    confirmed: false
+
+  - id: owasp-a02-cleartext-http-form-action
+    title: HTML Form Transmits Data Over Unencrypted HTTP
+    owasp_category: "A02 — Cryptographic Failures"
+    severity: medium
+    cwe_id: CWE-319
+    description: HTML document contains a form whose action targets an unencrypted http:// URL, exposing user submissions to passive eavesdropping.
+    remediation: Change all form action attributes to HTTPS URLs or relative paths served exclusively over TLS.
+    content_type_regex: 'text/html|application/xhtml\+xml'
+    status_codes: [200]
+    body_regex: '<form\b[^>]{0,200}\baction\s*=\s*["'']?http://[^\s"''<>]{1,120}'
+    confirmed: true
+
+  - id: owasp-a02-samesite-none-without-secure
+    title: Cookie Sets SameSite=None Without Secure Attribute
+    owasp_category: "A02 — Cryptographic Failures"
+    severity: medium
+    cwe_id: CWE-614
+    description: Set-Cookie header specifies SameSite=None without the Secure flag, violating modern browser transport guarantees and exposing cookies over HTTP.
+    remediation: Add the Secure attribute to every cookie with SameSite=None or restrict SameSite to Lax/Strict.
+    header_regex: '(?:^|\n)Set-Cookie\s*:(?![^\r\n]*;\s*Secure\b)[^\r\n]*;\s*SameSite=None\b'
+    confirmed: true
+
+  - id: owasp-a02-weak-hash-in-auth-cookie
+    title: Weak MD5 or SHA-1 Hash Algorithm Declared in Authentication Header
+    owasp_category: "A02 — Cryptographic Failures"
+    severity: medium
+    cwe_id: CWE-328
+    description: Response headers advertise a weak MD5 or SHA-1 authentication/digest algorithm in WWW-Authenticate or explicit digest/signature policy headers.
+    remediation: Replace MD5 and SHA-1 authentication digests with SHA-256+, HMAC-SHA256, or opaque CSPRNG session tokens.
+    header_regex: '(?:^|\n)(?:WWW-Authenticate\s*:[^\r\n]{0,160}\balgorithm\s*=\s*"?(?:MD5(?:-sess)?|SHA-?1)"?\b|(?:X-Signature-Alg|Digest)\s*:[^\r\n]{0,80}\b(?:md5|sha-?1)=)'
+    confirmed: true
+
+  - id: owasp-a02-jwt-alg-none-indicator
+    title: "JWT Token With Unsecured 'alg: none' Header Observed"
+    owasp_category: "A02 — Cryptographic Failures"
+    severity: critical
+    cwe_id: CWE-347
+    description: "A JSON Web Token in the response uses 'alg: none' (eyJhbGciOiJub25l...), indicating missing cryptographic signature integrity."
+    remediation: "Reject unsigned JWTs ('alg: none') on the server and strictly enforce an expected asymmetric or HMAC signing algorithm."
+    body_regex: '(?-i:eyJ(?:hbGciOiJub25l|0eXAiOiJKV1QiLCJhbGciOiJub25l)[A-Za-z0-9_-]{0,40}\.[A-Za-z0-9_-]{4,400}\.)'
+    confirmed: true
+
+  - id: owasp-a02-weak-hsts-max-age
+    title: Weak or Disabled HSTS max-age Directive
+    owasp_category: "A02 — Cryptographic Failures"
+    severity: low
+    cwe_id: CWE-326
+    description: HTTPS response sets Strict-Transport-Security with max-age=0 or an unusually short duration under 100,000 seconds, weakening TLS downgrade protection.
+    remediation: Configure Strict-Transport-Security with max-age=31536000 (1 year) or greater and includeSubDomains where appropriate.
+    scheme: https
+    header_regex: '(?:^|\n)Strict-Transport-Security\s*:\s*[^\r\n]{0,60}\bmax-age=(?:0|[1-9][0-9]{0,4})\b'
+    confirmed: true
+
+  - id: owasp-a02-basic-auth-creds-in-url-or-body
+    title: Embedded Credentials Disclosed in HTTP URL Authority (user:pass@host)
+    owasp_category: "A02 — Cryptographic Failures"
+    severity: high
+    cwe_id: CWE-319
+    description: Response embeds username and password credentials directly inside an HTTP(S) URL authority string.
+    remediation: Remove embedded credentials from URLs and pass secrets only through secure authorization headers or credential stores over TLS.
+    body_regex: 'https?://(?!(?:user:pass|username:password)@)[a-zA-Z0-9._-]{1,40}:[^\s@/<>"''\\]{3,60}@(?!example\.com\b)[a-zA-Z0-9.-]{2,80}'
+    confirmed: false
+
+  # ============================================================================
+  # A03 — Injection (10 rules)
+  # ============================================================================
+
+  - id: owasp-a03-sql-error-disclosure
+    title: Database SQL Syntax or Query Error Disclosed in Response
+    owasp_category: "A03 — Injection"
+    severity: high
+    cwe_id: CWE-89
+    description: Response body leaks a raw SQL database error message (MySQL, PostgreSQL, MSSQL, Oracle, or SQLite), indicating unhandled query errors and potential SQL injection exposure.
+    remediation: Use parameterized queries/prepared statements everywhere and suppress detailed database errors in HTTP responses.
+    status_codes: [200, 400, 500, 502, 503]
+    body_regex: '(?:SQL syntax[^\r\n]{0,60}MySQL|Warning\s*:\s*(?:mysql|mysqli|pg|sqlite3|oci|sqlsrv)_|PostgreSQL\s+query\s+failed|pg_query\(\)|SQLite3::SQLException|ORA-0(?:09|17|65)\d{2}|Microsoft\s+OLE\s+DB\s+Provider\s+for\s+SQL\s+Server|Unclosed\s+quotation\s+mark\s+after\s+the\s+character\s+string|ODBC\s+SQL\s+Server\s+Driver)'
+    confirmed: true
+
+  - id: owasp-a03-template-engine-error-leak
+    title: Server-Side Template Engine Exception Disclosed
+    owasp_category: "A03 — Injection"
+    severity: medium
+    cwe_id: CWE-1336
+    description: Response exposes a template engine parsing or runtime exception (Jinja2, Twig, Freemarker, Velocity, Handlebars, or ERB).
+    remediation: Never render user-supplied input directly as template source and return generic error pages for template exceptions.
+    status_codes: [200, 500, 502]
+    body_regex: '(?:jinja2\.exceptions\.Template(?:Syntax|Assertion|Runtime)?Error|Twig\\Error\\(?:Syntax|Runtime|Loader)Error|freemarker\.template\.TemplateException|org\.apache\.velocity\.exception\.|Handlebars\.Exception|MustacheException|erb:\d+:in\s+)'
+    confirmed: true
+
+  - id: owasp-a03-xml-parser-error-disclosure
+    title: XML Parser Exception or Schema Error Disclosed
+    owasp_category: "A03 — Injection"
+    severity: medium
+    cwe_id: CWE-20
+    description: Response leaks an internal XML or XPath parser exception (lxml, Expat, SAXParseException, javax.xml.xpath, or SimpleXMLElement).
+    remediation: Validate XML inputs strictly against schemas, harden XML parsers, and catch parser exceptions cleanly.
+    status_codes: [200, 400, 500]
+    body_regex: '(?:lxml\.etree\.XMLSyntaxError|xml\.parsers\.expat\.ExpatError|org\.xml\.sax\.SAXParseException|javax\.xml\.xpath\.XPathExpressionException|DOMDocument::loadXML\(\)|SimpleXMLElement::__construct\(\))'
+    confirmed: true
+
+  - id: owasp-a03-ldap-error-disclosure
+    title: LDAP Directory Query Error String Disclosed
+    owasp_category: "A03 — Injection"
+    severity: medium
+    cwe_id: CWE-90
+    description: HTTP response discloses an LDAP filter or distinguished name syntax error, indicating unhandled directory query input.
+    remediation: Escape all untrusted input using standard LDAP filter/DN escaping helpers and suppress internal directory errors.
+    status_codes: [200, 400, 500]
+    body_regex: '(?:javax\.naming\.directory\.InvalidSearchFilterException|ldap_search\(\):\s+Search:|LDAPException|Invalid\s+DN\s+syntax|com\.sun\.jndi\.ldap\.LdapCtx|Bad\s+search\s+filter)'
+    confirmed: true
+
+  - id: owasp-a03-nosql-parser-error-leak
+    title: NoSQL / MongoDB Query Parser Exception Disclosed
+    owasp_category: "A03 — Injection"
+    severity: medium
+    cwe_id: CWE-943
+    description: Response discloses a MongoDB or NoSQL query/BSON parsing error (such as CastError, BSONTypeError, or unknown top level operator).
+    remediation: Enforce strict schema/type validation on request inputs so objects and query operators cannot reach NoSQL queries.
+    status_codes: [200, 400, 500]
+    body_regex: '(?:Mongo(?:Server)?Error|MongoNetworkError|CastError:\s+Cast\s+to\s+ObjectId\s+failed|BSONTypeError|unknown\s+top\s+level\s+operator|pymongo\.errors\.OperationFailure)'
+    confirmed: true
+
+  - id: owasp-a03-dom-xss-source-to-sink-js
+    title: Client-Side JavaScript Connects Untrusted URL Source to DOM Sink
+    owasp_category: "A03 — Injection"
+    severity: medium
+    cwe_id: CWE-79
+    description: Inline or bundled JavaScript references browser location/referrer/window.name sources in the same statement as innerHTML, outerHTML, insertAdjacentHTML, document.write, or eval.
+    remediation: Use textContent or safe DOM APIs instead of HTML-interpreting sinks and sanitize untrusted client values.
+    content_type_regex: 'text/html|javascript|ecmascript'
+    status_codes: [200]
+    body_regex: '(?:\b(?:innerHTML|outerHTML)\s*=[^;,\r\n]{0,80}|\b(?:insertAdjacentHTML|document\.write|eval)\s*\([^);\r\n]{0,80})(?:location\.(?:search|hash|href)|document\.(?:URL|referrer)|window\.name)'
+    confirmed: false
+
+  - id: owasp-a03-framework-unsafe-html-binding
+    title: Frontend Framework Unsafe Raw HTML Binding Pattern Detected
+    owasp_category: "A03 — Injection"
+    severity: info
+    cwe_id: CWE-79
+    description: Response contains framework raw-HTML rendering directives (v-html, [innerHTML], Svelte @html, or $sce.trustAsHtml) requiring sanitization review.
+    remediation: Avoid raw HTML bindings or sanitize content with an audited HTML sanitizer such as DOMPurify before rendering.
+    content_type_regex: 'text/html|javascript|ecmascript'
+    status_codes: [200]
+    body_regex: '(?:\bv-html\s*=\s*["''][^"'']{1,60}["'']|\[innerHTML\]\s*=\s*["''][^"'']{1,60}["'']|\{@html\s+[^}]{1,60}\}|\$sce\.trustAsHtml\s*\()'
+    confirmed: false
+
+  - id: owasp-a03-json-served-as-text-html
+    title: Raw JSON Payload Served With text/html Content-Type
+    owasp_category: "A03 — Injection"
+    severity: medium
+    cwe_id: CWE-79
+    description: Endpoint returns a JSON object or array payload with Content-Type text/html, enabling browser HTML/script interpretation of reflected JSON strings.
+    remediation: "Serve JSON endpoints with Content-Type: application/json; charset=utf-8 and X-Content-Type-Options: nosniff."
+    content_type_regex: 'text/html'
+    status_codes: [200]
+    exclude_body_regex: '<!doctype\s+html|<html'
+    body_regex: '^\s*(?:\{\s*"[a-zA-Z0-9_-]{1,40}"\s*:|\[\s*\{\s*"[a-zA-Z0-9_-]{1,40}"\s*:)'
+    confirmed: true
+
+  - id: owasp-a03-os-command-error-disclosure
+    title: Operating System Command Execution Error Disclosed
+    owasp_category: "A03 — Injection"
+    severity: high
+    cwe_id: CWE-78
+    description: Response leaks shell or subprocess execution errors (sh/bash not found, CalledProcessError, or Windows command error).
+    remediation: Replace shell command invocations with safe native library APIs and never expose subprocess stderr to clients.
+    status_codes: [200, 500, 502]
+    body_regex: '(?:sh:\s+\d+:\s+[^:\r\n]{1,40}:\s+not\s+found|/bin/(?:sh|bash):\s+[^:\r\n]{1,60}:\s+(?:command\s+not\s+found|Permission\s+denied)|subprocess\.CalledProcessError|is\s+not\s+recognized\s+as\s+an\s+internal\s+or\s+external\s+command)'
+    confirmed: true
+
+  - id: owasp-a03-crlf-or-header-injection-hint
+    title: Encoded CRLF or Path-Separator Indicator in Response Headers
+    owasp_category: "A03 — Injection"
+    severity: medium
+    cwe_id: CWE-113
+    description: Response headers (Location, Set-Cookie, Content-Disposition, or Refresh) contain raw or encoded CR/LF sequences that may indicate incomplete header sanitization.
+    remediation: Reject or strip CR (\r), LF (\n), and percent-encoded %0d/%0a sequences before writing dynamic values into HTTP headers.
+    header_regex: '(?:^|\n)(?:Location|Set-Cookie|Content-Disposition|Refresh)\s*:[^\r\n]{0,200}(?:%0[da]|\\r\\n)'
+    confirmed: false
+
+  # ============================================================================
+  # A04 — Insecure Design (10 rules)
+  # ============================================================================
+
+  - id: owasp-a04-hidden-price-or-role-input
+    title: Sensitive Business Logic Field Exposed in Hidden HTML Form Input
+    owasp_category: "A04 — Insecure Design"
+    severity: medium
+    cwe_id: CWE-472
+    description: HTML form contains a hidden input for price, amount, discount, role, or privilege flags, which attackers can modify client-side if trusted by the backend.
+    remediation: Derive pricing, discounts, and user roles strictly on the server from authoritative session and catalog data.
+    content_type_regex: 'text/html|application/xhtml\+xml'
+    status_codes: [200]
+    body_regex: '<input\b(?:[^>]{0,140}\btype\s*=\s*["'']?hidden["'']?[^>]{0,140}\bname\s*=\s*["'']?(?:price|amount|total|discount|cost|role|is_admin|admin|privilege|tier)(?=["''\s/>]|$)|[^>]{0,140}\bname\s*=\s*["'']?(?:price|amount|total|discount|cost|role|is_admin|admin|privilege|tier)(?=["''\s/>]|$)[^>]{0,140}\btype\s*=\s*["'']?hidden["'']?)'
+    confirmed: false
+
+  - id: owasp-a04-client-side-role-or-price-gate
+    title: Client-Side JavaScript Authorization or Role Check Indicator
+    owasp_category: "A04 — Insecure Design"
+    severity: low
+    cwe_id: CWE-602
+    description: Client-side script reads role/admin flags from browser storage or compares role strings directly, suggesting potential reliance on client-side access gates.
+    remediation: Treat client-side role checks purely as UI hints and enforce all authorization checks server-side on every API call.
+    content_type_regex: 'text/html|javascript|ecmascript'
+    status_codes: [200]
+    body_regex: '(?:localStorage|sessionStorage)\.getItem\s*\(\s*["''](?:role|is_?admin|permissions?|tier|plan|admin)["'']\s*\)|\b(?:isAdmin|hasAdminAccess|userRole)\s*===?\s*["''](?:admin|superuser|root)["'']'
+    confirmed: false
+
+  - id: owasp-a04-missing-ratelimit-on-auth-endpoint
+    title: Authentication or Token Endpoint Lacks Rate-Limiting Headers
+    owasp_category: "A04 — Insecure Design"
+    severity: low
+    cwe_id: CWE-799
+    description: Response from an authentication, token, or password-recovery endpoint includes no standard rate-limit headers (X-RateLimit-Limit, RateLimit-Limit, or Retry-After).
+    remediation: Enforce per-IP and per-account rate limiting, progressive backoff, and lockout controls on authentication and recovery endpoints.
+    url_regex: '/(?:login|signin|auth|token|oauth/token|forgot-password|reset-password|otp|verify)(?:/|\?|$)'
+    exclude_url_regex: '\.(?:css|js|png|jpe?g|gif|svg|ico|woff2?|ttf|eot|map)(?:\?|$)'
+    content_type_regex: 'application/json|text/html|application/xhtml\+xml|text/plain'
+    status_codes: [200, 400, 401, 403]
+    absent_header_regex: '(?:^|\n)(?:X-RateLimit-Limit|RateLimit-Limit|X-Rate-Limit-Limit|Retry-After)\s*:'
+    confirmed: false
+
+  - id: owasp-a04-workflow-bypass-state-leak
+    title: Internal Workflow State or Bypass Flag Disclosed in Response
+    owasp_category: "A04 — Insecure Design"
+    severity: medium
+    cwe_id: CWE-841
+    description: API or diagnostic JSON payload exposes internal workflow flags (such as bypass_check, skip_verification, or debug_step).
+    remediation: Remove debug/bypass workflow flags from production code and enforce mandatory server-side state transitions.
+    exclude_body_regex: '<!doctype\s+html|<html'
+    content_type_regex: 'application/json|text/plain'
+    status_codes: [200, 400, 403]
+    body_regex: '"(?:bypass_?(?:check|auth|otp|2fa|mfa|verification)|skip_?(?:verification|payment|step)|debug_?step|workflow_?override)"\s*:\s*(?:true|false|\d+|"[^"]{1,40}")'
+    confirmed: false
+
+  - id: owasp-a04-unrestricted-file-upload-form
+    title: File Upload Input Lacks Client-Side File Type Constraints
+    owasp_category: "A04 — Insecure Design"
+    severity: info
+    cwe_id: CWE-434
+    description: Multipart HTML form contains an <input type='file'> control without an accept filter attribute, prompting upload validation review.
+    remediation: Enforce server-side content-type, magic-byte, size, and allowlist extension checks and store uploads outside the webroot.
+    content_type_regex: 'text/html|application/xhtml\+xml'
+    status_codes: [200]
+    body_regex: '<input\b(?![^>]{0,200}\baccept\s*=)(?:[^>]{0,140}\btype\s*=\s*["'']?file(?=["''\s/>]|$)[^>]{0,140}|[^>]{0,140}\bname\s*=\s*["'']?[a-zA-Z0-9_-]{1,40}["'']?[^>]{0,140}\btype\s*=\s*["'']?file(?=["''\s/>]|$))'
+    confirmed: false
+
+  - id: owasp-a04-unbounded-pagination-query
+    title: Unbounded Resource Pagination or Page-Size Request Indicator
+    owasp_category: "A04 — Insecure Design"
+    severity: low
+    cwe_id: CWE-770
+    description: Endpoint URL or JSON response reflects an excessively large page size/limit parameter (>= 1000), risking resource exhaustion without bounded pagination caps.
+    remediation: Enforce a strict server-side maximum page size (e.g. 100 items) regardless of caller-supplied limit parameters.
+    url_regex: '[?&](?:limit|per_?page|page_?size|count|max)=[1-9][0-9]{3,6}(?:&|$)'
+    status_codes: [200]
+    confirmed: false
+
+  - id: owasp-a04-fail-open-mode-disclosed
+    title: Fail-Open or Insecure Verification Bypass Configuration Disclosed
+    owasp_category: "A04 — Insecure Design"
+    severity: high
+    cwe_id: CWE-636
+    description: API or configuration JSON explicitly exposes fail-open security flags (fail_open, skip_auth, allow_insecure, or verify_tls disabled).
+    remediation: Configure security controls to fail closed by default and forbid disabling TLS or auth verification outside isolated unit tests.
+    exclude_body_regex: '<!doctype\s+html|<html'
+    content_type_regex: 'application/json|text/plain'
+    status_codes: [200]
+    body_regex: '(?:"(?:fail_?open|allow_?insecure|skip_?auth|disable_?auth)"\s*:\s*true|"(?:verify_?tls|verify_?ssl|enforce_?auth)"\s*:\s*false)'
+    confirmed: false
+
+  - id: owasp-a04-openapi-unsecured-write-operations
+    title: OpenAPI Specification Declares Write Endpoints Without Global Security Scheme
+    owasp_category: "A04 — Insecure Design"
+    severity: medium
+    cwe_id: CWE-840
+    description: Publicly exposed OpenAPI/Swagger specification defines state-changing POST/PUT/DELETE/PATCH operations without a non-empty top-level security requirement.
+    remediation: Define explicit authentication securitySchemes and non-empty security requirements for all state-changing API operations.
+    url_regex: '/(?:openapi|swagger)(?:\.json|\.ya?ml)?(?:\?|$)'
+    status_codes: [200]
+    exclude_body_regex: '<!doctype\s+html|<html|"security"\s*:\s*\[\s*\{'
+    body_regex: '"(?:openapi|swagger)"\s*:\s*"[23]\.[^"]{1,10}"[\s\S]{0,1500}"(?:post|put|delete|patch)"\s*:\s*\{'
+    confirmed: false
+
+  - id: owasp-a04-predictable-reset-or-invoice-link
+    title: Predictable Numeric Token in Account Recovery or Document Link
+    owasp_category: "A04 — Insecure Design"
+    severity: low
+    cwe_id: CWE-656
+    description: Response relies on short predictable numeric parameters in password-reset, activation, or invoice-download links, relying on obscurity rather than high-entropy tokens and access checks.
+    remediation: Generate high-entropy cryptographic random tokens (at least 128 bits) and verify caller authorization server-side.
+    status_codes: [200]
+    body_regex: '(?:href|action|url)["'']?\s*[:=]\s*["''][^"''\s]{0,80}/(?:reset-password|verify-email|activate|download-invoice|receipt)\?(?:token|code|id|key)=[0-9]{1,8}(?:&|["''])'
+    confirmed: false
+
+  - id: owasp-a04-weak-frame-ancestors-policy
+    title: Permissive Framing Policy Allows Arbitrary Embedding (Clickjacking Risk)
+    owasp_category: "A04 — Insecure Design"
+    severity: medium
+    cwe_id: CWE-1021
+    description: Response configures Content-Security-Policy frame-ancestors * or X-Frame-Options ALLOWALL, allowing any third-party site to frame the application.
+    remediation: Restrict framing using Content-Security-Policy frame-ancestors 'none' or 'self' and X-Frame-Options DENY.
+    status_codes: [200]
+    header_regex: '(?:^|\n)(?:Content-Security-Policy\s*:[^\r\n]{0,400}\bframe-ancestors\s+\*(?:\s|;|$)|X-Frame-Options\s*:\s*ALLOWALL(?:\s|$))'
+    confirmed: true
+
+  # ============================================================================
+  # A05 — Security Misconfiguration (10 rules)
+  # ============================================================================
+
+  - id: owasp-a05-missing-referrer-policy
+    title: HTML Response Missing Referrer-Policy Header
+    owasp_category: "A05 — Security Misconfiguration"
+    severity: low
+    cwe_id: CWE-693
+    description: HTML document lacks a Referrer-Policy header, risking leakage of sensitive URL paths or query parameters in outbound Referer headers.
+    remediation: "Set Referrer-Policy: strict-origin-when-cross-origin or no-referrer on HTML responses."
+    content_type_regex: 'text/html|application/xhtml\+xml'
+    status_codes: [200]
+    absent_header_regex: '(?:^|\n)Referrer-Policy\s*:'
+    confirmed: true
+
+  - id: owasp-a05-missing-permissions-policy
+    title: HTML Response Missing Permissions-Policy Header
+    owasp_category: "A05 — Security Misconfiguration"
+    severity: info
+    cwe_id: CWE-693
+    description: HTML page does not restrict powerful browser features (camera, microphone, geolocation, payment) via Permissions-Policy.
+    remediation: Add a restrictive Permissions-Policy header disabling unused browser APIs.
+    content_type_regex: 'text/html|application/xhtml\+xml'
+    status_codes: [200]
+    absent_header_regex: '(?:^|\n)Permissions-Policy\s*:'
+    confirmed: true
+
+  - id: owasp-a05-cors-permissive-methods
+    title: Overly Permissive CORS Access-Control-Allow-Methods Header
+    owasp_category: "A05 — Security Misconfiguration"
+    severity: low
+    cwe_id: CWE-16
+    description: CORS policy advertises wildcard '*' or dangerous diagnostic HTTP methods (TRACE, TRACK, CONNECT) in Access-Control-Allow-Methods.
+    remediation: Restrict Access-Control-Allow-Methods strictly to the minimal required HTTP methods (e.g., GET, POST).
+    header_regex: '(?:^|\n)Access-Control-Allow-Methods\s*:\s*[^\r\n]{0,120}(?:\*|\bTRACE\b|\bTRACK\b|\bCONNECT\b)'
+    confirmed: true
+
+  - id: owasp-a05-dangerous-http-methods-allow
+    title: Dangerous HTTP Methods (TRACE/TRACK) Advertised in Allow Header
+    owasp_category: "A05 — Security Misconfiguration"
+    severity: medium
+    cwe_id: CWE-16
+    description: Server advertises TRACE or TRACK in its Allow or Public header, increasing cross-site tracing and diagnostic exposure risk.
+    remediation: Disable HTTP TRACE and TRACK methods in web server configuration (TraceEnable Off in Apache).
+    header_regex: '(?:^|\n)(?:Allow|Public)\s*:\s*[^\r\n]{0,120}\b(?:TRACE|TRACK)\b'
+    confirmed: true
+
+  - id: owasp-a05-server-os-banner-disclosure
+    title: Server Header Discloses Operating System or Distribution Details
+    owasp_category: "A05 — Security Misconfiguration"
+    severity: info
+    cwe_id: CWE-16
+    description: Server response header exposes the underlying operating system or Linux distribution (e.g., Ubuntu, Debian, CentOS, Win64).
+    remediation: Configure the web server to suppress OS tokens in Server banners (e.g., ServerTokens Prod in Apache).
+    header_regex: '(?:^|\n)Server\s*:[^\r\n]{0,80}\((?:Ubuntu|Debian|CentOS|Red Hat|Fedora|Alpine|Win32|Win64|FreeBSD|Unix)\)'
+    confirmed: true
+
+  - id: owasp-a05-nginx-stub-status-exposed
+    title: Nginx stub_status Diagnostics Page Publicly Exposed
+    owasp_category: "A05 — Security Misconfiguration"
+    severity: low
+    cwe_id: CWE-215
+    description: Nginx stub_status telemetry page is publicly accessible, exposing active connections and request throughput counters.
+    remediation: Restrict Nginx stub_status locations to localhost or internal monitoring networks using allow/deny directives.
+    status_codes: [200]
+    exclude_body_regex: '<!doctype\s+html|<html'
+    body_regex: 'Active\s+connections\s*:\s*\d+[\s\S]{0,120}server\s+accepts\s+handled\s+requests[\s\S]{0,120}Reading\s*:\s*\d+\s+Writing\s*:\s*\d+\s+Waiting\s*:\s*\d+'
+    confirmed: true
+
+  - id: owasp-a05-server-config-file-exposed
+    title: Application Configuration File Exposed (web.config / appsettings / application.yml / wp-config)
+    owasp_category: "A05 — Security Misconfiguration"
+    severity: critical
+    cwe_id: CWE-16
+    description: Server configuration file (web.config, appsettings.json, application.yml, or wp-config backup) is directly downloadable and exposes database settings or secrets.
+    remediation: Remove configuration backups from web roots and ensure configuration extensions are denied by the web server.
+    url_regex: '/(?:web\.config|appsettings(?:\.[a-z0-9_-]{1,20})?\.json|application(?:-[a-z0-9_-]{1,20})?\.ya?ml|wp-config\.php[~.]?)(?:\?|$)'
+    status_codes: [200]
+    exclude_body_regex: '<!doctype\s+html|<html'
+    body_regex: '(?:<configuration>[\s\S]{0,300}(?:connectionStrings|system\.webServer)|"ConnectionStrings"\s*:\s*\{|spring\s*:\s*[\r\n]+\s+(?:datasource|security|jpa)\s*:|define\s*\(\s*["'']DB_(?:NAME|USER|PASSWORD|HOST)["''])'
+    confirmed: true
+
+  - id: owasp-a05-robots-txt-sensitive-paths
+    title: robots.txt Discloses Sensitive Administrative or Internal Paths
+    owasp_category: "A05 — Security Misconfiguration"
+    severity: info
+    cwe_id: CWE-215
+    description: robots.txt contains Disallow rules pointing to administrative, backup, staging, or internal paths, aiding reconnaissance.
+    remediation: "Remove sensitive internal path names from robots.txt and protect private endpoints with authentication and X-Robots-Tag: noindex."
+    url_regex: '/robots\.txt(?:\?|$)'
+    status_codes: [200]
+    exclude_body_regex: '<!doctype\s+html|<html'
+    body_regex: '(?:^|\n)Disallow\s*:\s*/(?:admin|internal|backup|private|secret|staging|dev|debug|graphql|swagger|phpmyadmin|actuator|api/internal)\b'
+    confirmed: true
+
+  - id: owasp-a05-wildcard-flash-silverlight-policy
+    title: Permissive Wildcard Cross-Domain Policy (crossdomain.xml / clientaccesspolicy.xml)
+    owasp_category: "A05 — Security Misconfiguration"
+    severity: medium
+    cwe_id: CWE-16
+    description: Legacy Flash/Silverlight cross-domain policy grants wildcard domain='*' access to any external origin.
+    remediation: Remove crossdomain.xml/clientaccesspolicy.xml if unused or replace wildcard '*' with explicit trusted domains.
+    url_regex: '/(?:crossdomain|clientaccesspolicy)\.xml(?:\?|$)'
+    status_codes: [200]
+    exclude_body_regex: '<!doctype\s+html|<html'
+    body_regex: '(?:<allow-access-from\s+[^>]{0,80}domain\s*=\s*["'']\*["'']|<domain\s+uri\s*=\s*["'']\*["''])'
+    confirmed: true
+
+  - id: owasp-a05-cors-wildcard-on-authenticated-api
+    title: Wildcard CORS Policy Applied on Sensitive User/Account API Endpoint
+    owasp_category: "A05 — Security Misconfiguration"
+    severity: medium
+    cwe_id: CWE-16
+    description: "Sensitive account/profile/billing API route returns Access-Control-Allow-Origin: *, indicating overly permissive CORS header configuration on non-public endpoints."
+    remediation: "Apply Access-Control-Allow-Origin: * only on truly public non-sensitive static/open data endpoints."
+    url_regex: '/api/(?:v\d+/)?(?:me|profile|account|user|admin|billing|settings|orders?|keys|tokens?)(?:/|\?|$)'
+    status_codes: [200]
+    header_regex: '(?:^|\n)Access-Control-Allow-Origin\s*:\s*\*(?:\s|$)'
+    confirmed: true
+
+  # ============================================================================
+  # A06 — Vulnerable Components (10 rules)
+  # ============================================================================
+
+  - id: owasp-a06-outdated-jquery
+    title: Outdated jQuery Version (< 3.5.0) Detected in Response
+    owasp_category: "A06 — Vulnerable Components"
+    severity: medium
+    cwe_id: CWE-1104
+    description: Response references or bundles a legacy jQuery version below 3.5.0 with known DOM-handling vulnerabilities.
+    remediation: Upgrade jQuery to 3.7.x or higher and audit HTML parsing call sites.
+    status_codes: [200]
+    body_regex: '(?:jQuery(?:\s+JavaScript\s+Library)?\s+v(?:[12]\.[0-9]{1,2}\.[0-9]{1,2}|3\.[0-4]\.[0-9]{1,2})\b|jquery[-@/](?:[12]\.[0-9]{1,2}\.[0-9]{1,2}|3\.[0-4]\.[0-9]{1,2})(?:[/.]|[-.]min|\b))'
+    confirmed: true
+
+  - id: owasp-a06-eol-angularjs-1x
+    title: End-of-Life AngularJS 1.x Framework Detected
+    owasp_category: "A06 — Vulnerable Components"
+    severity: medium
+    cwe_id: CWE-1104
+    description: Application loads End-of-Life AngularJS 1.x, which no longer receives security updates.
+    remediation: Migrate the frontend to a supported Angular release or another actively maintained framework.
+    status_codes: [200]
+    body_regex: '(?:AngularJS\s+v1\.[0-8]\.[0-9]{1,2}\b|angular(?:\.js)?[-@/]1\.[0-8]\.[0-9]{1,2}(?:[/.]|[-.]min|\b)|ng-version=["'']1\.[0-8]\.)'
+    confirmed: true
+
+  - id: owasp-a06-outdated-bootstrap-legacy
+    title: Legacy Bootstrap 2.x or 3.x Library Detected
+    owasp_category: "A06 — Vulnerable Components"
+    severity: low
+    cwe_id: CWE-1104
+    description: Response references or serves Bootstrap 2.x or 3.x, which reached end-of-life and carries known tooltip/popover HTML-injection issues.
+    remediation: Upgrade Bootstrap to a supported 5.x release and enable strict sanitizer options on components.
+    status_codes: [200]
+    body_regex: '(?:Bootstrap\s+v[23]\.[0-9]{1,2}\.[0-9]{1,2}\b|bootstrap[-@/][23]\.[0-9]{1,2}\.[0-9]{1,2}(?:[/.]|[-.]min|\b))'
+    confirmed: true
+
+  - id: owasp-a06-outdated-lodash
+    title: Outdated Lodash Version (< 4.17.21) Detected
+    owasp_category: "A06 — Vulnerable Components"
+    severity: medium
+    cwe_id: CWE-1395
+    description: Response exposes a Lodash version below 4.17.21 affected by prototype pollution and template/command handling flaws.
+    remediation: Upgrade Lodash to 4.17.21 or later across frontend bundles and dependencies.
+    status_codes: [200]
+    body_regex: '(?:lodash(?:\.min)?\.js\s+v?(?:[0-3]\.[0-9]{1,2}\.[0-9]{1,2}|4\.(?:[0-9]|1[0-6])\.[0-9]{1,2}|4\.17\.(?:[0-9]|1[0-9]|20))\b|lodash[-@/](?:[0-3]\.[0-9]{1,2}\.[0-9]{1,2}|4\.(?:[0-9]|1[0-6])\.[0-9]{1,2}|4\.17\.(?:[0-9]|1[0-9]|20))(?:[/.]|[-.]min|\b))'
+    confirmed: true
+
+  - id: owasp-a06-outdated-apache-httpd
+    title: Outdated Apache HTTP Server Banner Detected (< 2.4.54 / Legacy 2.2)
+    owasp_category: "A06 — Vulnerable Components"
+    severity: low
+    cwe_id: CWE-1104
+    description: Server header advertises an outdated Apache HTTP Server release (1.x, 2.2.x, or 2.4.<54).
+    remediation: Upgrade Apache HTTP Server to the latest patched 2.4.x release and minimize Server header verbosity.
+    header_regex: '(?:^|\n)Server\s*:[^\r\n]{0,60}\bApache/(?:1\.[0-9]+|2\.[0-2]\.[0-9]{1,2}|2\.4\.(?:[0-9]|[1-4][0-9]|5[0-3]))\b'
+    confirmed: true
+
+  - id: owasp-a06-outdated-nginx-banner
+    title: Outdated or End-of-Life Nginx Server Version Banner Detected
+    owasp_category: "A06 — Vulnerable Components"
+    severity: low
+    cwe_id: CWE-1104
+    description: Server header discloses an End-of-Life or outdated Nginx version prior to 1.24.
+    remediation: Upgrade Nginx to a supported mainline or stable branch (>= 1.26) and set server_tokens off.
+    header_regex: '(?:^|\n)Server\s*:[^\r\n]{0,60}\bnginx/(?:0\.[0-9]+|1\.(?:[0-9]|1[0-9]|2[0-3]))\.[0-9]{1,2}\b'
+    confirmed: true
+
+  - id: owasp-a06-eol-php-version-banner
+    title: End-of-Life PHP Runtime Version (< 8.1) Disclosed in Headers
+    owasp_category: "A06 — Vulnerable Components"
+    severity: medium
+    cwe_id: CWE-1104
+    description: HTTP response header advertises an End-of-Life PHP runtime (4.x, 5.x, 7.x, or 8.0.x) no longer receiving upstream security patches.
+    remediation: Upgrade PHP to a currently supported version (>= 8.2) and set expose_php = Off in php.ini.
+    header_regex: '(?:^|\n)(?:X-Powered-By|Server)\s*:[^\r\n]{0,60}\bPHP/(?:[45]\.[0-9]{1,2}|7\.[0-4]|8\.0)\.[0-9]{1,2}\b'
+    confirmed: true
+
+  - id: owasp-a06-eol-openssl-banner
+    title: End-of-Life OpenSSL Version (< 3.0) Disclosed in Server Header
+    owasp_category: "A06 — Vulnerable Components"
+    severity: medium
+    cwe_id: CWE-1104
+    description: Server banner exposes a legacy OpenSSL 0.9.x or 1.x version that has reached End-of-Life.
+    remediation: Upgrade OpenSSL and linked server packages to a supported OpenSSL 3.x LTS branch.
+    header_regex: '(?:^|\n)Server\s*:[^\r\n]{0,80}\bOpenSSL/(?:0\.9\.|1\.[01]\.[0-9a-z]{1,6})'
+    confirmed: true
+
+  - id: owasp-a06-legacy-moment-handlebars-mustache
+    title: Deprecated or Vulnerable Client-Side Utility Library (Moment.js / Handlebars < 4.7.7)
+    owasp_category: "A06 — Vulnerable Components"
+    severity: low
+    cwe_id: CWE-1104
+    description: Application loads deprecated Moment.js or an outdated Handlebars (< 4.7.7) client library with known prototype/ReDoS issues.
+    remediation: Upgrade Handlebars to >= 4.7.7 and migrate away from deprecated Moment.js to modern alternatives.
+    status_codes: [200]
+    body_regex: '(?:handlebars[-@/]v?(?:[1-3]\.[0-9]{1,2}\.[0-9]{1,2}|4\.[0-6]\.[0-9]{1,2}|4\.7\.[0-6])(?:[/.]|[-.]min|\b)|moment(?:\.min)?\.js[-@/]?[12]\.[0-9]{1,2}\.[0-9]{1,2}\b|Handlebars\.VERSION\s*=\s*["''](?:[1-3]\.|4\.[0-6]\.|4\.7\.[0-6]))'
+    confirmed: true
+
+  - id: owasp-a06-outdated-wordpress-generator
+    title: Outdated WordPress CMS Version Disclosed in Generator Meta Tag
+    owasp_category: "A06 — Vulnerable Components"
+    severity: medium
+    cwe_id: CWE-1104
+    description: HTML generator meta tag exposes an outdated WordPress 2.x–5.x core version.
+    remediation: Upgrade WordPress core, themes, and plugins to current supported releases and remove the generator meta tag.
+    content_type_regex: 'text/html|application/xhtml\+xml'
+    status_codes: [200]
+    body_regex: '<meta\s+(?:[^>]{0,80}\bname\s*=\s*["'']?generator["'']?[^>]{0,80}\bcontent\s*=\s*["'']?WordPress\s+[2-5]\.[0-9]{1,2}(?:\.[0-9]{1,2})?["'']?|[^>]{0,80}\bcontent\s*=\s*["'']?WordPress\s+[2-5]\.[0-9]{1,2}(?:\.[0-9]{1,2})?["'']?[^>]{0,80}\bname\s*=\s*["'']?generator["'']?)'
+    confirmed: true
+
+  # ============================================================================
+  # A07 — Identification and Authentication (10 rules)
+  # ============================================================================
+
+  - id: owasp-a07-credentials-in-url-query
+    title: Credentials or Secret Token Transmitted in URL Query String
+    owasp_category: "A07 — Identification and Authentication"
+    severity: high
+    cwe_id: CWE-598
+    description: Sensitive credential or token query parameter (password, api_key, access_token, or client_secret) appears in the request URL, exposing it in logs, browser history, and Referer headers.
+    remediation: Transmit credentials and tokens exclusively in POST request bodies or Authorization headers over HTTPS.
+    url_regex: '[?&](?:password|passwd|pwd|secret|api_?key|access_?token|auth_?token|bearer|client_secret)=[^&\s]{3,120}'
+    confirmed: true
+
+  - id: owasp-a07-basic-auth-over-http
+    title: HTTP Basic Authentication Challenged Over Unencrypted HTTP
+    owasp_category: "A07 — Identification and Authentication"
+    severity: high
+    cwe_id: CWE-522
+    description: "Plaintext http:// endpoint responds with WWW-Authenticate: Basic, prompting clients to transmit Base64-encoded credentials without transport protection."
+    remediation: Enforce HTTPS across all authenticated routes and redirect HTTP requests to HTTPS before issuing authentication challenges.
+    scheme: http
+    status_codes: [401]
+    header_regex: '(?:^|\n)WWW-Authenticate\s*:\s*Basic\b'
+    confirmed: true
+
+  - id: owasp-a07-auth-response-missing-cache-control
+    title: "Authentication or Token Endpoint Missing Cache-Control: no-store"
+    owasp_category: "A07 — Identification and Authentication"
+    severity: medium
+    cwe_id: CWE-522
+    description: "Authentication, login, or token response omits Cache-Control: no-store, allowing shared proxies or browser caches to retain authentication credentials or tokens."
+    remediation: "Set Cache-Control: no-store and Pragma: no-cache on all authentication, token, and session-establishment responses."
+    url_regex: '/(?:login|signin|auth|token|oauth/token|session|reset-password)(?:/|\?|$)'
+    exclude_url_regex: '\.(?:css|js|png|jpe?g|gif|svg|ico|woff2?|ttf|eot|map)(?:\?|$)'
+    content_type_regex: 'application/json|text/html|application/xhtml\+xml|text/plain'
+    status_codes: [200]
+    absent_header_regex: '(?:^|\n)Cache-Control\s*:[^\r\n]{0,100}\bno-store\b'
+    confirmed: false
+
+  - id: owasp-a07-password-page-over-http
+    title: Password Input Served Over Cleartext HTTP Page
+    owasp_category: "A07 — Identification and Authentication"
+    severity: high
+    cwe_id: CWE-522
+    description: An HTML page served over unencrypted http:// renders an input[type=password] field, exposing user credentials to passive interception.
+    remediation: Serve all login, registration, and password-change pages strictly over HTTPS with HSTS enabled.
+    scheme: http
+    content_type_regex: 'text/html|application/xhtml\+xml'
+    status_codes: [200]
+    body_regex: '<input\b[^>]{0,180}\btype\s*=\s*["'']?password["'']?'
+    confirmed: true
+
+  - id: owasp-a07-verbose-auth-user-enumeration
+    title: Verbose Authentication Failure Enables Account Enumeration
+    owasp_category: "A07 — Identification and Authentication"
+    severity: medium
+    cwe_id: CWE-287
+    description: Authentication or password-reset endpoint returns distinct failure messages indicating whether an email or username exists.
+    remediation: Return uniform, generic failure messages on login and password-recovery endpoints regardless of account existence.
+    url_regex: '/(?:login|signin|auth|authenticate|forgot-password|reset-password)(?:/|\?|$)'
+    status_codes: [200, 400, 401, 403, 404]
+    body_regex: '\b(?:user(?:name)?\s+(?:not\s+found|does\s+not\s+exist)|no\s+account\s+found\s+with\s+that\s+email|email\s+(?:is\s+not\s+registered|not\s+found)|incorrect\s+password\s+for\s+user)\b'
+    confirmed: false
+
+  - id: owasp-a07-jwt-leaked-in-html
+    title: JSON Web Token (JWT) Embedded Directly in HTML Link or Input
+    owasp_category: "A07 — Identification and Authentication"
+    severity: high
+    cwe_id: CWE-522
+    description: HTML response embeds a three-part JWT directly in a link href, form action, or hidden input value, exposing bearer credentials to Referer headers and XSS.
+    remediation: Store session JWTs exclusively in HttpOnly, Secure cookies or retrieve them securely via authenticated API exchanges.
+    content_type_regex: 'text/html|application/xhtml\+xml'
+    status_codes: [200]
+    body_regex: '(?:href|action|value)\s*=\s*["''][^"'']{0,120}(?-i:eyJ[A-Za-z0-9_-]{8,100}\.eyJ[A-Za-z0-9_-]{8,180}\.[A-Za-z0-9_-]{8,120})'
+    confirmed: true
+
+  - id: owasp-a07-default-credentials-hinted
+    title: Default or Sample Admin Credentials Disclosed in Response
+    owasp_category: "A07 — Identification and Authentication"
+    severity: high
+    cwe_id: CWE-798
+    description: Response HTML comments or configuration fields reveal default or demo administrative credentials.
+    remediation: Disable default credentials, require unique password provisioning at setup, and remove credential hints from client-visible assets.
+    status_codes: [200]
+    body_regex: '(?:<!--[^\r\n]{0,120}(?:default\s+(?:login|password|credentials)|admin\s*[:/]\s*(?:admin|password|123456))|"(?:default_password|demo_password|admin_password)"\s*:\s*"[^"]{3,40}")'
+    confirmed: false
+
+  - id: owasp-a07-session-id-in-url
+    title: Session Identifier Exposed in URL Path or Query Parameter
+    owasp_category: "A07 — Identification and Authentication"
+    severity: medium
+    cwe_id: CWE-384
+    description: Session token (JSESSIONID, PHPSESSID, ASPSESSIONID, CFID, or sid) is embedded in the URL, exposing it to URL rewriting, logs, and session fixation.
+    remediation: Disable URL-based session rewriting and transmit session identifiers exclusively in HttpOnly, Secure, SameSite cookies.
+    url_regex: '(?:;|[?&])(?:jsessionid|phpsessid|aspsessionid[a-z0-9_-]{0,20}|cfid|cftoken|sid|sess_?id)=[a-zA-Z0-9._-]{8,128}'
+    confirmed: true
+
+  - id: owasp-a07-auth-cookie-samesite-none
+    title: Sensitive Session or Auth Cookie Uses Weak SameSite=None Policy
+    owasp_category: "A07 — Identification and Authentication"
+    severity: medium
+    cwe_id: CWE-384
+    description: A sensitive session, auth, token, or CSRF cookie sets SameSite=None, weakening cross-site session isolation.
+    remediation: Configure session and authentication cookies with SameSite=Lax or SameSite=Strict.
+    header_regex: '(?:^|\n)Set-Cookie\s*:[^\r\n=;]{0,40}(?:session|sess|sid|token|jwt|auth|csrf)[^\r\n=;]{0,40}=[^\r\n]{0,300};\s*SameSite=None\b'
+    confirmed: true
+
+  - id: owasp-a07-password-reset-token-leaked
+    title: Password Reset or MFA Endpoint Leaks OTP or Reset Token in Response Body
+    owasp_category: "A07 — Identification and Authentication"
+    severity: high
+    cwe_id: CWE-640
+    description: Password-recovery or OTP verification endpoint returns the secret reset_token, otp_code, or temp_password directly in the HTTP response payload.
+    remediation: Deliver reset tokens and one-time codes solely via out-of-band verified channels (email/authenticator) and never echo them in API responses.
+    url_regex: '/(?:forgot-password|reset-password|password-reset|otp|mfa|2fa|verify)(?:/|\?|$)'
+    status_codes: [200]
+    content_type_regex: 'application/json|text/plain'
+    body_regex: '"(?:reset_?token|recovery_?token|otp_?code|verification_?code|pin_?code|temp_?password)"\s*:\s*"[A-Za-z0-9._-]{4,120}"'
+    confirmed: true
+
+  # ============================================================================
+  # A08 — Software and Data Integrity (10 rules)
+  # ============================================================================
+
+  - id: owasp-a08-external-stylesheet-missing-sri
+    title: Third-Party CDN Stylesheet Loaded Without Subresource Integrity (SRI)
+    owasp_category: "A08 — Software and Data Integrity"
+    severity: low
+    cwe_id: CWE-353
+    description: HTML page loads an external CSS stylesheet from a third-party CDN without an integrity attribute to verify file hash integrity.
+    remediation: Add cryptographic Subresource Integrity (integrity="sha384-...") and crossorigin="anonymous" attributes to external CDN stylesheets.
+    content_type_regex: 'text/html|application/xhtml\+xml'
+    status_codes: [200]
+    body_regex: '<link\b(?![^>]{0,240}\bintegrity\s*=)(?:[^>]{0,140}\brel\s*=\s*["'']?stylesheet["'']?[^>]{0,140}\bhref\s*=\s*["'']?https?://(?:cdnjs\.cloudflare\.com|cdn\.jsdelivr\.net|unpkg\.com|stackpath\.bootstrapcdn\.com|maxcdn\.bootstrapcdn\.com|ajax\.googleapis\.com|use\.fontawesome\.com)|[^>]{0,140}\bhref\s*=\s*["'']?https?://(?:cdnjs\.cloudflare\.com|cdn\.jsdelivr\.net|unpkg\.com|stackpath\.bootstrapcdn\.com|maxcdn\.bootstrapcdn\.com|ajax\.googleapis\.com|use\.fontawesome\.com)[^"''\s>]{1,120}[^>]{0,140}\brel\s*=\s*["'']?stylesheet["'']?)'
+    confirmed: true
+
+  - id: owasp-a08-cicd-pipeline-config-exposed
+    title: CI/CD Pipeline Integrity Manifest Exposed (.github/workflows / .gitlab-ci.yml / Jenkinsfile)
+    owasp_category: "A08 — Software and Data Integrity"
+    severity: medium
+    cwe_id: CWE-494
+    description: Publicly readable CI/CD pipeline manifest exposes automated build/release steps, unpinned external pipeline dependencies, and signing targets.
+    remediation: Exclude repository hidden files and CI/CD manifests from web artifacts and pin third-party actions to immutable commit SHAs.
+    url_regex: '/(?:\.github/workflows/[^/]{1,60}\.ya?ml|\.gitlab-ci\.yml|Jenkinsfile|\.travis\.yml|azure-pipelines\.ya?ml)(?:\?|$)'
+    status_codes: [200]
+    exclude_body_regex: '<!doctype\s+html|<html'
+    body_regex: '(?:^|\n)(?:on\s*:|jobs\s*:|stages\s*:|pipeline\s*\{|agent\s+(?:any|docker)|script\s*:)'
+    confirmed: true
+
+  - id: owasp-a08-dependency-lockfile-exposed
+    title: Software Dependency Integrity Lockfile Publicly Exposed
+    owasp_category: "A08 — Software and Data Integrity"
+    severity: low
+    cwe_id: CWE-345
+    description: Package lockfile or dependency manifest (package-lock.json, yarn.lock, composer.lock, poetry.lock, or requirements.txt) is exposed publicly, revealing dependency integrity hashes and package sources.
+    remediation: Exclude dependency manifests and lockfiles from publicly served web directories and require integrity verification in installs.
+    url_regex: '/(?:package-lock\.json|yarn\.lock|pnpm-lock\.yaml|composer\.lock|Pipfile\.lock|poetry\.lock|requirements\.txt)(?:\?|$)'
+    status_codes: [200]
+    exclude_body_regex: '<!doctype\s+html|<html'
+    body_regex: '(?:"lockfileVersion"\s*:|__metadata:\s*\r?\n|"_readme"\s*:|==[0-9]+\.[0-9]+|"packages"\s*:\s*\[)'
+    confirmed: true
+
+  - id: owasp-a08-insecure-serialized-object-signature
+    title: Insecure Serialized Object Signature (Java/PHP/Python) Observed in Body
+    owasp_category: "A08 — Software and Data Integrity"
+    severity: high
+    cwe_id: CWE-502
+    description: HTTP response contains a recognizable Java ObjectInputStream (rO0AB), PHP serialize (O:N:"Class":...), or Python pickle (gASV) object payload.
+    remediation: Replace native binary/object serialization with safe JSON schemas and sign/authenticate any opaque client state tokens.
+    body_regex: '(?-i:(?:\brO0AB[A-Za-z0-9+/=]{10,120}|\bO:\d{1,3}:"[A-Za-z_][A-Za-z0-9_\\]{1,50}":\d{1,3}:\{|O%3A\d{1,3}%3A%22|\bgASV[A-Za-z0-9+/=]{12,120}))'
+    confirmed: false
+
+  - id: owasp-a08-serialized-object-in-cookie-or-header
+    title: Serialized Java or PHP Object Disclosed in HTTP Cookie or Header
+    owasp_category: "A08 — Software and Data Integrity"
+    severity: high
+    cwe_id: CWE-502
+    description: Set-Cookie or custom HTTP header transmits a serialized Java or PHP object, risking deserialization vulnerabilities if accepted without cryptographic MAC verification.
+    remediation: Never store serialized runtime objects in cookies or headers; use signed/encrypted opaque session IDs or HMAC-verified JSON.
+    header_regex: '(?:^|\n)(?:Set-Cookie|X-[A-Za-z0-9-]{1,40})\s*:[^\r\n]{0,300}(?-i:(?:rO0AB[A-Za-z0-9+/=%]{8,120}|O%3A\d{1,3}%3A|O:\d{1,3}:"[A-Za-z_][A-Za-z0-9_\\]{1,40}"))'
+    confirmed: true
+
+  - id: owasp-a08-postmessage-missing-origin-check
+    title: JavaScript postMessage Listener Appears to Omit Origin Validation
+    owasp_category: "A08 — Software and Data Integrity"
+    severity: medium
+    cwe_id: CWE-345
+    description: Script registers an addEventListener('message', ...) handler while no event.origin validation property appears in the response.
+    remediation: Always verify event.origin against an exact allowlist of trusted origins inside every postMessage handler.
+    content_type_regex: 'text/html|javascript|ecmascript'
+    status_codes: [200]
+    body_regex: 'addEventListener\s*\(\s*["'']message["'']\s*,'
+    exclude_body_regex: '\.origin\b'
+    confirmed: false
+
+  - id: owasp-a08-document-domain-relaxation
+    title: JavaScript Relaxes Same-Origin Policy via document.domain Assignment
+    owasp_category: "A08 — Software and Data Integrity"
+    severity: low
+    cwe_id: CWE-345
+    description: Script assigns document.domain, weakening cross-subdomain same-origin isolation and deprecated in modern browsers.
+    remediation: Remove document.domain mutations and use explicit cross-origin postMessage() channels with strict origin checks.
+    content_type_regex: 'text/html|javascript|ecmascript'
+    status_codes: [200]
+    body_regex: '\bdocument\.domain\s*=\s*["''][a-zA-Z0-9.-]{3,80}["'']'
+    confirmed: true
+
+  - id: owasp-a08-script-cleartext-or-protocol-relative
+    title: Script Loaded Over Cleartext HTTP or Protocol-Relative URL
+    owasp_category: "A08 — Software and Data Integrity"
+    severity: medium
+    cwe_id: CWE-829
+    description: HTML document includes a <script> tag referencing an http:// or protocol-relative // URL, allowing active script tampering when accessed over HTTP.
+    remediation: Load all JavaScript resources over explicit https:// URLs with Subresource Integrity (integrity=) verification.
+    content_type_regex: 'text/html|application/xhtml\+xml'
+    status_codes: [200]
+    body_regex: '<script\b[^>]{0,180}\bsrc\s*=\s*["'']?(?:http://[^"''\s>]{4,160}|//[^/"''\s>][^"''\s>]{3,160})'
+    confirmed: true
+
+  - id: owasp-a08-cleartext-software-update-manifest
+    title: Software Update or Package Manifest References Cleartext HTTP Endpoint
+    owasp_category: "A08 — Software and Data Integrity"
+    severity: high
+    cwe_id: CWE-494
+    description: Update or release manifest references a cleartext http:// download or installer URL, enabling man-in-the-middle tampering.
+    remediation: Serve update manifests and binary artifacts solely over HTTPS and verify cryptographic signatures prior to installation.
+    url_regex: '/(?:update|autoupdate|manifest|release|version|sparkle|appcast)(?:\.json|\.xml|\.ya?ml)?(?:\?|$)'
+    status_codes: [200]
+    exclude_body_regex: '<!doctype\s+html|<html'
+    body_regex: '\b(?:download_?url|update_?url|package_?url|installer|enclosure\s+[^>]{0,80}url)["'']?\s*[:=]\s*["'']http://[^"''\s]{5,160}'
+    confirmed: true
+
+  - id: owasp-a08-mass-assignment-privileged-fields-exposed
+    title: User Profile API Exposes Internal Authorization Fields (Mass-Assignment Candidate)
+    owasp_category: "A08 — Software and Data Integrity"
+    severity: medium
+    cwe_id: CWE-915
+    description: Profile or account JSON API returns sensitive internal model attributes (is_admin, is_superuser, role_id, permissions, or password_hash), which often correlates with mass-assignment risk on write endpoints.
+    remediation: Use explicit DTOs/allowlists for input binding and exclude internal privilege or credential fields from API responses.
+    url_regex: '/api/(?:v\d+/)?(?:me|profile|account|user|users/[^/]+)(?:/|\?|$)'
+    status_codes: [200]
+    content_type_regex: 'application/json'
+    body_regex: '"(?:is_?admin|is_?superuser|is_?staff|role_?id|permissions|password_?hash|salt)"\s*:'
+    confirmed: false
+
+  # ============================================================================
+  # A09 — Security Logging and Monitoring (10 rules)
+  # ============================================================================
+
+  - id: owasp-a09-public-log-file-exposed
+    title: Publicly Accessible Application or Server Log File Exposed
+    owasp_category: "A09 — Security Logging and Monitoring"
+    severity: high
+    cwe_id: CWE-532
+    description: Application or web server log file (debug.log, error.log, access.log, laravel.log, etc.) is publicly readable over HTTP.
+    remediation: Store log files outside the web root, restrict file permissions, and block *.log paths at the web server.
+    url_regex: '/(?:debug|error|access|app|application|laravel|storage/logs/[^/]+|npm-debug|yarn-error)\.log(?:\?|$)'
+    status_codes: [200]
+    exclude_body_regex: '<!doctype\s+html|<html'
+    body_regex: '(?:^|\n)(?:\[\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}:\d{2}|\d{4}/\d{2}/\d{2}\s+\d{2}:\d{2}:\d{2}|\d{1,3}(?:\.\d{1,3}){3}\s+-\s+[^\s]{1,30}\s+\[|\[(?:ERROR|WARN|INFO|DEBUG|CRITICAL)\])'
+    confirmed: true
+
+  - id: owasp-a09-pii-or-secrets-in-log-or-health-dump
+    title: Sensitive Credentials or PII Exposed in Log or Diagnostic Endpoint
+    owasp_category: "A09 — Security Logging and Monitoring"
+    severity: high
+    cwe_id: CWE-532
+    description: Diagnostic, log, or health output exposes bearer tokens, passwords, API keys, or SSN-formatted identifiers.
+    remediation: Scrub credentials, session tokens, and regulated PII from all application logs and diagnostic endpoints.
+    url_regex: '/(?:logs?|debug|health|diagnostics|status|trace|dump)(?:/|\.|\?|$)'
+    status_codes: [200]
+    exclude_body_regex: '<!doctype\s+html|<html'
+    body_regex: '(?:\b(?-i:Bearer)\s+[A-Za-z0-9._-]{16,120}|\b(?:password|secret|api_?key|session_?id)\s*=\s*[^\s&"'']{4,60}|\b\d{3}-\d{2}-\d{4}\b)'
+    confirmed: false
+
+  - id: owasp-a09-auth-cookie-echoed-in-debug-response
+    title: Authorization or Cookie Request Header Logged/Echoed in Debug Response
+    owasp_category: "A09 — Security Logging and Monitoring"
+    severity: high
+    cwe_id: CWE-532
+    description: HTTP response echoes back sensitive request headers (Authorization, Cookie, X-Api-Key, or X-Auth-Token) in diagnostic or trace output.
+    remediation: Disable HTTP request-echoing debug handlers and redact Authorization, Cookie, and API-key headers from logs and telemetry.
+    status_codes: [200, 400, 500]
+    exclude_body_regex: '<!doctype\s+html|<html'
+    body_regex: '(?:"(?:authorization|cookie|x-api-key|x-auth-token)"\s*:\s*"[^"]{8,200}"|(?:^|\n)(?:Authorization|Cookie|X-Api-Key)\s*:\s*(?:Bearer|Basic|session=)[^\r\n]{6,200})'
+    mask_secret: true
+    confirmed: true
+
+  - id: owasp-a09-api-error-missing-correlation-id
+    title: Server Error Response on API Endpoint Lacks Request/Correlation Trace ID
+    owasp_category: "A09 — Security Logging and Monitoring"
+    severity: info
+    cwe_id: CWE-778
+    description: API 5xx error response does not return an X-Request-Id, X-Correlation-Id, or Traceparent header for incident correlation and audit tracing.
+    remediation: Emit a unique correlation/request ID header on all API responses and record it alongside server-side security logs.
+    url_regex: '/api/'
+    status_codes: [500, 502, 503]
+    absent_header_regex: '(?:^|\n)(?:X-Request-Id|X-Correlation-Id|X-Trace-Id|Traceparent|Request-Id)\s*:'
+    confirmed: false
+
+  - id: owasp-a09-monitoring-dashboard-exposed
+    title: Observability or Log Telemetry Endpoint Exposed
+    owasp_category: "A09 — Security Logging and Monitoring"
+    severity: medium
+    cwe_id: CWE-532
+    description: Observability or log aggregation telemetry endpoint (Kibana metadata, Prometheus targets/metrics UI, or Elasticsearch cluster info) is reachable, risking internal telemetry disclosure.
+    remediation: Place monitoring dashboards, log indices, and telemetry endpoints behind strong authentication and network access controls.
+    exclude_url_regex: '/login(?:\?|$)'
+    status_codes: [200]
+    exclude_body_regex: '"loginEnabled"\s*:\s*true|name=["'']user["'']'
+    body_regex: '(?:<title>Grafana</title>|"app":"kibana"|kbn-injected-metadata|<title>Prometheus Time Series Collection|green\s+open\s+\.kibana|"cluster_name"\s*:[^\r\n]{0,80}"tagline"\s*:\s*"You Know, for Search")'
+    confirmed: false
+
+  - id: owasp-a09-filesystem-path-disclosure
+    title: Excessive Server Filesystem Paths Logged in Error Output
+    owasp_category: "A09 — Security Logging and Monitoring"
+    severity: low
+    cwe_id: CWE-532
+    description: Error status response writes full local server filesystem paths (such as /var/www/, /home/..., or C:\Users\...) into client-visible output instead of internal logs.
+    remediation: Log detailed file paths strictly to internal secure logs and return sanitized error responses to clients.
+    status_codes: [400, 403, 404, 500, 502, 503]
+    body_regex: '(?:[A-Z]:\\(?:Users|inetpub|xampp|wamp|Windows|Program Files)\\[^\s"''<>]{2,80}|/(?:var/www|home/[a-z0-9_-]{1,30}|opt/[a-z0-9_-]{1,30}|srv/[a-z0-9_-]{1,30}|usr/local/lib)/[^\s"''<>]{2,80})'
+    confirmed: true
+
+  - id: owasp-a09-verbose-sql-logged-in-debug-toolbar
+    title: Verbose SQL Queries Logged in Debug Toolbar or Error Telemetry
+    owasp_category: "A09 — Security Logging and Monitoring"
+    severity: medium
+    cwe_id: CWE-779
+    description: Enabled framework debug toolbar or telemetry logger emits executed SQL SELECT queries in the HTTP response.
+    remediation: Disable debug query loggers (Django Debug Toolbar, Laravel Debugbar, Symfony Profiler) in production environments.
+    status_codes: [200, 500]
+    body_regex: '(?:djDebugToolbar|Laravel\\Debugbar|symfony_profiler|phpdebugbar|"sql_queries"\s*:\s*\[)[\s\S]{0,600}\bSELECT\s+[^\r\n]{1,120}\bFROM\b'
+    confirmed: true
+
+  - id: owasp-a09-telemetry-dsn-or-key-in-client
+    title: Telemetry DSN With Embedded Secret or Monitoring API Key Exposed
+    owasp_category: "A09 — Security Logging and Monitoring"
+    severity: low
+    cwe_id: CWE-532
+    description: Response leaks a legacy Sentry DSN containing both public and private keys or exposes a monitoring service ingestion API key (Datadog, New Relic, Splunk).
+    remediation: Remove secret keys from Sentry DSNs and move monitoring ingestion keys to server-side agents.
+    status_codes: [200]
+    body_regex: '(?:https://[a-f0-9]{16,40}:[a-f0-9]{16,40}@(?:app\.getsentry\.com|sentry\.io|[a-z0-9.-]{1,40}\.ingest\.sentry\.io)/\d+|"(?:dd_api_key|datadog_api_key|new_relic_license_key|splunk_hec_token)"\s*:\s*"[A-Za-z0-9_-]{16,80}")'
+    confirmed: true
+
+  - id: owasp-a09-public-audit-log-endpoint
+    title: Audit or Security Event Log Endpoint Accessible Without Authentication
+    owasp_category: "A09 — Security Logging and Monitoring"
+    severity: medium
+    cwe_id: CWE-532
+    description: Audit or security event log API returns structured actor/action/IP event records publicly, disclosing internal audit telemetry.
+    remediation: Require privileged administrative authentication and authorization on all audit and event log endpoints.
+    url_regex: '/(?:api/(?:v\d+/)?)?(?:audit[-_]?logs?|security[-_]?events?|activity[-_]?logs?|events\.json)(?:/|\?|$)'
+    status_codes: [200]
+    exclude_body_regex: '<!doctype\s+html|<html'
+    body_regex: '"(?:actor|user_?id|event_?type|action|ip_?address|timestamp)"\s*:[\s\S]{0,200}"(?:actor|user_?id|event_?type|action|ip_?address|timestamp)"\s*:'
+    confirmed: false
+
+  - id: owasp-a09-raw-runtime-exception-leak
+    title: Excessive Unhandled Runtime Exception Telemetry Emitted to Clients
+    owasp_category: "A09 — Security Logging and Monitoring"
+    severity: medium
+    cwe_id: CWE-779
+    description: Server 5xx response emits full Node.js, Go panic, Ruby on Rails, ASP.NET, or Java runtime stack trace logs externally instead of logging them centrally.
+    remediation: Configure centralized exception loggers to capture stack traces internally and emit generic error responses externally.
+    status_codes: [500, 502, 503]
+    body_regex: '(?:Error:\s+[^\r\n]{1,100}\r?\n\s+at\s+[A-Za-z0-9_.<>]{1,60}\s+\([^\r\n]{1,100}:\d+:\d+\)|ActionController::|ActiveRecord::|goroutine\s+\d+\s+\[running\]:|panic:\s+runtime\s+error:|Server\s+Error\s+in\s+''/''\s+Application\.|java\.lang\.(?:NullPointer|IllegalArgument|Runtime)Exception)'
+    confirmed: true
+
+  # ============================================================================
+  # A10 — Server-Side Request Forgery (10 rules)
+  # ============================================================================
+
+  - id: owasp-a10-ssrf-query-param-in-url
+    title: URL-Fetching or Proxy-Prone Query Parameter Observed in Endpoint URL
+    owasp_category: "A10 — Server-Side Request Forgery"
+    severity: info
+    cwe_id: CWE-918
+    description: Endpoint URL accepts a full http(s):// value via a fetch/proxy/webhook/callback query parameter, representing an SSRF attack surface candidate.
+    remediation: Validate remote URLs against a strict scheme/domain allowlist, resolve DNS safely, and block private/link-local IP ranges before fetching.
+    url_regex: '[?&](?:url|uri|webhook|callback|feed|fetch|proxy|target|dest|endpoint|avatar_url|import_url)=https?://[^&\s]{3,160}'
+    confirmed: false
+
+  - id: owasp-a10-ssrf-form-or-link-param
+    title: HTML Form or Link Exposes Remote URL Fetch or Webhook Parameter
+    owasp_category: "A10 — Server-Side Request Forgery"
+    severity: info
+    cwe_id: CWE-918
+    description: HTML page contains a form input or anchor query parameter used for webhook callbacks, remote imports, avatars, or URL proxying.
+    remediation: Ensure backend handlers validate user-supplied fetch/webhook URLs against allowlists and disable HTTP redirects to internal addresses.
+    content_type_regex: 'text/html|application/xhtml\+xml'
+    status_codes: [200]
+    body_regex: '(?:<(?:input|textarea)\b[^>]{0,160}\bname\s*=\s*["'']?(?:webhook_?url|callback_?url|fetch_?url|import_?url|proxy_?url|avatar_?url|feed_?url)["'']?|href\s*=\s*["''][^"''\s]{0,80}\?(?:url|fetch|proxy|webhook|callback)=)'
+    confirmed: false
+
+  - id: owasp-a10-openapi-uri-webhook-input
+    title: OpenAPI Specification Accepts External URI Inputs for Webhook or Fetch Operations
+    owasp_category: "A10 — Server-Side Request Forgery"
+    severity: low
+    cwe_id: CWE-918
+    description: OpenAPI schema defines webhook, callback, import, proxy, or fetch parameters with format 'uri', exposing SSRF-relevant API inputs for audit.
+    remediation: Restrict accepted URL schemes to HTTPS, enforce host allowlists, and isolate outbound fetchers in an egress-filtered network segment.
+    url_regex: '/(?:openapi|swagger)(?:\.json|\.ya?ml)?(?:\?|$)'
+    status_codes: [200]
+    exclude_body_regex: '<!doctype\s+html|<html'
+    body_regex: '"(?:webhook|callback|import|fetch|proxy|url|avatarUrl|remoteUrl)"\s*:\s*\{[^}]{0,160}"format"\s*:\s*"uri"'
+    confirmed: false
+
+  - id: owasp-a10-cloud-metadata-imds-leak
+    title: Cloud Instance Metadata (IMDS) Content Exposed in Response
+    owasp_category: "A10 — Server-Side Request Forgery"
+    severity: critical
+    cwe_id: CWE-918
+    description: Response contains AWS, GCP, or Azure Instance Metadata Service keys or paths (latest/meta-data, computeMetadata/v1, SecretAccessKey), indicating possible SSRF response reflection.
+    remediation: Enforce IMDSv2 (session tokens), disable legacy IMDSv1, and isolate server-side outbound URL fetchers from link-local 169.254.169.254 access.
+    status_codes: [200]
+    exclude_body_regex: '<!doctype\s+html|<html'
+    body_regex: '(?:latest/meta-data/(?:iam/security-credentials|instance-id|local-ipv4)|"AccessKeyId"\s*:[\s\S]{0,200}"SecretAccessKey"\s*:|computeMetadata/v1/instance/service-accounts|169\.254\.169\.254/metadata/instance)'
+    confirmed: false
+
+  - id: owasp-a10-internal-fetch-error-reflection
+    title: Upstream Internal Network or Cloud Metadata Fetch Error Disclosed
+    owasp_category: "A10 — Server-Side Request Forgery"
+    severity: high
+    cwe_id: CWE-918
+    description: HTTP response discloses an outbound connection failure targeting loopback, RFC1918, or cloud metadata addresses (169.254.169.254 / metadata.google.internal).
+    remediation: Block outbound requests to loopback, RFC1918, and link-local metadata IPs at both application and firewall layers, and enforce IMDSv2.
+    status_codes: [200, 400, 500, 502, 503, 504]
+    body_regex: '(?:Failed\s+to\s+connect\s+to|Connection\s+refused\s+(?:connecting\s+)?to|ECONNREFUSED|dial\s+tcp|cURL\s+error\s+\d+:)[^\r\n]{0,80}(?:127\.0\.0\.1|localhost|169\.254\.169\.254|metadata\.google\.internal|10\.\d{1,3}\.\d{1,3}\.\d{1,3}|192\.168\.\d{1,3}\.\d{1,3})'
+    confirmed: true
+
+  - id: owasp-a10-x-forwarded-host-proxy-redirect
+    title: Proxy Forwarding / X-Forwarded-Host Header Trust Exposed in Redirect or Vary
+    owasp_category: "A10 — Server-Side Request Forgery"
+    severity: medium
+    cwe_id: CWE-441
+    description: Response headers indicate the backend trusts client-supplied X-Forwarded-Host or X-Host intermediary headers when computing redirects or upstream URLs.
+    remediation: Strip untrusted forwarding headers at the edge proxy and derive canonical application hostnames strictly from server configuration.
+    header_regex: '(?:^|\n)(?:Vary\s*:[^\r\n]{0,120}\b(?:X-Forwarded-Host|X-Host|Forwarded)\b|X-Forwarded-Host\s*:\s*[^\r\n]{1,120})'
+    confirmed: false
+
+  - id: owasp-a10-xml-remote-entity-ssrf-hint
+    title: XML or SVG Endpoint Attempts Outbound Remote Entity Resolution (Blind SSRF Risk)
+    owasp_category: "A10 — Server-Side Request Forgery"
+    severity: high
+    cwe_id: CWE-918
+    description: XML/SVG parser error indicates attempted outbound HTTP/FTP network entity fetching, exposing blind server-side request forgery (SSRF) risk.
+    remediation: Disable external entity resolution, remote DTD fetching, and network resolvers on all XML, SVG, and XSLT parsers.
+    status_codes: [200, 400, 500]
+    body_regex: '(?:failed\s+to\s+load\s+external\s+entity\s+["'']?(?:https?|ftp)://|External\s+(?:DTD|entity)\s+fetch[^\r\n]{0,60}(?:https?|ftp)://|DOMDocument::loadXML\(\):[^\r\n]{0,80}failed\s+to\s+open\s+stream:\s+HTTP\s+request\s+failed)'
+    confirmed: false
+
+  - id: owasp-a10-proxy-intermediary-header-leak
+    title: Reverse Proxy / Intermediary Target Routing Header Exposed
+    owasp_category: "A10 — Server-Side Request Forgery"
+    severity: medium
+    cwe_id: CWE-441
+    description: Response headers disclose internal proxy target routing headers (X-Proxy-URL, X-Target-URL, X-Upstream-Host) or internal Via forwarding hostnames.
+    remediation: Strip internal proxy routing and upstream diagnostic headers before returning responses to external clients.
+    header_regex: '(?:^|\n)(?:(?:X-Proxy-URL|X-Target-URL|X-Upstream-Host|X-Remote-Fetch)\s*:\s*[^\r\n]{1,120}|Via\s*:[^\r\n]{0,80}\b(?:localhost|127\.0\.0\.1|[a-z0-9-]{1,40}\.(?:internal|local))\b)'
+    confirmed: true
+
+  - id: owasp-a10-server-side-renderer-ssrf-surface
+    title: Server-Side HTML/PDF Renderer Signature Disclosed
+    owasp_category: "A10 — Server-Side Request Forgery"
+    severity: medium
+    cwe_id: CWE-918
+    description: Response output or error message reveals a server-side HTML/PDF/headless-browser renderer (wkhtmltopdf, WeasyPrint, PhantomJS, Puppeteer, or HeadlessChrome).
+    remediation: Run document renderers in isolated sandboxed containers with no internal network/IMDS egress and sanitize HTML inputs before rendering.
+    status_codes: [200, 400, 500]
+    body_regex: '(?:wkhtmltopdf(?:\s+\d+\.\d+)?|WeasyPrint\s+\d+\.\d+|PhantomJS/\d+\.\d+|Puppeteer\s+failed|HeadlessChrome/\d+\.\d+)'
+    confirmed: false
+
+  - id: owasp-a10-webhook-preview-diagnostic-endpoint
+    title: Webhook Test, URL Preview, or Link Unfurl Diagnostic Endpoint Exposed
+    owasp_category: "A10 — Server-Side Request Forgery"
+    severity: medium
+    cwe_id: CWE-918
+    description: Publicly reachable link-preview, oEmbed, URL-unfurl, or webhook-test endpoint returns remote fetch metadata, representing a high-value SSRF target.
+    remediation: Require authentication, enforce strict outbound IP/DNS filtering, and disable arbitrary HTTP redirects on URL-preview/webhook-test endpoints.
+    url_regex: '/(?:api/(?:v\d+/)?)?(?:webhook[-_]?(?:test|ping|verify)|link[-_]?preview|url[-_]?(?:preview|unfurl|fetch)|oembed|proxy)(?:/|\?|$)'
+    status_codes: [200]
+    content_type_regex: 'application/json|text/plain'
+    exclude_body_regex: '<!doctype\s+html|<html'
+    body_regex: '"(?:target_?url|webhook_?url|fetched_?url|remote_?status|response_?code|og:title)"\s*:'
+    confirmed: false

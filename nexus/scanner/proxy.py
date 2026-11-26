@@ -16,6 +16,23 @@ from nexus.scanner.yaml_rules import YamlPassiveRuleEngine
 log = logging.getLogger("nexus.scanner.proxy")
 
 
+def _extract_header_items(raw_headers: Any) -> list[tuple[str, str]]:
+    """Extract ordered (name, value) header pairs preserving repeated headers like Set-Cookie."""
+    if not raw_headers:
+        return []
+    if hasattr(raw_headers, "multi_items"):
+        return [(str(k), str(v)) for k, v in raw_headers.multi_items()]
+    if hasattr(raw_headers, "items"):
+        # mitmproxy Headers.items(multi=True) vs standard Mapping.items()
+        try:
+            return [(str(k), str(v)) for k, v in raw_headers.items(multi=True)]
+        except TypeError:
+            return [(str(k), str(v)) for k, v in raw_headers.items()]
+    if isinstance(raw_headers, (list, tuple)):
+        return [(str(k), str(v)) for k, v in raw_headers]
+    return []
+
+
 class NexusProxyRecorder:
     """Processes HTTP request/response pairs through ScopeEnforcer + passive DAST analyzers.
 
@@ -50,7 +67,7 @@ class NexusProxyRecorder:
         request_headers: dict[str, str] | None = None,
         request_body: str = "",
         status_code: int = 200,
-        response_headers: dict[str, str] | None = None,
+        response_headers: dict[str, str] | list[tuple[str, str]] | Any = None,
         response_body: str = "",
     ) -> tuple[ProxyEntry | None, list[Finding]]:
         """Enforce scope on one HTTP transaction and run passive analyzers."""
@@ -64,19 +81,24 @@ class NexusProxyRecorder:
                 log.debug("[PROXY] Skipping out-of-scope exchange: %s", url)
                 return None, []
 
-        req_hdrs = dict(request_headers or {})
-        resp_hdrs = dict(response_headers or {})
-        lower_resp_hdrs = {k.lower(): v for k, v in resp_hdrs.items()}
+        req_hdrs = dict(_extract_header_items(request_headers))
+        resp_items = _extract_header_items(response_headers)
+        resp_hdrs = dict(resp_items)
+        set_cookies = [v for k, v in resp_items if k.lower() == "set-cookie"]
+        lower_resp_hdrs = {k.lower(): v for k, v in resp_items}
         ctype = lower_resp_hdrs.get("content-type", "")
 
         found: list[Finding] = []
-        found.extend(analyze_security_headers(url, lower_resp_hdrs))
+        found.extend(analyze_security_headers(url, lower_resp_hdrs, set_cookies=set_cookies))
         if "html" in ctype.lower() or "<form" in response_body[:4000].lower():
             found.extend(analyze_html_passive(url, response_body, content_type=ctype))
         if self.yaml_engine.rule_count > 0:
             found.extend(
                 self.yaml_engine.inspect_response(
-                    url, status_code=status_code, headers=resp_hdrs, body=response_body
+                    url,
+                    status_code=status_code,
+                    headers=resp_items or resp_hdrs,
+                    body=response_body,
                 )
             )
 
@@ -130,14 +152,14 @@ class NexusMitmAddon:
         if req is None or resp is None:
             return
         url = str(getattr(req, "pretty_url", "") or getattr(req, "url", ""))
-        req_headers = dict(getattr(req, "headers", {}) or {})
-        resp_headers = dict(getattr(resp, "headers", {}) or {})
+        req_headers = _extract_header_items(getattr(req, "headers", None))
+        resp_headers = _extract_header_items(getattr(resp, "headers", None))
         req_body = req.get_text(strict=False) if hasattr(req, "get_text") else ""
         resp_body = resp.get_text(strict=False) if hasattr(resp, "get_text") else ""
         self.recorder.inspect_exchange(
             method=str(getattr(req, "method", "GET")),
             url=url,
-            request_headers=req_headers,
+            request_headers=dict(req_headers),
             request_body=req_body or "",
             status_code=int(getattr(resp, "status_code", 0) or 0),
             response_headers=resp_headers,
