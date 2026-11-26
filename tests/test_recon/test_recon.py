@@ -630,3 +630,451 @@ async def test_osint_cleans_temp_files_on_runner_exception():
 
     assert len(created_paths) == 1
     assert not Path(created_paths[0]).exists()
+
+
+# ── Nmap auto -Pn, firewall retry, and security tests ──────────
+
+
+def _write_nmap_xml_at_ox(args: list[str], xml_content: str) -> None:
+    xml_path = args[args.index("-oX") + 1]
+    from pathlib import Path
+
+    Path(xml_path).write_text(xml_content, encoding="utf-8")
+
+
+@pytest.mark.asyncio
+async def test_nmap_single_host_auto_pn_and_no_duplicate():
+    from nexus.recon.ports import nmap_scan
+
+    open_xml = """<?xml version="1.0"?>
+<nmaprun>
+  <host>
+    <status state="up"/>
+    <address addr="192.168.1.50" addrtype="ipv4"/>
+    <ports>
+      <port protocol="tcp" portid="22"><state state="open"/><service name="ssh"/></port>
+    </ports>
+  </host>
+</nmaprun>"""
+
+    async def _run_write(_tool, args, **_kw):
+        _write_nmap_xml_at_ox(args, open_xml)
+        return ToolOutput(tool="nmap", args=args, returncode=0, stdout="", stderr="")
+
+    with (
+        patch.object(ToolRunner, "is_available", return_value=True),
+        patch.object(ToolRunner, "run", AsyncMock(side_effect=_run_write)) as mock_run,
+    ):
+        res = await nmap_scan("192.168.1.50", stealth="normal")
+
+    called_args = mock_run.await_args.args[1]
+    assert called_args.count("-Pn") == 1
+    assert called_args[-2:] == ["--", "192.168.1.50"]
+    assert [p.port for p in res["ports"]] == [22]
+
+    for extra, stealth in (
+        (["-PN"], "normal"),
+        (["-P0"], "normal"),
+        (None, "ghost"),
+    ):
+        with (
+            patch.object(ToolRunner, "is_available", return_value=True),
+            patch.object(ToolRunner, "run", AsyncMock(side_effect=_run_write)) as mock_flag_run,
+        ):
+            await nmap_scan("192.168.1.50", stealth=stealth, extra_args=extra)
+        flag_args = mock_flag_run.await_args.args[1]
+        assert "-Pn" not in flag_args or flag_args.count("-Pn") == 1
+        if extra:
+            assert "-Pn" not in flag_args
+
+
+@pytest.mark.asyncio
+async def test_nmap_cidr_omits_initial_pn_and_retries_on_host_down():
+    from nexus.recon.ports import nmap_scan
+
+    down_xml = """<?xml version="1.0"?>
+<nmaprun>
+  <runstats><finished time="1"/><hosts up="0" down="256" total="256"/></runstats>
+</nmaprun>"""
+    up_xml = """<?xml version="1.0"?>
+<nmaprun>
+  <host>
+    <status state="up"/>
+    <address addr="192.168.1.10" addrtype="ipv4"/>
+    <ports>
+      <port protocol="tcp" portid="80"><state state="open"/><service name="http"/></port>
+    </ports>
+  </host>
+  <runstats><finished time="2"/><hosts up="1" down="255" total="256"/></runstats>
+</nmaprun>"""
+
+    call_idx = 0
+
+    async def _run_cidr(_tool, args, **_kw):
+        nonlocal call_idx
+        call_idx += 1
+        if call_idx == 1:
+            _write_nmap_xml_at_ox(args, down_xml)
+            return ToolOutput(
+                tool="nmap",
+                args=args,
+                returncode=0,
+                stdout="Note: Host seems down.\nNmap done: 256 IP addresses (0 hosts up) scanned",
+                stderr="",
+            )
+        _write_nmap_xml_at_ox(args, up_xml)
+        return ToolOutput(tool="nmap", args=args, returncode=0, stdout="", stderr="")
+
+    with (
+        patch.object(ToolRunner, "is_available", return_value=True),
+        patch.object(ToolRunner, "run", AsyncMock(side_effect=_run_cidr)) as mock_run,
+    ):
+        res = await nmap_scan("192.168.1.0/24", stealth="normal")
+
+    assert mock_run.await_count == 2
+    first_args = mock_run.await_args_list[0].args[1]
+    retry_args = mock_run.await_args_list[1].args[1]
+    assert "-Pn" not in first_args
+    assert "-Pn" in retry_args
+    assert retry_args[-2:] == ["--", "192.168.1.0/24"]
+    assert [p.port for p in res["ports"]] == [80]
+
+    # XML-only <hosts up="0"/> also triggers exactly 1 bounded retry even if still 0 hosts up
+    async def _always_down(_tool, args, **_kw):
+        _write_nmap_xml_at_ox(args, down_xml)
+        return ToolOutput(tool="nmap", args=args, returncode=0, stdout="", stderr="")
+
+    with (
+        patch.object(ToolRunner, "is_available", return_value=True),
+        patch.object(ToolRunner, "run", AsyncMock(side_effect=_always_down)) as mock_bounded,
+    ):
+        res_down = await nmap_scan("2001:db8::/32", stealth="normal")
+
+    assert mock_bounded.await_count == 2
+    assert res_down["ports"] == []
+
+
+@pytest.mark.asyncio
+async def test_nmap_cidr_10_hosts_up_does_not_false_trigger_pn_retry():
+    from nexus.recon.ports import nmap_scan
+
+    ten_up_xml = """<?xml version="1.0"?>
+<nmaprun>
+  <host>
+    <status state="up"/>
+    <address addr="192.168.1.10" addrtype="ipv4"/>
+    <ports>
+      <port protocol="tcp" portid="22"><state state="open"/><service name="ssh"/></port>
+    </ports>
+  </host>
+  <runstats><finished time="1"/><hosts up="10" down="246" total="256"/></runstats>
+</nmaprun>"""
+
+    async def _run_ten_up(_tool, args, **_kw):
+        _write_nmap_xml_at_ox(args, ten_up_xml)
+        return ToolOutput(
+            tool="nmap",
+            args=args,
+            returncode=0,
+            stdout="Nmap done: 256 IP addresses (10 hosts up) scanned in 4.1s",
+            stderr="",
+        )
+
+    with (
+        patch.object(ToolRunner, "is_available", return_value=True),
+        patch.object(ToolRunner, "run", AsyncMock(side_effect=_run_ten_up)) as mock_run,
+    ):
+        res = await nmap_scan("192.168.1.0/24", stealth="normal")
+
+    assert mock_run.await_count == 1
+    assert [p.port for p in res["ports"]] == [22]
+
+
+@pytest.mark.asyncio
+async def test_nmap_all_filtered_extraports_slow_connect_retry_and_extra_filtering():
+    from nexus.recon.ports import nmap_scan
+
+    filtered_xml = """<?xml version="1.0"?>
+<nmaprun>
+  <host>
+    <status state="up"/>
+    <address addr="10.10.10.5" addrtype="ipv4"/>
+    <ports>
+      <extraports state="filtered" count="33"/>
+    </ports>
+  </host>
+</nmaprun>"""
+    open_xml = """<?xml version="1.0"?>
+<nmaprun>
+  <host>
+    <status state="up"/>
+    <address addr="10.10.10.5" addrtype="ipv4"/>
+    <ports>
+      <port protocol="tcp" portid="443"><state state="open"/><service name="https"/></port>
+      <extraports state="filtered" count="32"/>
+    </ports>
+  </host>
+</nmaprun>"""
+
+    calls = 0
+
+    async def _run_filtered_then_open(_tool, args, **_kw):
+        nonlocal calls
+        calls += 1
+        _write_nmap_xml_at_ox(args, filtered_xml if calls == 1 else open_xml)
+        return ToolOutput(tool="nmap", args=args, returncode=0, stdout="", stderr="")
+
+    extra = [
+        "-sS",
+        "-T4",
+        "--max-retries",
+        "1",
+        "--min-rate=1000",
+        "-D",
+        "RND:5",
+        "--script",
+        "http-title",
+        "-n",
+    ]
+    with (
+        patch.object(ToolRunner, "is_available", return_value=True),
+        patch.object(ToolRunner, "run", AsyncMock(side_effect=_run_filtered_then_open)) as mock_run,
+    ):
+        res = await nmap_scan("10.10.10.5", stealth="loud", extra_args=extra)
+
+    assert mock_run.await_count == 2
+    retry_args = mock_run.await_args_list[1].args[1]
+    assert retry_args[:6] == ["-sT", "-Pn", "-sV", "-T2", "--max-retries", "2"]
+    assert "--script" in retry_args and "http-title" in retry_args and "-n" in retry_args
+    for stripped in ("-sS", "-T4", "--min-rate=1000", "-D", "RND:5", "1"):
+        assert stripped not in retry_args
+    assert [p.port for p in res["ports"]] == [443]
+
+
+@pytest.mark.asyncio
+async def test_nmap_still_all_filtered_warns_and_never_labels_filtered_as_open(caplog):
+    import logging
+
+    from nexus.recon.ports import nmap_scan
+
+    all_filtered_ports_xml = """<?xml version="1.0"?>
+<nmaprun>
+  <host>
+    <status state="up"/>
+    <address addr="10.10.10.9" addrtype="ipv4"/>
+    <ports>
+      <port protocol="tcp" portid="80"><state state="filtered"/></port>
+      <port protocol="tcp" portid="443"><state state="filtered"/></port>
+      <extraports state="filtered" count="31"/>
+    </ports>
+  </host>
+</nmaprun>"""
+
+    async def _always_filtered(_tool, args, **_kw):
+        _write_nmap_xml_at_ox(args, all_filtered_ports_xml)
+        return ToolOutput(tool="nmap", args=args, returncode=0, stdout="", stderr="")
+
+    with (
+        caplog.at_level(logging.WARNING, logger="nexus.recon.ports"),
+        patch.object(ToolRunner, "is_available", return_value=True),
+        patch.object(ToolRunner, "run", AsyncMock(side_effect=_always_filtered)) as mock_run,
+    ):
+        res = await nmap_scan("10.10.10.9")
+
+    assert mock_run.await_count == 2
+    assert len(res["targets"]) == 1
+    assert res["targets"][0].is_live is True
+    assert res["ports"] == []
+    assert res["findings"] == []
+    assert any("still returned only filtered ports" in r.message for r in caplog.records)
+
+
+@pytest.mark.asyncio
+async def test_nmap_mixed_states_skip_retry_and_retry_timeout_cleans_temp():
+    from pathlib import Path
+
+    from nexus.recon.ports import nmap_scan
+
+    mixed_xml = """<?xml version="1.0"?>
+<nmaprun>
+  <host>
+    <status state="up"/>
+    <address addr="10.10.10.11" addrtype="ipv4"/>
+    <ports>
+      <port protocol="tcp" portid="80"><state state="closed"/></port>
+      <port protocol="udp" portid="53"><state state="open|filtered"/><service name="domain"/></port>
+      <extraports state="filtered" count="31"/>
+    </ports>
+  </host>
+</nmaprun>"""
+
+    async def _run_mixed(_tool, args, **_kw):
+        _write_nmap_xml_at_ox(args, mixed_xml)
+        return ToolOutput(tool="nmap", args=args, returncode=0, stdout="", stderr="")
+
+    with (
+        patch.object(ToolRunner, "is_available", return_value=True),
+        patch.object(ToolRunner, "run", AsyncMock(side_effect=_run_mixed)) as mock_run,
+    ):
+        res = await nmap_scan("10.10.10.11")
+
+    assert mock_run.await_count == 1
+    assert [(p.port, p.state) for p in res["ports"]] == [(53, "open|filtered")]
+
+    filtered_xml = """<?xml version="1.0"?>
+<nmaprun><host><status state="up"/><address addr="10.10.10.12" addrtype="ipv4"/>
+<ports><port protocol="tcp" portid="22"><state state="filtered"/></port></ports>
+</host></nmaprun>"""
+    created_paths: list[str] = []
+    orig_make = ToolRunner.make_temp_path
+
+    def _track_temp(suffix=".xml"):
+        p = orig_make(suffix)
+        created_paths.append(p)
+        return p
+
+    attempt = 0
+
+    async def _run_then_timeout(_tool, args, **_kw):
+        nonlocal attempt
+        attempt += 1
+        if attempt == 1:
+            _write_nmap_xml_at_ox(args, filtered_xml)
+            return ToolOutput(tool="nmap", args=args, returncode=0, stdout="", stderr="")
+        return ToolOutput(tool="nmap", args=args, returncode=-1, stdout="", stderr="TIMEOUT")
+
+    with (
+        patch.object(ToolRunner, "is_available", return_value=True),
+        patch.object(ToolRunner, "make_temp_path", side_effect=_track_temp),
+        patch.object(ToolRunner, "run", AsyncMock(side_effect=_run_then_timeout)) as mock_to,
+    ):
+        res_to = await nmap_scan("10.10.10.12", timeout=5)
+
+    assert mock_to.await_count == 2
+    assert res_to == {"targets": [], "ports": [], "findings": [], "raw_xml": ""}
+    assert len(created_paths) == 1
+    assert not Path(created_paths[0]).exists()
+
+
+@pytest.mark.asyncio
+async def test_nmap_root_fallback_and_firewall_retry_bounded():
+    from nexus.recon.ports import nmap_scan
+
+    filtered_xml = """<?xml version="1.0"?>
+<nmaprun><host><status state="up"/><address addr="10.0.0.5" addrtype="ipv4"/>
+<ports><extraports state="filtered" count="10"/></ports></host></nmaprun>"""
+    open_xml = """<?xml version="1.0"?>
+<nmaprun><host><status state="up"/><address addr="10.0.0.5" addrtype="ipv4"/>
+<ports><port protocol="tcp" portid="22"><state state="open"/></port></ports></host></nmaprun>"""
+
+    call_n = 0
+
+    async def _root_then_filtered_then_open(_tool, args, **_kw):
+        nonlocal call_n
+        call_n += 1
+        if call_n == 1:
+            return ToolOutput(
+                tool="nmap",
+                args=args,
+                returncode=1,
+                stdout="",
+                stderr="You requested a scan type which requires root privileges.",
+            )
+        _write_nmap_xml_at_ox(args, filtered_xml if call_n == 2 else open_xml)
+        return ToolOutput(tool="nmap", args=args, returncode=0, stdout="", stderr="")
+
+    with (
+        patch.object(ToolRunner, "is_available", return_value=True),
+        patch.object(ToolRunner, "run", AsyncMock(side_effect=_root_then_filtered_then_open)) as m1,
+    ):
+        res1 = await nmap_scan("10.0.0.5", stealth="loud", extra_args=["-sS", "--script", "banner"])
+
+    assert m1.await_count == 3
+    assert "-O" not in m1.await_args_list[1].args[1]
+    assert "-sS" not in m1.await_args_list[1].args[1]
+    assert "-sT" in m1.await_args_list[1].args[1]
+    assert "--script" in m1.await_args_list[2].args[1]
+    assert m1.await_args_list[2].args[1].count("-sT") == 1
+    assert [p.port for p in res1["ports"]] == [22]
+
+    down_xml = """<?xml version="1.0"?>
+<nmaprun><runstats><hosts up="0" down="256" total="256"/></runstats></nmaprun>"""
+    cidr_calls = 0
+
+    async def _root_then_down_then_open(_tool, args, **_kw):
+        nonlocal cidr_calls
+        cidr_calls += 1
+        if cidr_calls == 1:
+            return ToolOutput(
+                tool="nmap",
+                args=args,
+                returncode=1,
+                stdout="",
+                stderr="requires root privileges",
+            )
+        _write_nmap_xml_at_ox(args, down_xml if cidr_calls == 2 else open_xml)
+        return ToolOutput(tool="nmap", args=args, returncode=0, stdout="", stderr="")
+
+    with (
+        patch.object(ToolRunner, "is_available", return_value=True),
+        patch.object(ToolRunner, "run", AsyncMock(side_effect=_root_then_down_then_open)) as m2,
+    ):
+        res2 = await nmap_scan("10.0.0.0/24", stealth="loud")
+
+    assert m2.await_count == 3
+    assert "-O" not in m2.await_args_list[1].args[1]
+    assert "-Pn" not in m2.await_args_list[1].args[1]
+    assert "-Pn" in m2.await_args_list[2].args[1]
+    assert "-O" not in m2.await_args_list[2].args[1]
+    assert [p.port for p in res2["ports"]] == [22]
+
+
+@pytest.mark.asyncio
+async def test_nmap_cli_sanitization_and_xxe_safety():
+    from nexus.recon.ports import _compatible_connect_extra, nmap_scan
+
+    for bad_target in ("-evil", "http://-evil.com/x", "1.2.3.4 --script=x", "host\x00.com"):
+        with pytest.raises(ValueError):
+            await nmap_scan(bad_target)
+
+    for bad_extra in (
+        ["--", "169.254.169.254"],
+        ["-oX/tmp/pwn.xml"],
+        ["-oS", "/tmp/pwn"],
+        ["-iL/etc/passwd"],
+        ["-il/etc/passwd"],
+    ):
+        with pytest.raises(ValueError):
+            await nmap_scan("127.0.0.1", extra_args=bad_extra)
+
+    xxe_xml = (
+        '<?xml version="1.0"?>'
+        '<!DOCTYPE foo [<!ENTITY xxe SYSTEM "file:///etc/passwd">]>'
+        "<nmaprun><host><status state='up'/><address addr='127.0.0.1' addrtype='ipv4'/>"
+        "<hostnames><hostname name='&xxe;'/></hostnames></host></nmaprun>"
+    )
+
+    async def _run_xxe(_tool, args, **_kw):
+        _write_nmap_xml_at_ox(args, xxe_xml)
+        return ToolOutput(tool="nmap", args=args, returncode=0, stdout="", stderr="")
+
+    with (
+        patch.object(ToolRunner, "is_available", return_value=True),
+        patch.object(ToolRunner, "run", AsyncMock(side_effect=_run_xxe)) as mock_run,
+    ):
+        res = await nmap_scan("127.0.0.1", extra_args=["--open"])
+
+    called_args = mock_run.await_args.args[1]
+    assert "--open" in called_args
+    assert called_args[-2:] == ["--", "127.0.0.1"]
+    assert res["targets"] == []
+    assert res["ports"] == []
+    assert res["findings"] == []
+
+    assert _compatible_connect_extra(
+        ["--max-retries=2", "-T", "4", "--script", "ssl-enum", "-n"]
+    ) == [
+        "--script",
+        "ssl-enum",
+        "-n",
+    ]
